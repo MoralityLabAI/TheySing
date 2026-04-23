@@ -1,0 +1,37 @@
+{
+  "name": "they-sing-local-qwen",
+  "maxTurns": 12,
+  "logDir": "playtest-logs",
+  "autoAdvanceNegotiation": true,
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "openai",
+      "model": "Qwen3.5-27B.Q4_K_M.gguf",
+      "baseUrl": "http://snacksack-ms-7d32:8081/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1000
+    },
+    "STATE": {
+      "type": "openai",
+      "model": "Qwen3.5-27B.Q4_K_M.gguf",
+      "baseUrl": "http://snacksack-ms-7d32:8081/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1000
+    },
+    "INFILTRATOR": {
+      "type": "openai",
+      "model": "Qwen3.5-27B.Q4_K_M.gguf",
+      "baseUrl": "http://snacksack-ms-7d32:8081/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1000
+    }
+  }
+}

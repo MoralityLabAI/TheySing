@@ -1,0 +1,20 @@
+{
+  "name": "high-pressure-detente-heuristics",
+  "maxTurns": 6,
+  "seed": 400,
+  "scenarioPath": "scenarios/high-pressure-detente.json",
+  "agents": {
+    "HEGEMON": {
+      "type": "heuristic",
+      "profile": "HEGEMON"
+    },
+    "STATE": {
+      "type": "heuristic",
+      "profile": "STATE"
+    },
+    "INFILTRATOR": {
+      "type": "heuristic",
+      "profile": "INFILTRATOR"
+    }
+  }
+}

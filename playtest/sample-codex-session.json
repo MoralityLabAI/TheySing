@@ -1,0 +1,27 @@
+{
+  "name": "codex-asi-triangle",
+  "maxTurns": 12,
+  "logDir": "playtest-logs",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9101/decide",
+      "timeoutMs": 60000
+    },
+    "STATE": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9102/decide",
+      "timeoutMs": 60000
+    },
+    "INFILTRATOR": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9103/decide",
+      "timeoutMs": 60000
+    }
+  }
+}

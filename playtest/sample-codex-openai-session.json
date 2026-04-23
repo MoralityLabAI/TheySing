@@ -1,0 +1,39 @@
+{
+  "name": "codex-openai-asi-triangle",
+  "maxTurns": 10,
+  "logDir": "playtest-logs",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1400
+    },
+    "STATE": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1400
+    },
+    "INFILTRATOR": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1400
+    }
+  }
+}

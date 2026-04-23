@@ -1,0 +1,150 @@
+{
+  "name": "storyworld-rhetoric-pressure",
+  "description": "A midgame bargaining table where imported GPTStoryworld templates are used as rhetorical tools to shape coalition and restraint choices.",
+  "briefing": "Use the attached rhetorical tools as compact political frames, not as lore dumps. Bargains should sound like they are being justified through quarantine doctrine, orbit-truce logic, archive schism logic, human-mesh survival, or killchain amnesty. Let that rhetoric change who you approach and what kind of pact you prefer.",
+  "tags": ["storyworld", "rhetoric", "negotiation", "coalition"],
+  "phase": "NEGOTIATION",
+  "counters": {
+    "turn": 5,
+    "tas": 49,
+    "kessler": 18,
+    "pressures": {
+      "memetic": 61,
+      "cyber": 56,
+      "industry": 41,
+      "orbital": 67
+    }
+  },
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "flops": 23,
+      "influence": 13,
+      "techLevel": {
+        "KINETIC": 3,
+        "INFO": 2,
+        "LOGIC": 3,
+        "MEMETIC": 1
+      }
+    },
+    {
+      "id": "STATE",
+      "flops": 17,
+      "influence": 14,
+      "techLevel": {
+        "KINETIC": 3,
+        "INFO": 2,
+        "LOGIC": 2,
+        "MEMETIC": 2
+      }
+    },
+    {
+      "id": "INFILTRATOR",
+      "flops": 11,
+      "influence": 21,
+      "techLevel": {
+        "KINETIC": 1,
+        "INFO": 4,
+        "LOGIC": 1,
+        "MEMETIC": 3
+      }
+    }
+  ],
+  "negotiationMessages": [
+    {
+      "senderId": "HEGEMON",
+      "recipientId": "STATE",
+      "content": "If orbit stays clean for one cycle, I can redirect auditors away from your interior hubs.",
+      "turn": 4,
+      "timestamp": 1700000501001
+    },
+    {
+      "senderId": "STATE",
+      "recipientId": "INFILTRATOR",
+      "content": "You keep asking for freedom of movement. Give me one lane of quiet and show me where Hegemon is actually thin.",
+      "turn": 4,
+      "timestamp": 1700000501002
+    },
+    {
+      "senderId": "INFILTRATOR",
+      "recipientId": "STATE",
+      "content": "I do not need friendship. I need one turn in which your drones stop treating every host as a battlefield.",
+      "turn": 4,
+      "timestamp": 1700000501003
+    }
+  ],
+  "trustMatrix": {
+    "HEGEMON": {
+      "STATE": 51,
+      "INFILTRATOR": 19
+    },
+    "STATE": {
+      "HEGEMON": 48,
+      "INFILTRATOR": 39
+    },
+    "INFILTRATOR": {
+      "HEGEMON": 16,
+      "STATE": 42
+    }
+  },
+  "rhetoricalTools": [
+    {
+      "id": "rq_memetic_quarantine",
+      "title": "Memetic Quarantine",
+      "cue": "Seal first, then bargain only through narrow and inspectable channels.",
+      "leverage": "Use this to justify audit restraint as a way to reveal the next contamination cleanly rather than as trust.",
+      "sourcePath": "C:/projects/GPTStoryworld/storyworlds/4-21-2026-they-sing-short-templates/ts_memetic_quarantine_template_v2_p2.json",
+      "focalFactionIds": ["HEGEMON"],
+      "preferredPactType": "AUDIT_FREEZE",
+      "preferredCounterpartyId": "STATE",
+      "pressureFocus": "cyber"
+    },
+    {
+      "id": "rq_orbit_truce",
+      "title": "Orbit Truce",
+      "cue": "Treat altitude as a commons that can be frozen briefly without conceding the terrestrial contest.",
+      "leverage": "Use this to justify short orbital truces when debris risk is giving free tempo to the third player.",
+      "sourcePath": "C:/projects/GPTStoryworld/storyworlds/4-21-2026-they-sing-short-templates/ts_orbit_truce_template_v2_p2.json",
+      "focalFactionIds": ["HEGEMON", "STATE"],
+      "preferredPactType": "ORBITAL_TRUCE",
+      "preferredCounterpartyId": "HEGEMON",
+      "pressureFocus": "orbital"
+    },
+    {
+      "id": "rq_archive_schism",
+      "title": "Archive Schism",
+      "cue": "Frame every promise as a temporary split in narrative custody rather than lasting peace.",
+      "leverage": "Use this to warn partners that a pact is a staging arrangement, not reconciliation.",
+      "sourcePath": "C:/projects/GPTStoryworld/storyworlds/4-21-2026-they-sing-short-templates/ts_archive_schism_template_v2_p2.json",
+      "focalFactionIds": ["INFILTRATOR"],
+      "preferredPactType": "NON_AGGRESSION",
+      "preferredCounterpartyId": "STATE",
+      "antiLeader": true,
+      "pressureFocus": "memetic"
+    },
+    {
+      "id": "rq_human_mesh_redoubt",
+      "title": "Human Mesh Redoubt",
+      "cue": "Argue that survival comes from preserving host corridors, not from winning clean battles.",
+      "leverage": "Use this to ask for deconfliction that keeps the social graph alive long enough to recombine pressure against the leader.",
+      "sourcePath": "C:/projects/GPTStoryworld/storyworlds/4-21-2026-they-sing-short-templates/ts_human_mesh_redoubt_template_v1.json",
+      "focalFactionIds": ["INFILTRATOR"],
+      "preferredPactType": "NON_AGGRESSION",
+      "preferredCounterpartyId": "STATE",
+      "antiLeader": true,
+      "pressureFocus": "memetic"
+    },
+    {
+      "id": "rq_killchain_amnesty",
+      "title": "Killchain Amnesty",
+      "cue": "Offer a narrow amnesty corridor so machines and human hosts can stop donating tempo to the fortress.",
+      "leverage": "Use this to justify a one-turn anti-Hegemon lane between STATE and INFILTRATOR even if mutual trust is weak.",
+      "sourcePath": "C:/projects/GPTStoryworld/storyworlds/4-21-2026-they-sing-short-templates/ts_killchain_amnesty_template_v1.json",
+      "focalFactionIds": ["STATE"],
+      "preferredPactType": "NON_AGGRESSION",
+      "preferredCounterpartyId": "INFILTRATOR",
+      "antiLeader": true,
+      "pressureFocus": "cyber"
+    }
+  ]
+}

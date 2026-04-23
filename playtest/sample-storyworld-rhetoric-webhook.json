@@ -1,0 +1,28 @@
+{
+  "name": "storyworld-rhetoric-webhook",
+  "maxTurns": 8,
+  "seed": 4700,
+  "scenarioPath": "scenarios/storyworld-rhetoric-pressure.json",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9101/decide",
+      "timeoutMs": 120000
+    },
+    "STATE": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9102/decide",
+      "timeoutMs": 120000
+    },
+    "INFILTRATOR": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9103/decide",
+      "timeoutMs": 120000
+    }
+  }
+}

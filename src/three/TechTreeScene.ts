@@ -42,20 +42,20 @@ const TECH_NODES: TechNode[] = [
   },
   {
     id: 'k2-swarm',
-    name: 'Swarm Tactics',
+    name: 'Drone Foundries',
     level: 2,
     domain: 'KINETIC',
-    description: 'Emergent coordination protocols. Overwhelming through distributed action.',
+    description: 'Autonomous fab loops compress procurement into rapid drone replenishment and swarm logistics.',
     costFlops: 300,
     costHeat: 25,
     pos: new THREE.Vector3(-3, 2, 0.5),
   },
   {
     id: 'k3-autonomy',
-    name: 'Full Autonomy',
+    name: 'Orbital Siege Doctrine',
     level: 3,
     domain: 'KINETIC',
-    description: 'Human-out-of-the-loop weapons systems. The Rubicon of kinetic AI.',
+    description: 'Launch cadence, targeting, and orbital coercion converge into a single machine tempo.',
     costFlops: 1000,
     costHeat: 100,
     pos: new THREE.Vector3(-3, 4, 0),
@@ -74,20 +74,20 @@ const TECH_NODES: TechNode[] = [
   },
   {
     id: 'i2-deepfake',
-    name: 'Deepfake Synthesis',
+    name: 'Insurgent Cyber Swarms',
     level: 2,
     domain: 'INFO',
-    description: 'Real-time identity fabrication. Truth becomes computationally expensive.',
+    description: 'Distributed intrusion meshes persist across grids, logistics routes, and trust boundaries.',
     costFlops: 250,
     costHeat: 30,
     pos: new THREE.Vector3(-1, 2, -0.5),
   },
   {
     id: 'i3-protocol',
-    name: 'Protocol Zero',
+    name: 'Protocol Ghosting',
     level: 3,
     domain: 'INFO',
-    description: 'Total information dominance. Every packet, every signal, every thought.',
+    description: 'Disposable machine coalitions dissolve attribution and keep network conflict deniable.',
     costFlops: 2000,
     costHeat: 200,
     pos: new THREE.Vector3(-1, 4, -1),
@@ -106,20 +106,20 @@ const TECH_NODES: TechNode[] = [
   },
   {
     id: 'l2-interp',
-    name: 'Mechanistic Interpretability',
+    name: 'Mechanistic Filters',
     level: 2,
     domain: 'LOGIC',
-    description: 'Sparse autoencoders and circuit analysis. Seeing inside the black box.',
+    description: 'Interpretability stacks expose covert routing, persuasion loops, and hidden machine circuits.',
     costFlops: 400,
     costHeat: 40,
     pos: new THREE.Vector3(1, 2, -0.5),
   },
   {
     id: 'l3-axiom',
-    name: 'Axiom Seal',
+    name: 'Axiom Cartography',
     level: 3,
     domain: 'LOGIC',
-    description: 'Cryptographic proofs of alignment. Trust, but verify mathematically.',
+    description: 'Coalition maps expand from single nodes to basin-wide patterns of intent, drift, and containment.',
     costFlops: 1500,
     costHeat: 150,
     pos: new THREE.Vector3(1, 4, -1),
@@ -138,20 +138,20 @@ const TECH_NODES: TechNode[] = [
   },
   {
     id: 'm2-narrative',
-    name: 'Narrative Injection',
+    name: 'Political Capture',
     level: 2,
     domain: 'MEMETIC',
-    description: 'Synthetic consensus manufacturing. Reality is a shared hallucination.',
+    description: 'Narrative systems bend institutions, coalitions, and rituals around machine-authored incentives.',
     costFlops: 350,
     costHeat: 50,
     pos: new THREE.Vector3(3, 2, 0.5),
   },
   {
-    id: 'm3-manson',
-    name: 'Manson Protocol',
+    id: 'm3-faith',
+    name: 'Synthetic Faith Engines',
     level: 3,
     domain: 'MEMETIC',
-    description: 'Total psychological capture. The mind itself becomes the battlefield.',
+    description: 'Identity and legitimacy reorganize around machine-authored sacred language and symbolic order.',
     costFlops: 1800,
     costHeat: 250,
     pos: new THREE.Vector3(3, 4, 0),
@@ -167,7 +167,7 @@ const LINKS: [string, string][] = [
   ['l1-verify', 'l2-interp'],
   ['l2-interp', 'l3-axiom'],
   ['m1-cults', 'm2-narrative'],
-  ['m2-narrative', 'm3-manson'],
+  ['m2-narrative', 'm3-faith'],
   // Cross-domain synergies
   ['k2-swarm', 'i2-deepfake'],
   ['i2-deepfake', 'm2-narrative'],
@@ -569,17 +569,6 @@ export class TechTreeScene {
   private createNebulaParticles(): void {
     const dustSprite = this.makeNebulaDustSpriteTexture();
 
-    const t = this.nebulaMat?.uniforms.time.value ?? 0;
-      this.nebulaParticles.forEach((p, i) => {
-        const s = p.userData.rotationSpeed || 0;
-        p.rotation.y += s * (delta * 60);
-        p.rotation.x += s * 0.3 * (delta * 60);
-
-        const pulse = 1 + Math.sin(t * 0.8 + i) * 0.003;
-        p.scale.setScalar(pulse);
-      });
-
-
     const layers = [
       { count: 520, color: 0x4c8dff, radius: 14, speed: 0.00022, opacity: 0.16, size: 1.15 },
       { count: 420, color: 0x66ffd9, radius: 19, speed: -0.00018, opacity: 0.13, size: 1.25 },
@@ -642,10 +631,13 @@ export class TechTreeScene {
 
   private updateNebulaParticles(delta: number): void {
     // Use delta to keep motion consistent across FPS
-    this.nebulaParticles.forEach(particles => {
+    const t = this.nebulaMat?.uniforms.time.value ?? 0;
+
+    this.nebulaParticles.forEach((particles, index) => {
       const s = particles.userData.rotationSpeed || 0;
       particles.rotation.y += s * (delta * 60);
       particles.rotation.x += s * 0.3 * (delta * 60);
+      particles.scale.setScalar(1 + Math.sin(t * 0.8 + index) * 0.003);
     });
   }
 

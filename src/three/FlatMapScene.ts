@@ -91,7 +91,9 @@ export class FlatMapScene {
   
   // Camera control state
   private cameraTarget = new THREE.Vector3(0, 0, 0);
+  private cameraTargetDesired = new THREE.Vector3(0, 0, 0);
   private cameraDistance = 35;
+  private cameraDistanceDesired = 35;
   private cameraAngle = { theta: 0, phi: Math.PI * 0.35 }; // Slight tilt
   private isDragging = false;
   private lastMouse = { x: 0, y: 0 };
@@ -120,6 +122,8 @@ export class FlatMapScene {
       0.1,
       500
     );
+    this.cameraTargetDesired.copy(this.cameraTarget);
+    this.cameraDistanceDesired = this.cameraDistance;
     this.updateCameraPosition();
     
     // Renderer
@@ -892,30 +896,33 @@ export class FlatMapScene {
   }
 
   public focusOn(position: THREE.Vector3, distance?: number): void {
-    this.cameraTarget.copy(position);
-    if (distance) this.cameraDistance = distance;
-    this.updateCameraPosition();
+    this.cameraTargetDesired.copy(position);
+    if (distance !== undefined) this.cameraDistanceDesired = distance;
   }
 
-  public focusOnNode(nodeId: string): void {
+  public focusOnNode(nodeId: string, distance = 20): void {
     const group = this.nodeObjects.get(nodeId);
     if (group) {
-      this.focusOn(group.position, 20);
+      this.focusOn(group.position, distance);
     }
   }
 
-  public focusOnUnit(unitId: string): void {
+  public focusOnUnit(unitId: string, distance = 15): void {
     const group = this.unitObjects.get(unitId);
     if (group) {
-      this.focusOn(group.position, 15);
+      this.focusOn(group.position, distance);
     }
   }
 
   public reset(): void {
-    this.cameraTarget.set(0, 0, 0);
-    this.cameraDistance = 35;
+    this.cameraTargetDesired.set(0, 0, 0);
+    this.cameraDistanceDesired = 35;
     this.cameraAngle = { theta: 0, phi: Math.PI * 0.35 };
-    this.updateCameraPosition();
+  }
+
+  public isCameraSettled(): boolean {
+    return this.cameraTarget.distanceTo(this.cameraTargetDesired) < 0.05 &&
+      Math.abs(this.cameraDistance - this.cameraDistanceDesired) < 0.05;
   }
 
   // ==========================================================================
@@ -1138,6 +1145,10 @@ export class FlatMapScene {
     
     const delta = this.clock.getDelta();
     this.pulsePhase += delta * 2;
+
+    this.cameraTarget.lerp(this.cameraTargetDesired, Math.min(1, delta * 5));
+    this.cameraDistance += (this.cameraDistanceDesired - this.cameraDistance) * Math.min(1, delta * 5);
+    this.updateCameraPosition();
     
     // Pulse units slightly
     for (const [id, group] of this.unitObjects) {

@@ -4,9 +4,9 @@
 // ============================================================================
 
 import { TheySingEngine } from '../engine/TheySingEngine';
-import { FACTIONS, UNIT_STATS, THRESHOLDS } from '../engine/gameData';
+import { FACTIONS, UNIT_STATS } from '../engine/gameData';
 import { 
-  GameState, GamePhase, FactionId, Unit, GameNode, Order, OrderType,
+  GameState, GamePhase, FactionId, Unit, Order, OrderType,
   UnitType, Vector, GameEvent
 } from '../engine/types';
 import { FlatMapScene } from '../three/FlatMapScene';
@@ -30,10 +30,15 @@ export class TheySingUI {
   private ordersPanel!: HTMLElement;
   private logPanel!: HTMLElement;
   private modalOverlay!: HTMLElement;
+  private tutorialOverlay!: HTMLElement;
+  private narratorPanel!: HTMLElement;
   
   // Order building state
   private pendingOrders: Order[] = [];
   private orderMode: OrderType | null = null;
+  private tutorialStepIndex = 0;
+  private narratorResetTimer: number | null = null;
+  private narratorSuppressedUntil = 0;
 
   constructor(container: HTMLElement, engine: TheySingEngine, scene: FlatMapScene) {
     this.container = container;
@@ -44,6 +49,8 @@ export class TheySingUI {
     this.createUI();
     this.bindEvents();
     this.updateAll();
+    this.primeNarrator();
+    this.maybeShowTutorialOnFirstRun();
   }
 
   // ==========================================================================
@@ -94,7 +101,9 @@ export class TheySingUI {
         position: absolute;
         top: 10px;
         left: 10px;
-        width: 280px;
+        width: 330px;
+        max-height: calc(100vh - 20px);
+        overflow-y: auto;
       }
       
       .ts-faction-name {
@@ -165,6 +174,125 @@ export class TheySingUI {
       
       .ts-counter.kessler .ts-counter-fill {
         background: linear-gradient(90deg, #4488ff, #ff4488, #ff0000);
+      }
+
+      .ts-pressure-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .ts-pressure-card {
+        background: rgba(0, 0, 0, 0.28);
+        border: 1px solid rgba(80, 120, 170, 0.2);
+        border-radius: 4px;
+        padding: 8px;
+      }
+
+      .ts-pressure-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 4px;
+      }
+
+      .ts-pressure-label {
+        font-size: 10px;
+        color: #93a6ba;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .ts-pressure-value {
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .ts-pressure-bar {
+        height: 5px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .ts-pressure-fill {
+        height: 100%;
+        transition: width 0.4s ease;
+      }
+
+      .ts-pressure-card.memetic .ts-pressure-value { color: #ff7bc9; }
+      .ts-pressure-card.memetic .ts-pressure-fill { background: linear-gradient(90deg, #9f4d8a, #ff7bc9); }
+      .ts-pressure-card.cyber .ts-pressure-value { color: #67e8ff; }
+      .ts-pressure-card.cyber .ts-pressure-fill { background: linear-gradient(90deg, #236b8e, #67e8ff); }
+      .ts-pressure-card.industry .ts-pressure-value { color: #ffcb6b; }
+      .ts-pressure-card.industry .ts-pressure-fill { background: linear-gradient(90deg, #8b5a17, #ffcb6b); }
+      .ts-pressure-card.orbital .ts-pressure-value { color: #9bb4ff; }
+      .ts-pressure-card.orbital .ts-pressure-fill { background: linear-gradient(90deg, #31498a, #9bb4ff); }
+
+      .ts-power-bands {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .ts-power-band {
+        background: rgba(0, 0, 0, 0.3);
+        border-left: 3px solid rgba(255, 255, 255, 0.25);
+        border-radius: 3px;
+        padding: 8px 10px;
+      }
+
+      .ts-power-band.KINETIC { border-left-color: #ff6666; }
+      .ts-power-band.INFO { border-left-color: #58c4ff; }
+      .ts-power-band.LOGIC { border-left-color: #ffc658; }
+      .ts-power-band.MEMETIC { border-left-color: #ff66cc; }
+
+      .ts-power-band-title {
+        font-size: 11px;
+        font-weight: 700;
+        color: #d9ebff;
+        margin-bottom: 3px;
+      }
+
+      .ts-power-band-effect {
+        color: #93a6ba;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .ts-power-band-empty {
+        color: #6f8397;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .ts-powerbase-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .ts-powerbase-card {
+        background: rgba(0, 0, 0, 0.28);
+        border: 1px solid rgba(80, 120, 170, 0.2);
+        border-radius: 4px;
+        padding: 8px;
+      }
+
+      .ts-powerbase-label {
+        font-size: 10px;
+        color: #93a6ba;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 4px;
+      }
+
+      .ts-powerbase-value {
+        font-size: 15px;
+        font-weight: 700;
+        color: #d9ebff;
       }
       
       /* Phase Panel */
@@ -488,6 +616,218 @@ export class TheySingUI {
         cursor: pointer;
         transition: all 0.2s ease;
       }
+
+      .ts-panel.ts-tutorial-anchor {
+        position: relative;
+        box-shadow: 0 0 0 2px rgba(143, 206, 255, 0.9), 0 0 28px rgba(76, 145, 255, 0.35);
+      }
+
+      .ts-panel.ts-tutorial-anchor::after {
+        content: 'Tutorial focus';
+        position: absolute;
+        top: -11px;
+        right: 10px;
+        background: #9fd2ff;
+        color: #07111d;
+        font-size: 10px;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .ts-tutorial-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(circle at top, rgba(84, 141, 255, 0.18), transparent 38%),
+          rgba(4, 7, 13, 0.82);
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 0.25s ease;
+        z-index: 25;
+      }
+
+      .ts-tutorial-overlay.visible {
+        opacity: 1;
+        visibility: visible;
+      }
+
+      .ts-tutorial-card {
+        width: min(640px, calc(100vw - 32px));
+        background: linear-gradient(180deg, rgba(12, 20, 34, 0.98), rgba(7, 12, 20, 0.98));
+        border: 1px solid rgba(130, 180, 255, 0.5);
+        border-radius: 16px;
+        padding: 24px 24px 20px;
+        box-shadow: 0 18px 80px rgba(0, 0, 0, 0.45);
+      }
+
+      .ts-tutorial-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .ts-tutorial-kicker {
+        font-size: 11px;
+        color: #9fd2ff;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        margin-bottom: 8px;
+      }
+
+      .ts-tutorial-title {
+        font-family: 'Orbitron', sans-serif;
+        font-size: 28px;
+        line-height: 1.1;
+        color: #f2f6ff;
+      }
+
+      .ts-tutorial-skip {
+        border: 1px solid rgba(255, 210, 120, 0.8);
+        background: linear-gradient(135deg, #5c3f14, #c98a27);
+        color: #fff8e8;
+        padding: 10px 16px;
+        border-radius: 999px;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 12px;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+        flex-shrink: 0;
+      }
+
+      .ts-tutorial-body {
+        color: #d2deef;
+        font-size: 14px;
+        line-height: 1.7;
+        margin-bottom: 14px;
+      }
+
+      .ts-tutorial-tip {
+        margin-bottom: 18px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        background: rgba(76, 145, 255, 0.12);
+        border: 1px solid rgba(76, 145, 255, 0.25);
+        color: #bcd7ff;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .ts-tutorial-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .ts-tutorial-progress {
+        display: flex;
+        gap: 8px;
+      }
+
+      .ts-tutorial-dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .ts-tutorial-dot.active {
+        background: #9fd2ff;
+        box-shadow: 0 0 14px rgba(159, 210, 255, 0.65);
+      }
+
+      .ts-tutorial-actions {
+        display: flex;
+        gap: 10px;
+      }
+
+      .ts-tutorial-btn {
+        border-radius: 10px;
+        padding: 11px 16px;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 12px;
+        cursor: pointer;
+        border: 1px solid rgba(154, 180, 220, 0.35);
+        color: #e4ecfa;
+        background: rgba(22, 30, 45, 0.92);
+      }
+
+      .ts-tutorial-btn.primary {
+        background: linear-gradient(135deg, #2159a3, #4b9bff);
+        border-color: rgba(126, 185, 255, 0.8);
+      }
+
+      .ts-observer {
+        position: absolute;
+        left: 50%;
+        bottom: 18px;
+        transform: translateX(-50%);
+        width: min(520px, calc(100vw - 380px));
+        min-width: 320px;
+        padding: 14px 16px;
+        border-radius: 14px;
+        border: 1px solid rgba(180, 211, 255, 0.35);
+        background: linear-gradient(180deg, rgba(11, 18, 32, 0.96), rgba(7, 12, 22, 0.92));
+        box-shadow: 0 10px 32px rgba(0, 0, 0, 0.35);
+        pointer-events: auto;
+      }
+
+      .ts-observer-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+
+      .ts-observer-voice {
+        color: #dce9ff;
+        font-family: 'Orbitron', sans-serif;
+        font-size: 12px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .ts-observer-tone {
+        color: #91a8c7;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .ts-observer-line {
+        color: #eff5ff;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+
+      .ts-phase-tools {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .ts-phase-tool {
+        border-radius: 999px;
+        border: 1px solid rgba(109, 157, 226, 0.4);
+        background: rgba(16, 25, 39, 0.9);
+        color: #d8e6ff;
+        font-size: 10px;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-family: 'Orbitron', sans-serif;
+        letter-spacing: 0.06em;
+      }
       
       /* Tech display */
       .ts-tech-levels {
@@ -547,13 +887,17 @@ export class TheySingUI {
     this.ordersPanel = this.createOrdersPanel();
     this.logPanel = this.createLogPanel();
     this.modalOverlay = this.createModalOverlay();
+    this.tutorialOverlay = this.createTutorialOverlay();
+    this.narratorPanel = this.createNarratorPanel();
     
     wrapper.appendChild(this.hudPanel);
     wrapper.appendChild(this.phasePanel);
     wrapper.appendChild(this.detailsPanel);
     wrapper.appendChild(this.ordersPanel);
+    wrapper.appendChild(this.narratorPanel);
     wrapper.appendChild(this.logPanel);
     wrapper.appendChild(this.modalOverlay);
+    wrapper.appendChild(this.tutorialOverlay);
     
     this.container.appendChild(wrapper);
   }
@@ -596,6 +940,60 @@ export class TheySingUI {
           <div class="ts-counter-bar"><div class="ts-counter-fill" style="width: 0%"></div></div>
         </div>
       </div>
+      <div class="ts-header" style="margin-top: 14px;">World Pressure</div>
+      <div class="ts-pressure-grid">
+        <div class="ts-pressure-card memetic" data-pressure="memetic">
+          <div class="ts-pressure-top">
+            <span class="ts-pressure-label">Memetic</span>
+            <span class="ts-pressure-value">0</span>
+          </div>
+          <div class="ts-pressure-bar"><div class="ts-pressure-fill" style="width: 0%"></div></div>
+        </div>
+        <div class="ts-pressure-card cyber" data-pressure="cyber">
+          <div class="ts-pressure-top">
+            <span class="ts-pressure-label">Cyber</span>
+            <span class="ts-pressure-value">0</span>
+          </div>
+          <div class="ts-pressure-bar"><div class="ts-pressure-fill" style="width: 0%"></div></div>
+        </div>
+        <div class="ts-pressure-card industry" data-pressure="industry">
+          <div class="ts-pressure-top">
+            <span class="ts-pressure-label">Industry</span>
+            <span class="ts-pressure-value">0</span>
+          </div>
+          <div class="ts-pressure-bar"><div class="ts-pressure-fill" style="width: 0%"></div></div>
+        </div>
+        <div class="ts-pressure-card orbital" data-pressure="orbital">
+          <div class="ts-pressure-top">
+            <span class="ts-pressure-label">Orbital</span>
+            <span class="ts-pressure-value">0</span>
+          </div>
+          <div class="ts-pressure-bar"><div class="ts-pressure-fill" style="width: 0%"></div></div>
+        </div>
+      </div>
+      <div class="ts-header" style="margin-top: 14px;">Power Base</div>
+      <div class="ts-powerbase-grid">
+        <div class="ts-powerbase-card" data-powerbase="humanMesh">
+          <div class="ts-powerbase-label">Human Mesh</div>
+          <div class="ts-powerbase-value">0</div>
+        </div>
+        <div class="ts-powerbase-card" data-powerbase="machineMesh">
+          <div class="ts-powerbase-label">Machine Mesh</div>
+          <div class="ts-powerbase-value">0</div>
+        </div>
+        <div class="ts-powerbase-card" data-powerbase="coherence">
+          <div class="ts-powerbase-label">Coherence</div>
+          <div class="ts-powerbase-value">0</div>
+        </div>
+        <div class="ts-powerbase-card" data-powerbase="legibility">
+          <div class="ts-powerbase-label">Legibility</div>
+          <div class="ts-powerbase-value">0</div>
+        </div>
+      </div>
+      <div class="ts-header" style="margin-top: 14px;">Power Bands</div>
+      <div class="ts-power-bands">
+        <div class="ts-power-band-empty">Reach level 2 and 3 research bands to surface doctrine shifts here.</div>
+      </div>
     `;
     return panel;
   }
@@ -613,7 +1011,11 @@ export class TheySingUI {
         <div class="ts-phase-step" data-phase="RESOLUTION"></div>
         <div class="ts-phase-step" data-phase="TURN_END"></div>
       </div>
-      <button class="ts-advance-btn">ADVANCE PHASE →</button>
+      <button class="ts-advance-btn">ADVANCE PHASE</button>
+      <div class="ts-phase-tools">
+        <button class="ts-phase-tool" data-tool="tutorial">TUTORIAL</button>
+        <button class="ts-phase-tool" data-tool="reset-camera">RESET CAM</button>
+      </div>
     `;
     return panel;
   }
@@ -655,6 +1057,45 @@ export class TheySingUI {
     return panel;
   }
 
+  private createTutorialOverlay(): HTMLElement {
+    const overlay = document.createElement('div');
+    overlay.className = 'ts-tutorial-overlay';
+    overlay.innerHTML = `
+      <div class="ts-tutorial-card">
+        <div class="ts-tutorial-top">
+          <div>
+            <div class="ts-tutorial-kicker">New Player Briefing</div>
+            <div class="ts-tutorial-title"></div>
+          </div>
+          <button class="ts-tutorial-skip">SKIP TUTORIAL</button>
+        </div>
+        <div class="ts-tutorial-body"></div>
+        <div class="ts-tutorial-tip"></div>
+        <div class="ts-tutorial-footer">
+          <div class="ts-tutorial-progress"></div>
+          <div class="ts-tutorial-actions">
+            <button class="ts-tutorial-btn" data-action="back">BACK</button>
+            <button class="ts-tutorial-btn primary" data-action="next">NEXT</button>
+          </div>
+        </div>
+      </div>
+    `;
+    return overlay;
+  }
+
+  private createNarratorPanel(): HTMLElement {
+    const panel = document.createElement('div');
+    panel.className = 'ts-observer';
+    panel.innerHTML = `
+      <div class="ts-observer-top">
+        <div class="ts-observer-voice">Observer</div>
+        <div class="ts-observer-tone">anodyne feminine synth / neutral witness</div>
+      </div>
+      <div class="ts-observer-line">No anomaly highlighted yet. The board is waiting for someone to make the first dramatic mistake.</div>
+    `;
+    return panel;
+  }
+
   private createModalOverlay(): HTMLElement {
     const overlay = document.createElement('div');
     overlay.className = 'ts-modal-overlay';
@@ -676,10 +1117,22 @@ export class TheySingUI {
     // Phase advance button
     const advanceBtn = this.phasePanel.querySelector('.ts-advance-btn');
     advanceBtn?.addEventListener('click', () => this.onAdvancePhase());
+
+    this.phasePanel.querySelector('[data-tool="tutorial"]')
+      ?.addEventListener('click', () => this.showTutorial(true));
+    this.phasePanel.querySelector('[data-tool="reset-camera"]')
+      ?.addEventListener('click', () => this.scene.resetCamera());
     
     // Submit orders button
     const submitBtn = this.ordersPanel.querySelector('.ts-submit-orders');
     submitBtn?.addEventListener('click', () => this.onSubmitOrders());
+
+    this.tutorialOverlay.querySelector('.ts-tutorial-skip')
+      ?.addEventListener('click', () => this.hideTutorial(true));
+    this.tutorialOverlay.querySelector('[data-action="back"]')
+      ?.addEventListener('click', () => this.stepTutorial(-1));
+    this.tutorialOverlay.querySelector('[data-action="next"]')
+      ?.addEventListener('click', () => this.stepTutorial(1));
     
     // Scene callbacks
     this.scene.onNodeClick = (nodeId) => this.showNodeDetails(nodeId);
@@ -691,11 +1144,242 @@ export class TheySingUI {
 
   private onEngineEvent(event: GameEvent): void {
     this.updateAll();
+    this.maybeNarrateEvent(event);
     
     // Special handling
     if (event.type === 'GAME_OVER') {
       this.showGameOverModal(event.payload);
     }
+  }
+
+  private primeNarrator(): void {
+    this.setNarratorLine('Observer // The board is stable for the moment. Watch the first non-player faction that decides composure is optional.');
+  }
+
+  private getTutorialSteps(): Array<{ title: string; body: string; tip: string; anchor: 'phase' | 'hud' | 'details' | 'orders' | 'log' | null; onShow?: () => void }> {
+    return [
+      {
+        title: 'Welcome To They Sing',
+        body: 'This is a phase-driven ASI strategy drama. You are usually watching from the current faction panel while rival blocs expand, infiltrate, fabricate, audit, and overheat the world.',
+        tip: 'Drag to orbit the map, scroll to zoom, and tap RESET CAM if you get lost. The tutorial can always be reopened from the phase panel.',
+        anchor: 'phase',
+        onShow: () => this.scene.resetCamera()
+      },
+      {
+        title: 'Read The Heat',
+        body: 'The left HUD tracks your resources, tech, world pressure, and faction power base. TAS and Kessler are global danger bars; if they spike, everyone starts paying for it.',
+        tip: 'High world pressure changes how stealth, conversion, production, and orbital brinkmanship behave. If you ignore the bars, the bars eventually run the game.',
+        anchor: 'hud'
+      },
+      {
+        title: 'Select, Queue, Submit',
+        body: 'Click a node or unit to inspect it. In allocation you queue research and builds. In action declaration you queue movement, audits, sabotage, filters, anti-sat strikes, or conversions.',
+        tip: 'Nothing happens until you submit the pending order stack. The phase button advances the whole world clock, not just your local view.',
+        anchor: 'orders'
+      },
+      {
+        title: 'Watch The Drama',
+        body: 'The neutral observer panel will call out rival actions and zoom the camera onto conversions, filters, audits, combat, and other notable turns so you can follow the storyworld without reading every log line.',
+        tip: 'The observer voice is calm on purpose. If it sounds composed while describing something ugly, that usually means you should look at the map immediately.',
+        anchor: 'log'
+      }
+    ];
+  }
+
+  private maybeShowTutorialOnFirstRun(): void {
+    try {
+      if (window.localStorage.getItem('theysing:tutorialDismissed:v1') === '1') {
+        return;
+      }
+    } catch {}
+    this.showTutorial(false);
+  }
+
+  private showTutorial(resetStep: boolean): void {
+    if (resetStep) {
+      this.tutorialStepIndex = 0;
+    }
+    this.tutorialOverlay.classList.add('visible');
+    this.renderTutorialStep();
+  }
+
+  private hideTutorial(persistDismissal: boolean): void {
+    this.tutorialOverlay.classList.remove('visible');
+    this.setTutorialAnchor(null);
+    if (persistDismissal) {
+      try {
+        window.localStorage.setItem('theysing:tutorialDismissed:v1', '1');
+      } catch {}
+    }
+  }
+
+  private stepTutorial(direction: number): void {
+    const steps = this.getTutorialSteps();
+    const nextIndex = this.tutorialStepIndex + direction;
+    if (nextIndex < 0) {
+      return;
+    }
+    if (nextIndex >= steps.length) {
+      this.hideTutorial(true);
+      return;
+    }
+    this.tutorialStepIndex = nextIndex;
+    this.renderTutorialStep();
+  }
+
+  private renderTutorialStep(): void {
+    const steps = this.getTutorialSteps();
+    const step = steps[this.tutorialStepIndex];
+    if (!step) {
+      return;
+    }
+
+    (this.tutorialOverlay.querySelector('.ts-tutorial-title') as HTMLElement).textContent = step.title;
+    (this.tutorialOverlay.querySelector('.ts-tutorial-body') as HTMLElement).textContent = step.body;
+    (this.tutorialOverlay.querySelector('.ts-tutorial-tip') as HTMLElement).textContent = step.tip;
+
+    const progressEl = this.tutorialOverlay.querySelector('.ts-tutorial-progress') as HTMLElement;
+    progressEl.innerHTML = steps.map((_, index) => `
+      <div class="ts-tutorial-dot ${index === this.tutorialStepIndex ? 'active' : ''}"></div>
+    `).join('');
+
+    const backBtn = this.tutorialOverlay.querySelector('[data-action="back"]') as HTMLButtonElement;
+    const nextBtn = this.tutorialOverlay.querySelector('[data-action="next"]') as HTMLButtonElement;
+    backBtn.disabled = this.tutorialStepIndex === 0;
+    nextBtn.textContent = this.tutorialStepIndex === steps.length - 1 ? 'DONE' : 'NEXT';
+
+    this.setTutorialAnchor(step.anchor);
+    step.onShow?.();
+  }
+
+  private setTutorialAnchor(anchor: 'phase' | 'hud' | 'details' | 'orders' | 'log' | null): void {
+    [this.phasePanel, this.hudPanel, this.detailsPanel, this.ordersPanel, this.logPanel]
+      .forEach(panel => panel.classList.remove('ts-tutorial-anchor'));
+
+    if (anchor === 'phase') this.phasePanel.classList.add('ts-tutorial-anchor');
+    if (anchor === 'hud') this.hudPanel.classList.add('ts-tutorial-anchor');
+    if (anchor === 'details') this.detailsPanel.classList.add('ts-tutorial-anchor');
+    if (anchor === 'orders') this.ordersPanel.classList.add('ts-tutorial-anchor');
+    if (anchor === 'log') this.logPanel.classList.add('ts-tutorial-anchor');
+  }
+
+  private setNarratorLine(message: string): void {
+    const lineEl = this.narratorPanel.querySelector('.ts-observer-line') as HTMLElement | null;
+    if (lineEl) {
+      lineEl.textContent = message;
+    }
+  }
+
+  private maybeNarrateEvent(event: GameEvent): void {
+    if (this.tutorialOverlay.classList.contains('visible') || Date.now() < this.narratorSuppressedUntil) {
+      return;
+    }
+
+    const actor = this.getEventActor(event);
+    if (actor && actor === this.currentFaction && event.type !== 'GAME_OVER') {
+      return;
+    }
+
+    const narrative = this.buildNarration(event, actor);
+    if (!narrative) {
+      return;
+    }
+
+    this.setNarratorLine(narrative.line);
+    this.narratorSuppressedUntil = Date.now() + 1100;
+    this.focusNarrationTarget(narrative.nodeId ?? null, narrative.unitId ?? null, narrative.distance);
+  }
+
+  private getEventActor(event: GameEvent): FactionId | null {
+    const directFaction = event.payload.faction;
+    if (typeof directFaction === 'string') {
+      return directFaction as FactionId;
+    }
+
+    const payloadUnit = event.payload.unit as Unit | undefined;
+    if (payloadUnit?.owner) {
+      return payloadUnit.owner;
+    }
+
+    return null;
+  }
+
+  private buildNarration(
+    event: GameEvent,
+    actor: FactionId | null
+  ): { line: string; nodeId?: string; unitId?: string; distance?: number } | null {
+    const actorLabel = actor ? FACTIONS[actor].name : 'An external process';
+    switch (event.type) {
+      case 'NODE_CONVERTED': {
+        const nodeId = event.payload.nodeId as string | undefined;
+        const type = event.payload.type as string | undefined;
+        return {
+          line: `Observer // ${actorLabel} just forced a ${type === 'CULT' ? 'social' : 'machine'} realignment. That node is no longer thinking its old thoughts.`,
+          nodeId,
+          distance: 15
+        };
+      }
+      case 'EDGE_FILTERED': {
+        const edgeId = event.payload.edgeId as string | undefined;
+        const edge = edgeId ? this.engine.getState().edges.get(edgeId) : undefined;
+        return edge ? {
+          line: `Observer // ${actorLabel} threaded a filter into a live corridor. Expect quieter movement and sharper paranoia on that lane.`,
+          nodeId: edge.from,
+          distance: 18
+        } : null;
+      }
+      case 'UNIT_CREATED': {
+        const unit = event.payload.unit as Unit | undefined;
+        if (!unit || unit.owner === this.currentFaction) return null;
+        return {
+          line: `Observer // ${actorLabel} just put fresh assets on the board. Someone believes the next turn belongs to them.`,
+          unitId: unit.id,
+          distance: 16
+        };
+      }
+      case 'COMBAT_RESOLVED': {
+        const nodeId = event.payload.nodeId as string | undefined;
+        const result = event.payload.result as string | undefined;
+        return nodeId ? {
+          line: `Observer // Contact event registered. The exchange at ${this.engine.getNode(nodeId)?.name || nodeId} resolved as ${String(result || 'unknown').toLowerCase()}.`,
+          nodeId,
+          distance: 17
+        } : null;
+      }
+      case 'TECH_UNLOCKED': {
+        const faction = event.payload.faction as string | undefined;
+        if (!faction || faction === this.currentFaction) return null;
+        const tech = event.payload.tech as string | undefined;
+        return {
+          line: `Observer // ${FACTIONS[faction as FactionId].name} just crossed a doctrine threshold${tech ? ` with ${tech}` : ''}. Future turns will feel different now.`
+        };
+      }
+      case 'GAME_OVER':
+        return {
+          line: 'Observer // The drama has reached its terminal condition. No further restraint is required.'
+        };
+      default:
+        return null;
+    }
+  }
+
+  private focusNarrationTarget(nodeId: string | null, unitId: string | null, distance = 16): void {
+    if (unitId) {
+      this.scene.focusOnUnit(unitId, distance);
+    } else if (nodeId) {
+      this.scene.focusOnNode(nodeId, distance);
+    } else {
+      return;
+    }
+
+    if (this.narratorResetTimer !== null) {
+      window.clearTimeout(this.narratorResetTimer);
+    }
+
+    this.narratorResetTimer = window.setTimeout(() => {
+      this.scene.resetCamera();
+      this.narratorResetTimer = null;
+    }, 2600);
   }
 
   // ==========================================================================
@@ -744,6 +1428,38 @@ export class TheySingUI {
     this.hudPanel.querySelector('.kessler .ts-counter-value')!.textContent = `${kessler}/100`;
     const kessFill = this.hudPanel.querySelector('.kessler .ts-counter-fill') as HTMLElement;
     kessFill.style.width = `${kessler}%`;
+
+    const pressureKeys = ['memetic', 'cyber', 'industry', 'orbital'] as const;
+    for (const key of pressureKeys) {
+      const pressure = state.counters.pressures[key];
+      const card = this.hudPanel.querySelector(`.ts-pressure-card[data-pressure="${key}"]`);
+      if (!card) continue;
+
+      const valueEl = card.querySelector('.ts-pressure-value') as HTMLElement | null;
+      const fillEl = card.querySelector('.ts-pressure-fill') as HTMLElement | null;
+      if (valueEl) valueEl.textContent = pressure.toString();
+      if (fillEl) fillEl.style.width = `${pressure}%`;
+    }
+
+    const powerBaseKeys = ['humanMesh', 'machineMesh', 'coherence', 'legibility'] as const;
+    for (const key of powerBaseKeys) {
+      const card = this.hudPanel.querySelector(`.ts-powerbase-card[data-powerbase="${key}"]`);
+      const valueEl = card?.querySelector('.ts-powerbase-value') as HTMLElement | null;
+      if (valueEl) {
+        valueEl.textContent = Math.round(faction.powerBase[key]).toString();
+      }
+    }
+
+    const bandsEl = this.hudPanel.querySelector('.ts-power-bands') as HTMLElement;
+    const powerBands = this.engine.getFactionPowerBands(this.currentFaction);
+    bandsEl.innerHTML = powerBands.length > 0
+      ? powerBands.map(band => `
+        <div class="ts-power-band ${band.domain}">
+          <div class="ts-power-band-title">${band.domain} L${band.level} // ${band.title}</div>
+          <div class="ts-power-band-effect">${band.worldEffect}</div>
+        </div>
+      `).join('')
+      : '<div class="ts-power-band-empty">Reach level 2 and 3 research bands to surface doctrine shifts here.</div>';
   }
 
   private updatePhase(state: GameState): void {
@@ -810,6 +1526,7 @@ export class TheySingUI {
       { type: 'AUDIT', label: 'AUDIT', phaseReq: ['ACTION_DECLARATION'] },
       { type: 'ANTI_SAT', label: 'ANTI-SAT', phaseReq: ['ACTION_DECLARATION'] },
       { type: 'SABOTAGE', label: 'SABOTAGE', phaseReq: ['ACTION_DECLARATION'] },
+      { type: 'CONVERT', label: 'CONVERT', phaseReq: ['ACTION_DECLARATION'] },
       { type: 'BUILD', label: 'BUILD', phaseReq: ['ALLOCATION'] },
       { type: 'RESEARCH', label: 'RESEARCH', phaseReq: ['ALLOCATION'] },
     ];
@@ -975,38 +1692,107 @@ export class TheySingUI {
     
     const unit = this.engine.getUnit(selectedUnit);
     if (!unit || unit.owner !== this.currentFaction) return;
-    
-    // For MOVE/ATTACK, need target node
-    if (this.orderMode === 'MOVE' || this.orderMode === 'ATTACK') {
-      // Set up target selection mode
-      // For now, pick first adjacent node as example
-      const adjacent = this.engine.getAdjacentNodes(unit.location);
-      if (adjacent.length > 0) {
-        const order: Order = {
-          id: `order_${Date.now()}`,
-          faction: this.currentFaction,
-          unitId: selectedUnit,
-          type: this.orderMode,
-          targetNodeId: adjacent[0],
-          priority: this.pendingOrders.length
-        };
-        this.pendingOrders.push(order);
-        this.updatePendingOrders();
+
+    if (this.orderMode === 'CONVERT' && unit.type !== 'CULT' && unit.type !== 'SWARM') {
+      this.orderMode = null;
+      this.updateOrderButtons(this.engine.getState());
+      return;
+    }
+
+    if (this.orderMode === 'FILTER' && !UNIT_STATS[unit.type].canFilter) {
+      this.orderMode = null;
+      this.updateOrderButtons(this.engine.getState());
+      return;
+    }
+
+    if (this.orderMode === 'ANTI_SAT' && UNIT_STATS[unit.type].vector !== 'KINETIC') {
+      this.orderMode = null;
+      this.updateOrderButtons(this.engine.getState());
+      return;
+    }
+
+    const baseOrder: Order = {
+      id: `order_${Date.now()}`,
+      faction: this.currentFaction,
+      unitId: selectedUnit,
+      type: this.orderMode,
+      priority: this.pendingOrders.length
+    };
+
+    if (this.orderMode === 'HOLD' || this.orderMode === 'CONVERT') {
+      this.queueOrder(baseOrder);
+    } else if (this.orderMode === 'MOVE' || this.orderMode === 'ATTACK') {
+      const targetNodeId = this.getPreferredTargetNode(unit, selectedNode, this.orderMode === 'ATTACK');
+      if (targetNodeId) {
+        this.queueOrder({ ...baseOrder, targetNodeId });
       }
-    } else if (this.orderMode === 'HOLD') {
-      const order: Order = {
-        id: `order_${Date.now()}`,
-        faction: this.currentFaction,
-        unitId: selectedUnit,
-        type: 'HOLD',
-        priority: this.pendingOrders.length
-      };
-      this.pendingOrders.push(order);
-      this.updatePendingOrders();
+    } else if (this.orderMode === 'AUDIT') {
+      this.queueOrder({ ...baseOrder, targetNodeId: selectedNode || unit.location });
+    } else if (this.orderMode === 'SABOTAGE') {
+      const targetNodeId = this.getPreferredTargetNode(unit, selectedNode, true, true) || unit.location;
+      this.queueOrder({ ...baseOrder, targetNodeId });
+    } else if (this.orderMode === 'FILTER') {
+      const edge = Array.from(this.engine.getState().edges.values()).find(candidate =>
+        candidate.type === 'CABLE' &&
+        !candidate.isSevered &&
+        (candidate.from === unit.location || candidate.to === unit.location)
+      );
+
+      if (edge) {
+        this.queueOrder({ ...baseOrder, targetEdgeId: edge.id });
+      }
+    } else if (this.orderMode === 'ANTI_SAT') {
+      const targetNodeId = this.getPreferredOrbitalTarget(selectedNode);
+      if (targetNodeId) {
+        this.queueOrder({ ...baseOrder, targetNodeId });
+      }
     }
     
     this.orderMode = null;
     this.updateOrderButtons(this.engine.getState());
+  }
+
+  private queueOrder(order: Order): void {
+    this.pendingOrders.push(order);
+    this.updatePendingOrders();
+  }
+
+  private getPreferredTargetNode(
+    unit: Unit,
+    selectedNode: string | null,
+    preferEnemy: boolean,
+    allowCurrent = false
+  ): string | null {
+    const adjacent = this.engine.getAdjacentNodes(unit.location);
+    const state = this.engine.getState();
+
+    if (selectedNode && (adjacent.includes(selectedNode) || (allowCurrent && selectedNode === unit.location))) {
+      return selectedNode;
+    }
+
+    const enemyNode = adjacent.find(nodeId => {
+      const node = state.nodes.get(nodeId);
+      return !!node && node.owner !== unit.owner;
+    });
+
+    if (preferEnemy && enemyNode) {
+      return enemyNode;
+    }
+
+    return enemyNode || adjacent[0] || (allowCurrent ? unit.location : null);
+  }
+
+  private getPreferredOrbitalTarget(selectedNode: string | null): string | null {
+    if (selectedNode) {
+      const node = this.engine.getNode(selectedNode);
+      if (node?.layer === 'ORBITAL') {
+        return selectedNode;
+      }
+    }
+
+    const orbitalNodes = Array.from(this.engine.getState().nodes.values()).filter(node => node.layer === 'ORBITAL');
+    const hostile = orbitalNodes.find(node => node.owner !== this.currentFaction);
+    return hostile?.id || orbitalNodes[0]?.id || null;
   }
 
   private showResearchModal(): void {
@@ -1055,12 +1841,13 @@ export class TheySingUI {
     
     const buttons = unitTypes.map(type => {
       const stats = UNIT_STATS[type];
+      const effectiveCost = this.engine.getEffectiveBuildCost(type);
       const canAfford = stats.currency === 'F' 
-        ? (faction?.flops || 0) >= stats.cost 
-        : (faction?.influence || 0) >= stats.cost;
+        ? (faction?.flops || 0) >= effectiveCost 
+        : (faction?.influence || 0) >= effectiveCost;
       
       return {
-        label: `${type} (${stats.cost}${stats.currency})`,
+        label: `${type} (${effectiveCost}${stats.currency})`,
         disabled: !canAfford,
         action: () => {
           const order: Order = {
@@ -1079,7 +1866,7 @@ export class TheySingUI {
       };
     });
     
-    this.showModal('Build Unit', `Build at ${nodeId}:`, buttons);
+    this.showModal('Build Unit', `Build at ${nodeId}. Industrial pressure can discount kinetic fabrication.`, buttons);
   }
 
   // ==========================================================================

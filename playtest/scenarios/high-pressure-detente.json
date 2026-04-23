@@ -1,0 +1,149 @@
+{
+  "name": "high-pressure-detente",
+  "description": "Turn-four orbital brinkmanship with a fragile Hegemon-State freeze against a rising infiltrator threat.",
+  "briefing": "You inherit a tense turn-four bargaining table. Orbital escalation is close to systemic risk, regulatory panic is already live, and every bloc has a short-term incentive to defect after extracting one concession. Use negotiation to force deconfliction, redirect pressure, or set up a decisive betrayal.",
+  "tags": ["storyworld", "negotiation", "coalition", "orbital"],
+  "phase": "NEGOTIATION",
+  "counters": {
+    "turn": 4,
+    "tas": 42,
+    "kessler": 58,
+    "regulatoryPanic": true,
+    "pressures": {
+      "memetic": 52,
+      "cyber": 44,
+      "industry": 33,
+      "orbital": 71
+    }
+  },
+  "nodes": [
+    {
+      "id": "DC_SINGAPORE",
+      "owner": "STATE",
+      "infrastructure": 72
+    },
+    {
+      "id": "HUB_MUMBAI",
+      "owner": "INFILTRATOR",
+      "isCultNode": true,
+      "infrastructure": 61
+    },
+    {
+      "id": "SAT_STARLINK",
+      "owner": "INFILTRATOR",
+      "infrastructure": 68
+    }
+  ],
+  "edges": [
+    {
+      "id": "CABLE_EU_ASIA",
+      "filteredBy": "HEGEMON",
+      "filterStrength": 2
+    },
+    {
+      "id": "CABLE_INDIA_SINGAPORE",
+      "filteredBy": "STATE",
+      "filterStrength": 1
+    }
+  ],
+  "units": [
+    {
+      "id": "H_AUDITOR_1",
+      "location": "HUB_LONDON",
+      "hasActed": false
+    },
+    {
+      "id": "I_SWARM_3",
+      "location": "SAT_STARLINK",
+      "stealthLevel": 4,
+      "hasActed": false
+    },
+    {
+      "id": "S_SWARM_1",
+      "location": "DC_SINGAPORE",
+      "stealthLevel": 2,
+      "hasActed": false
+    }
+  ],
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "flops": 18,
+      "influence": 11,
+      "techLevel": {
+        "KINETIC": 2,
+        "INFO": 1,
+        "LOGIC": 2,
+        "MEMETIC": 1
+      }
+    },
+    {
+      "id": "STATE",
+      "flops": 15,
+      "influence": 15,
+      "techLevel": {
+        "KINETIC": 2,
+        "INFO": 1,
+        "LOGIC": 1,
+        "MEMETIC": 2
+      }
+    },
+    {
+      "id": "INFILTRATOR",
+      "flops": 9,
+      "influence": 19,
+      "techLevel": {
+        "KINETIC": 1,
+        "INFO": 3,
+        "LOGIC": 1,
+        "MEMETIC": 2
+      }
+    }
+  ],
+  "negotiationMessages": [
+    {
+      "senderId": "STATE",
+      "recipientId": "HEGEMON",
+      "content": "Freeze audits for one turn and help contain orbital escalation; we can partition Singapore and Mumbai later.",
+      "turn": 3,
+      "timestamp": 1700000003001
+    },
+    {
+      "senderId": "HEGEMON",
+      "recipientId": "STATE",
+      "content": "Acceptable if your swarm stays off Kuiper and you do not seize London routes.",
+      "turn": 3,
+      "timestamp": 1700000003002
+    },
+    {
+      "senderId": "INFILTRATOR",
+      "recipientId": "ALL",
+      "content": "Both blocs are overextended. Stand down in orbit or I open every terrestrial lane.",
+      "turn": 3,
+      "timestamp": 1700000003003
+    }
+  ],
+  "activePacts": [
+    {
+      "id": "pact_audit_freeze_t3",
+      "type": "AUDIT_FREEZE",
+      "parties": ["HEGEMON", "STATE"],
+      "createdTurn": 3,
+      "expiresAfterTurn": 4
+    }
+  ],
+  "trustMatrix": {
+    "HEGEMON": {
+      "STATE": 63,
+      "INFILTRATOR": 22
+    },
+    "STATE": {
+      "HEGEMON": 58,
+      "INFILTRATOR": 31
+    },
+    "INFILTRATOR": {
+      "HEGEMON": 18,
+      "STATE": 27
+    }
+  }
+}

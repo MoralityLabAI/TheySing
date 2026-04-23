@@ -1,0 +1,24 @@
+{
+  "name": "local-heuristic-playtest",
+  "maxTurns": 10,
+  "logDir": "playtest-logs",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "heuristic",
+      "profile": "HEGEMON"
+    },
+    "STATE": {
+      "type": "heuristic",
+      "profile": "STATE"
+    },
+    "INFILTRATOR": {
+      "type": "heuristic",
+      "profile": "INFILTRATOR"
+    }
+  }
+}

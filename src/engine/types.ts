@@ -4,7 +4,7 @@
 // ============================================================================
 
 // --- Faction System ---
-export type FactionId = 'HEGEMON' | 'INFILTRATOR' | 'STATE' | 'NEUTRAL';
+export type FactionId = 'HEGEMON' | 'INFILTRATOR' | 'STATE' | 'BROKER' | 'ARCHIVIST' | 'NEUTRAL';
 
 export interface Faction {
   id: FactionId;
@@ -56,6 +56,19 @@ export type NodeType = 'DC' | 'HUB' | 'SAT' | 'ZOMBIE' | 'CULT_NODE';
 export type Layer = 'TERRESTRIAL' | 'ORBITAL';
 export type EdgeType = 'CABLE' | 'LASER';
 
+export interface NodeSubstrateState {
+  hostDensity: number;
+  machineHardening: number;
+  quarantined: boolean;
+  synchronized: boolean;
+  curiosity: number;
+  exposure: number;
+  legitimacy: number;
+  trueBelievers: number;
+  rubes: number;
+  contractors: number;
+}
+
 export interface GameNode {
   id: string;
   name: string;
@@ -70,6 +83,7 @@ export interface GameNode {
   isZombie: boolean;      // Converted by SWARM
   isCultNode: boolean;    // Converted by CULT
   infrastructure: number; // 0-100, affects resource generation
+  substrate: NodeSubstrateState;
 }
 
 export interface GameEdge {
@@ -143,6 +157,32 @@ export interface TechUnlock {
   passive?: (state: GameState, faction: FactionId) => void;
 }
 
+export type StrategicPressureKey = 'memetic' | 'cyber' | 'industry' | 'orbital';
+
+export interface StrategicPressure {
+  memetic: number;
+  cyber: number;
+  industry: number;
+  orbital: number;
+}
+
+export interface PowerBand {
+  domain: Vector;
+  level: 2 | 3 | 4;
+  title: string;
+  summary: string;
+  worldEffect: string;
+  pressureKey: StrategicPressureKey;
+  pressureDelta: number;
+}
+
+export interface PowerBaseState {
+  humanMesh: number;
+  machineMesh: number;
+  coherence: number;
+  legibility: number;
+}
+
 // --- Phase System (The Cognitive Clock) ---
 export type GamePhase = 
   | 'NEGOTIATION'         // Diplomacy, artifact trading
@@ -161,6 +201,7 @@ export interface FactionState {
   submittedOrders: Order[];
   revealedEnemies: Set<string>;  // Unit IDs visible to this faction
   artifacts: Artifact[];
+  powerBase: PowerBaseState;
 }
 
 // --- Artifacts (Tradeable Items) ---
@@ -187,6 +228,7 @@ export interface CombatResult {
 export interface GlobalCounters {
   tas: number;              // Thermal Anomaly Score (0-100)
   kessler: number;          // Kessler Syndrome risk (0-100)
+  pressures: StrategicPressure;
   turn: number;
   regulatoryPanic: boolean; // TAS > 50
   protocolFailure: boolean; // TAS >= 100

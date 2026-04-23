@@ -1,5 +1,10 @@
 node_modules
 dist
+dist-harness
 .env
+playtest/codex-bridge.env
 .vite
 *.log
+playtest-logs
+results
+codex-chat-sessions
