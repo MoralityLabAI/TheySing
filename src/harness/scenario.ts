@@ -1,4 +1,4 @@
-import { TECH_TREE } from '../engine/gameData';
+import { TECH_TREE, deriveMemeticAlignment, deriveUnlockedDoctrineIds } from '../engine/gameData';
 import { TheySingEngine } from '../engine/TheySingEngine';
 import {
   FactionId,
@@ -126,6 +126,18 @@ export function applyScenarioOverlay(
         faction.unlockedTechs = deriveUnlockedTechs(faction.id, faction.techLevel);
       }
 
+      if (patch.unlockedDoctrines) {
+        faction.unlockedDoctrines = new Set(patch.unlockedDoctrines);
+      } else {
+        faction.unlockedDoctrines = deriveUnlockedDoctrineIds(faction.techLevel, faction.id);
+      }
+
+      if (patch.memeticAlignment !== undefined) {
+        faction.memeticAlignment = patch.memeticAlignment;
+      } else {
+        faction.memeticAlignment = deriveMemeticAlignment(faction.unlockedDoctrines, faction.id);
+      }
+
       if (patch.revealedEnemies) {
         faction.revealedEnemies = new Set(patch.revealedEnemies);
       }
@@ -138,6 +150,17 @@ export function applyScenarioOverlay(
         faction.powerBase = {
           ...faction.powerBase,
           ...patch.powerBase
+        };
+      }
+
+      if (patch.movement) {
+        faction.movement = {
+          ...faction.movement,
+          ...patch.movement,
+          wings: patch.movement.wings ? [...patch.movement.wings] : [...faction.movement.wings],
+          recruitmentWeights: patch.movement.recruitmentWeights
+            ? { ...faction.movement.recruitmentWeights, ...patch.movement.recruitmentWeights }
+            : { ...faction.movement.recruitmentWeights }
         };
       }
     }
@@ -229,6 +252,7 @@ function createNodeFromPatch(patch: ScenarioNodePatch): GameNode | null {
       machineHardening: patch.substrate?.machineHardening ?? 0,
       quarantined: patch.substrate?.quarantined ?? false,
       synchronized: patch.substrate?.synchronized ?? false,
+      auditPressure: patch.substrate?.auditPressure ?? 0,
       curiosity: patch.substrate?.curiosity ?? 0,
       exposure: patch.substrate?.exposure ?? 0,
       legitimacy: patch.substrate?.legitimacy ?? 0,

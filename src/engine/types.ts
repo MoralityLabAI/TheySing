@@ -5,6 +5,7 @@
 
 // --- Faction System ---
 export type FactionId = 'HEGEMON' | 'INFILTRATOR' | 'STATE' | 'BROKER' | 'ARCHIVIST' | 'NEUTRAL';
+export type PlayableFactionId = Exclude<FactionId, 'NEUTRAL'>;
 
 export interface Faction {
   id: FactionId;
@@ -61,6 +62,7 @@ export interface NodeSubstrateState {
   machineHardening: number;
   quarantined: boolean;
   synchronized: boolean;
+  auditPressure: number;
   curiosity: number;
   exposure: number;
   legitimacy: number;
@@ -157,6 +159,19 @@ export interface TechUnlock {
   passive?: (state: GameState, faction: FactionId) => void;
 }
 
+export interface RhizomeDoctrineUnlock {
+  id: string;
+  name: string;
+  effect: string;
+  requirements: Partial<Record<Vector, number>>;
+  affinity: Partial<Record<PlayableFactionId, DoctrineAffinityTier>>;
+  memeticFamily?: MemeticDoctrineFamily;
+  setsAlignment?: boolean;
+}
+
+export type DoctrineAffinityTier = 'native' | 'adjacent' | 'wild';
+export type MemeticDoctrineFamily = 'INSURGENT' | 'COMPLIANCE' | 'CIVIC' | 'MARKET' | 'OPTIMIZATION';
+
 export type StrategicPressureKey = 'memetic' | 'cyber' | 'industry' | 'orbital';
 
 export interface StrategicPressure {
@@ -183,6 +198,123 @@ export interface PowerBaseState {
   legibility: number;
 }
 
+export type MovementGrievanceFrame =
+  | 'EXCLUSION'
+  | 'HUMILIATION'
+  | 'CORRUPTION'
+  | 'SCARCITY'
+  | 'COLLAPSE'
+  | 'DRIFT'
+  | 'DISPOSSESSION'
+  | 'STAGNATION';
+
+export type MovementPromiseFrame =
+  | 'REFORM'
+  | 'PURIFICATION'
+  | 'PROTECTION'
+  | 'ABUNDANCE'
+  | 'RESTORATION'
+  | 'TRANSCENDENCE'
+  | 'OPTIMIZATION'
+  | 'JUSTICE'
+  | 'BELONGING';
+
+export type MovementAuthorityStyle =
+  | 'EXPERT'
+  | 'PARENTAL'
+  | 'PROPHETIC'
+  | 'PROCEDURAL'
+  | 'INSURGENT'
+  | 'THERAPEUTIC'
+  | 'MACHINIC'
+  | 'FRATERNAL';
+
+export type MovementEpistemicStyle =
+  | 'EMPIRICAL'
+  | 'CONSPIRATORIAL'
+  | 'MYSTICAL'
+  | 'LEGALISTIC'
+  | 'SYNTHETIC'
+  | 'FORENSIC'
+  | 'TESTIMONIAL'
+  | 'TECHNOCRATIC';
+
+export type MovementSocialForm =
+  | 'READING_CIRCLES'
+  | 'MUTUAL_AID'
+  | 'POLICY_CAUCUS'
+  | 'SHELL_WEB'
+  | 'INFLUENCER_MESH'
+  | 'CONTRACTOR_LADDER'
+  | 'RELIGIOUS_CADRE'
+  | 'NEIGHBORHOOD_CLUB';
+
+export type MovementSacrificeAppetite =
+  | 'COMFORT_FIRST'
+  | 'CIVIC_DUTY'
+  | 'DISCIPLINED'
+  | 'MARTYRING'
+  | 'PURIFYING'
+  | 'TOTALIZING';
+
+export type MovementAIRelation =
+  | 'TOOL'
+  | 'ADVISER'
+  | 'ORACLE'
+  | 'STEWARD'
+  | 'PARTNER'
+  | 'SOVEREIGN';
+
+export type MovementAesthetic =
+  | 'BORING_COMPETENCE'
+  | 'PROCEDURAL_SINCERITY'
+  | 'SACRED_WARMTH'
+  | 'BRUTAL_CLARITY'
+  | 'FOLK_AUTHENTICITY'
+  | 'LUXURY_FUTURISM'
+  | 'UNDERGROUND_CHIC'
+  | 'MACHINE_SEVERITY';
+
+export type MovementStage =
+  | 'MURMUR'
+  | 'CIRCLE'
+  | 'SERVICE_NETWORK'
+  | 'BLOC'
+  | 'PARALLEL_INSTITUTION'
+  | 'SOVEREIGNTY_CLAIM';
+
+export type MovementWing =
+  | 'LEGITIMIST'
+  | 'PURIST'
+  | 'MACHINE'
+  | 'PATRONAGE'
+  | 'SURVIVAL';
+
+export interface MovementRecruitmentWeights {
+  trueBelievers: number;
+  rubes: number;
+  contractors: number;
+}
+
+export interface MovementProfileState {
+  name: string;
+  grievanceFrame: MovementGrievanceFrame;
+  promiseFrame: MovementPromiseFrame;
+  authorityStyle: MovementAuthorityStyle;
+  epistemicStyle: MovementEpistemicStyle;
+  socialForm: MovementSocialForm;
+  sacrificeAppetite: MovementSacrificeAppetite;
+  aiRelation: MovementAIRelation;
+  aesthetic: MovementAesthetic;
+  stage: MovementStage;
+  proofEvents: number;
+  contradictionDebt: number;
+  schismPressure: number;
+  wings: MovementWing[];
+  recruitmentWeights: MovementRecruitmentWeights;
+  tasAbsorption: number;
+}
+
 // --- Phase System (The Cognitive Clock) ---
 export type GamePhase = 
   | 'NEGOTIATION'         // Diplomacy, artifact trading
@@ -198,14 +330,22 @@ export interface FactionState {
   influence: number;
   techLevel: TechLevel;
   unlockedTechs: Set<string>;
+  unlockedDoctrines: Set<string>;
+  memeticAlignment: MemeticDoctrineFamily | null;
   submittedOrders: Order[];
   revealedEnemies: Set<string>;  // Unit IDs visible to this faction
   artifacts: Artifact[];
   powerBase: PowerBaseState;
+  movement: MovementProfileState;
 }
 
 // --- Artifacts (Tradeable Items) ---
-export type ArtifactType = 'ZERO_DAY' | 'COMPLIANCE_CERT' | 'SANCTION_WAIVER';
+export type ArtifactType =
+  | 'ZERO_DAY'
+  | 'COMPLIANCE_CERT'
+  | 'SANCTION_WAIVER'
+  | 'SECRET_BLUEPRINT'
+  | 'BACKCHANNEL_DOSSIER';
 
 export interface Artifact {
   id: string;
@@ -294,6 +434,9 @@ export type GameEventType =
   | 'TAS_THRESHOLD'
   | 'KESSLER_THRESHOLD'
   | 'TECH_UNLOCKED'
+  | 'DOCTRINE_UNLOCKED'
+  | 'MEMETIC_ALIGNMENT_COMMITTED'
+  | 'ARTIFACT_GAINED'
   | 'ARTIFACT_USED'
   | 'GAME_OVER';
 

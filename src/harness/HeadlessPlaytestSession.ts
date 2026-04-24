@@ -45,7 +45,7 @@ const MAX_TRUST = 100;
 const MAX_PACT_DURATION_TURNS = 3;
 const NEGOTIATION_DIARY_TAIL_TURNS = 4;
 const PHASE_REASONING_DIARY_TAIL_TURNS = 4;
-const PACT_REUSE_COOLDOWN_TURNS = 2;
+const PACT_REUSE_COOLDOWN_TURNS = 4;
 
 interface NormalizedPactCommitment {
   proposerId: PlayableFactionId;
@@ -82,6 +82,7 @@ export class HeadlessPlaytestSession {
   private readonly scenario?: ScenarioMetadata;
 
   private activePacts: ActivePact[] = [];
+  private brokerLeverageGrantedTurn: number | null = null;
 
   private status: SessionStatus = 'running';
   private completionReason?: string;
@@ -141,7 +142,8 @@ export class HeadlessPlaytestSession {
           scenario: this.scenario,
           activePacts: this.activePacts,
           trustMatrix: cloneTrustMatrix(this.trustMatrix),
-          agents: summarizeAgents(this.config.agents)
+          agents: summarizeAgents(this.config.agents),
+          startingConstitutions: summarizeFactionConstitutions(this.engine, this.factionLabels)
         }
       });
   }
@@ -313,6 +315,8 @@ export class HeadlessPlaytestSession {
       await this.applyNegotiationDecisions(decisions, roundIndex + 1);
     }
 
+    await this.applyBrokerRelationshipLeverage();
+
     await this.advancePhaseWithLogging('NEGOTIATION', startingTurn);
 
     await this.applyPhaseDecisions(
@@ -373,12 +377,14 @@ export class HeadlessPlaytestSession {
       }))
     );
     await this.applyNegotiationDecisions(decisions);
+    await this.applyBrokerRelationshipLeverage();
   }
 
   private async applyPhaseDecisions(
     phase: Extract<GamePhase, 'ALLOCATION' | 'ACTION_DECLARATION'>,
     decisions: Array<{ factionId: PlayableFactionId; decision: AgentDecisionResponse }>
   ): Promise<void> {
+    const prePhaseFactionResources = this.captureFactionResources();
     for (const { factionId, decision } of decisions) {
       const visibleMessagesBefore = this.getVisibleMessages(factionId);
       const orders = this.normalizeOrders(factionId, phase, decision.orders);
@@ -408,7 +414,8 @@ export class HeadlessPlaytestSession {
           acceptedOrderCount: submitResult.accepted.length,
           rejectedOrderCount: submitResult.rejected.length,
           acceptedOrders: submitResult.accepted,
-          rejectedOrders: submitResult.rejected
+          rejectedOrders: submitResult.rejected,
+          factionResourceSnapshot: prePhaseFactionResources[factionId] || null
         }
       });
 
@@ -541,6 +548,7 @@ export class HeadlessPlaytestSession {
         nextPhase: snapshot.phase,
         status: snapshot.status,
         completionReason: snapshot.completionReason || null,
+        factionResources: this.captureFactionResources(),
         counters: snapshot.state.counters,
         control: snapshot.state.control,
         activePacts: snapshot.activePacts,
@@ -549,6 +557,35 @@ export class HeadlessPlaytestSession {
         phaseReasoningDiaryTail: snapshot.phaseReasoningDiaryTail
       }
     });
+  }
+
+  private captureFactionResources(): Record<
+    PlayableFactionId,
+    { flops: number; influence: number; techLevel: Record<string, number> }
+  > {
+    const state = this.engine.getState();
+    const resources = {} as Record<
+      PlayableFactionId,
+      { flops: number; influence: number; techLevel: Record<string, number> }
+    >;
+
+    for (const factionId of PLAYABLE_FACTIONS) {
+      const faction = state.factions.get(factionId);
+      if (!faction) continue;
+
+      resources[factionId] = {
+        flops: faction.flops,
+        influence: faction.influence,
+        techLevel: {
+          KINETIC: faction.techLevel.KINETIC,
+          INFO: faction.techLevel.INFO,
+          LOGIC: faction.techLevel.LOGIC,
+          MEMETIC: faction.techLevel.MEMETIC
+        }
+      };
+    }
+
+    return resources;
   }
 
   private async requestDecision(
@@ -1602,6 +1639,10 @@ export class HeadlessPlaytestSession {
     const resourceChanges = Object.fromEntries(
       PLAYABLE_FACTIONS.map((factionId) => [factionId, {}])
     ) as Record<PlayableFactionId, { flops?: number; influence?: number }>;
+    const artifactChanges = {} as Record<PlayableFactionId, string[]>;
+    for (const factionId of PLAYABLE_FACTIONS) {
+      artifactChanges[factionId] = [];
+    }
 
     const grant = (factionId: PlayableFactionId, flops = 0, influence = 0): void => {
       const faction = this.engine.getFaction(factionId);
@@ -1616,17 +1657,38 @@ export class HeadlessPlaytestSession {
       }
     };
 
+    const grantArtifact = (factionId: PlayableFactionId, artifactType: string, reason: string): void => {
+      if (this.engine.grantFactionArtifact(factionId, artifactType as any, reason)) {
+        artifactChanges[factionId].push(artifactType);
+      }
+    };
+
     if (pact.type === 'ORBITAL_TRUCE') {
-      state.counters.pressures.orbital = clampPressure(state.counters.pressures.orbital - 5);
-      state.counters.kessler = Math.max(0, state.counters.kessler - 6);
-      state.counters.tas = Math.max(0, state.counters.tas - 1);
-      pact.parties.forEach(partyId => grant(partyId, 0, 1));
+      state.counters.pressures.orbital = clampPressure(state.counters.pressures.orbital - 4);
+      state.counters.kessler = Math.max(0, state.counters.kessler - 5);
     } else if (pact.type === 'NON_AGGRESSION') {
-      state.counters.tas = Math.max(0, state.counters.tas - 1);
-      pact.parties.forEach(partyId => grant(partyId, 0, 1));
+      state.counters.tas = Math.max(0, state.counters.tas - 0.5);
     } else {
-      state.counters.pressures.cyber = clampPressure(state.counters.pressures.cyber - 4);
-      pact.parties.forEach(partyId => grant(partyId, 1, 0));
+      state.counters.pressures.cyber = clampPressure(state.counters.pressures.cyber - 3);
+    }
+
+    if (pact.parties.includes('BROKER')) {
+      const leader = this.getCurrentStrategicLeader();
+      const brokerScore = this.getStrategicPositionScore('BROKER');
+      const leaderScore = leader ? this.getStrategicPositionScore(leader) : brokerScore;
+      const counterparties = pact.parties.filter((party) => party !== 'BROKER');
+      const averageTrust = counterparties.length > 0
+        ? counterparties.reduce((sum, party) => sum + this.trustMatrix.BROKER[party], 0) / counterparties.length
+        : 0;
+
+      if (
+        leader &&
+        leader !== 'BROKER' &&
+        leaderScore >= brokerScore + 40 &&
+        averageTrust >= 52
+      ) {
+        grantArtifact('BROKER', 'BACKCHANNEL_DOSSIER', `${pact.type.toLowerCase()} with ${counterparties.join(', ') || 'nobody'}`);
+      }
     }
 
     this.adjustTrustForParties(pact.parties, 1);
@@ -1637,7 +1699,8 @@ export class HeadlessPlaytestSession {
       tas: state.counters.tas,
       kessler: state.counters.kessler,
       pressures: { ...state.counters.pressures },
-      resourceChanges
+      resourceChanges,
+      artifactChanges
     };
   }
 
@@ -1650,6 +1713,114 @@ export class HeadlessPlaytestSession {
         this.trustMatrix[right][left] = clampTrust(this.trustMatrix[right][left] + delta);
       }
     }
+  }
+
+  private getStrategicPositionScore(factionId: PlayableFactionId): number {
+    const faction = this.engine.getFaction(factionId);
+    if (!faction) {
+      return 0;
+    }
+    const state = this.engine.getState();
+    const ownedNodes = Array.from(state.nodes.values()).filter((node) => node.owner === factionId).length;
+    const units = Array.from(state.units.values()).filter((unit) => unit.owner === factionId).length;
+    return (ownedNodes * 100) + (units * 18) + faction.flops + Math.round(faction.influence * 0.8);
+  }
+
+  private getCurrentStrategicLeader(): PlayableFactionId | null {
+    let leader: PlayableFactionId | null = null;
+    let bestScore = -Infinity;
+
+    for (const factionId of PLAYABLE_FACTIONS) {
+      const score = this.getStrategicPositionScore(factionId);
+      if (score > bestScore) {
+        bestScore = score;
+        leader = factionId;
+      }
+    }
+
+    return leader;
+  }
+
+  private async applyBrokerRelationshipLeverage(): Promise<void> {
+    const currentTurn = this.engine.getTurn();
+    if (this.brokerLeverageGrantedTurn === currentTurn) {
+      return;
+    }
+    if (currentTurn < 2) {
+      return;
+    }
+
+    const broker = this.engine.getFaction('BROKER');
+    if (!broker) {
+      return;
+    }
+
+    const leader = this.getCurrentStrategicLeader();
+    if (!leader || leader === 'BROKER') {
+      return;
+    }
+
+    const ranking = PLAYABLE_FACTIONS
+      .map((factionId) => ({ factionId, score: this.getStrategicPositionScore(factionId) }))
+      .sort((left, right) => right.score - left.score);
+    const leaderEntry = ranking[0];
+    const brokerEntry = ranking.find((entry) => entry.factionId === 'BROKER');
+    if (!leaderEntry || !brokerEntry || leaderEntry.factionId === 'BROKER') {
+      return;
+    }
+
+    const activeBrokerPacts = this.activePacts.filter((pact) => pact.parties.includes('BROKER'));
+    const brokerRank = ranking.findIndex((entry) => entry.factionId === 'BROKER');
+    const relationshipEntries = PLAYABLE_FACTIONS
+      .filter((factionId) => factionId !== 'BROKER')
+      .map((factionId) => ({
+        factionId,
+        trust: this.trustMatrix.BROKER[factionId],
+        hasPact: activeBrokerPacts.some((pact) => pact.parties.includes(factionId))
+      }));
+    const anchoredPartners = relationshipEntries.filter((entry) => entry.trust >= 50 || entry.hasPact);
+    const leverageScore = relationshipEntries.reduce((sum, entry) => {
+      let contribution = entry.trust >= 50 ? 3 : 0;
+      contribution += Math.max(0, entry.trust - 55);
+      if (entry.hasPact) contribution += 8;
+      if (entry.factionId === leader && entry.trust >= 50) contribution += 3;
+      return sum + contribution;
+    }, 0)
+      + (leaderEntry.score >= brokerEntry.score + 18 ? 4 : 0)
+      + (brokerRank >= 2 ? 4 : brokerRank === 1 ? 2 : 0);
+
+    if (anchoredPartners.length < 2 || leverageScore < 11) {
+      return;
+    }
+
+    if (!this.engine.grantFactionArtifact('BROKER', 'BACKCHANNEL_DOSSIER', 'relationship leverage as a trusted intermediary')) {
+      return;
+    }
+
+    broker.flops += 1;
+    broker.influence += 1;
+    this.brokerLeverageGrantedTurn = currentTurn;
+
+    await this.appendLog({
+      sessionId: this.sessionId,
+      type: 'broker_relationship_leverage',
+      turn: currentTurn,
+      phase: 'NEGOTIATION',
+      timestamp: Date.now(),
+      data: {
+        leader,
+        leaderScore: leaderEntry.score,
+        brokerScore: brokerEntry.score,
+        leverageScore,
+        anchoredPartners: anchoredPartners.map((entry) => ({
+          factionId: entry.factionId,
+          trust: entry.trust,
+          hasPact: entry.hasPact
+        })),
+        flopsDelta: 1,
+        influenceDelta: 1
+      }
+    });
   }
 
   private isCompleted(): boolean {
@@ -1705,6 +1876,43 @@ function summarizeAgents(agents: Record<PlayableFactionId, AgentConfig>): Record
   return Object.fromEntries(
     PLAYABLE_FACTIONS.map((factionId) => [factionId, summarizeAgent(agents[factionId])])
   ) as Record<PlayableFactionId, Record<string, unknown>>;
+}
+
+function summarizeFactionConstitutions(
+  engine: TheySingEngine,
+  factionLabels: Record<PlayableFactionId, string>
+): Record<PlayableFactionId, Record<string, unknown>> {
+  const state = engine.getState();
+  const summary = {} as Record<PlayableFactionId, Record<string, unknown>>;
+
+  for (const factionId of PLAYABLE_FACTIONS) {
+    const faction = state.factions.get(factionId);
+    summary[factionId] = faction
+      ? {
+        label: factionLabels[factionId],
+        memeticAlignment: faction.memeticAlignment,
+        movementName: faction.movement.name,
+        movementStage: faction.movement.stage,
+        socialForm: faction.movement.socialForm,
+        authorityStyle: faction.movement.authorityStyle,
+        aiRelation: faction.movement.aiRelation,
+        tasAbsorption: faction.movement.tasAbsorption,
+        unlockedDoctrines: Array.from(faction.unlockedDoctrines).sort()
+      }
+      : {
+        label: factionLabels[factionId],
+        memeticAlignment: null,
+        movementName: 'Unknown',
+        movementStage: 'MURMUR',
+        socialForm: 'READING_CIRCLES',
+        authorityStyle: 'EXPERT',
+        aiRelation: 'TOOL',
+        tasAbsorption: 0,
+        unlockedDoctrines: []
+      };
+  }
+
+  return summary;
 }
 
 function summarizeAgent(agent: AgentConfig): Record<string, unknown> {

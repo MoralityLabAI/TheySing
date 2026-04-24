@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { TheySingEngine } from '../engine/TheySingEngine';
-import { FACTIONS, UNIT_STATS } from '../engine/gameData';
+import { FACTIONS, UNIT_STATS, getDoctrineAffinityTier } from '../engine/gameData';
 import { 
   GameState, GamePhase, FactionId, Unit, Order, OrderType,
   UnitType, Vector, GameEvent
@@ -262,6 +262,73 @@ export class TheySingUI {
       }
 
       .ts-power-band-empty {
+        color: #6f8397;
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .ts-doctrines {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .ts-doctrine-alignment {
+        color: #ffe7a8;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .ts-doctrine {
+        background: rgba(155, 180, 255, 0.08);
+        border-left: 3px solid #9bb4ff;
+        border-radius: 3px;
+        padding: 8px 10px;
+      }
+
+      .ts-doctrine-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #d9ebff;
+        margin-bottom: 3px;
+      }
+
+      .ts-doctrine-affinity {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 1px 6px;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #081019;
+      }
+
+      .ts-doctrine-affinity.native {
+        background: #b5f0c7;
+      }
+
+      .ts-doctrine-affinity.adjacent {
+        background: #ffe4a8;
+      }
+
+      .ts-doctrine-affinity.wild {
+        background: #f5b8ff;
+      }
+
+      .ts-doctrine-effect {
+        color: #93a6ba;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .ts-doctrine-empty {
         color: #6f8397;
         font-size: 11px;
         line-height: 1.45;
@@ -994,6 +1061,10 @@ export class TheySingUI {
       <div class="ts-power-bands">
         <div class="ts-power-band-empty">Reach level 2 and 3 research bands to surface doctrine shifts here.</div>
       </div>
+      <div class="ts-header" style="margin-top: 14px;">Doctrines</div>
+      <div class="ts-doctrines">
+        <div class="ts-doctrine-empty">Cross-track doctrine unlocks will surface here once your research stack starts braiding.</div>
+      </div>
     `;
     return panel;
   }
@@ -1460,6 +1531,25 @@ export class TheySingUI {
         </div>
       `).join('')
       : '<div class="ts-power-band-empty">Reach level 2 and 3 research bands to surface doctrine shifts here.</div>';
+
+    const doctrinesEl = this.hudPanel.querySelector('.ts-doctrines') as HTMLElement;
+    const doctrines = this.engine.getFactionRhizomeDoctrines(this.currentFaction);
+    const alignmentBanner = faction.memeticAlignment
+      ? `<div class="ts-doctrine-alignment">Memetic Constitution: ${faction.memeticAlignment.replace(/_/g, ' ')}</div>`
+      : '';
+    doctrinesEl.innerHTML = doctrines.length > 0
+      ? `${alignmentBanner}${doctrines.map(doctrine => `
+        <div class="ts-doctrine">
+          <div class="ts-doctrine-title">
+            <span>${doctrine.name}</span>
+            <span class="ts-doctrine-affinity ${getDoctrineAffinityTier(doctrine, this.currentFaction === 'NEUTRAL' ? undefined : this.currentFaction) || 'native'}">
+              ${getDoctrineAffinityTier(doctrine, this.currentFaction === 'NEUTRAL' ? undefined : this.currentFaction) || 'native'}
+            </span>
+          </div>
+          <div class="ts-doctrine-effect">${doctrine.effect}</div>
+        </div>
+      `).join('')}`
+      : '<div class="ts-doctrine-empty">Cross-track doctrine unlocks will surface here once your research stack starts braiding.</div>';
   }
 
   private updatePhase(state: GameState): void {

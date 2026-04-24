@@ -13,6 +13,7 @@
     "playtest:codex-bridge": "npm run build:harness && node scripts/start-codex-bridge.cjs",
     "playtest:codex-bridge:probe": "node scripts/probe-codex-bridge.cjs",
     "tournament:harness": "npm run build:harness && node dist-harness/harness/tournament.js",
+    "playtest:extract-diaries": "node scripts/extract-playtest-diaries.cjs",
     "playtest:feedback-loop": "node scripts/run-codex-feedback-loop.cjs"
   },
   "devDependencies": {

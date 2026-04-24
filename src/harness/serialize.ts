@@ -78,12 +78,19 @@ export function serializeGameState(
       influence: faction.influence,
       techLevel: { ...faction.techLevel },
       unlockedTechs: Array.from(faction.unlockedTechs).sort(),
+      unlockedDoctrines: Array.from(faction.unlockedDoctrines).sort(),
+      memeticAlignment: faction.memeticAlignment,
       revealedEnemies: Array.from(faction.revealedEnemies).sort(),
       artifacts: [...faction.artifacts],
       unitIds,
       controlledNodeIds,
       powerBands: factionId === 'NEUTRAL' ? [] : engine.getFactionPowerBands(factionId),
-      powerBase: { ...faction.powerBase }
+      powerBase: { ...faction.powerBase },
+      movement: {
+        ...faction.movement,
+        wings: [...faction.movement.wings],
+        recruitmentWeights: { ...faction.movement.recruitmentWeights }
+      }
     };
   }
 

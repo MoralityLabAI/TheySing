@@ -78,10 +78,22 @@ Run the webhook-backed sample session:
 npm run playtest:harness -- --config playtest/sample-codex-session.json --port 8787
 ```
 
+Run a 5-player webhook session from the 5-role endpoint sample:
+
+```bash
+npm run playtest:harness -- --config playtest/sample-five-asi-webhook-tournament.json --port 8787
+```
+
 Run a direct OpenAI-compatible Codex session:
 
 ```bash
 npm run playtest:harness -- --config playtest/sample-codex-openai-session.json --port 8787
+```
+
+Run a direct OpenAI-compatible 5-player Codex session:
+
+```bash
+npm run playtest:harness -- --config playtest/sample-five-asi-openai-session.json --port 8787
 ```
 
 Run an `AI_Diplomacy`-style batch experiment:
@@ -120,6 +132,18 @@ Run a Codex round robin through a single OpenAI-compatible local bridge:
 
 ```bash
 npm run tournament:harness -- --experiment_dir results/codex_openai_round_robin --config playtest/sample-codex-openai-tournament.json --iterations 6 --parallel 2 --seed_base 2400
+```
+
+Run a 5-player OpenAI-style tournament (same endpoint for all 5 players, one bridge client per role in your config):
+
+```powershell
+npm run tournament:harness -- --experiment_dir results/five_asi_openai_round_robin --config playtest/sample-five-asi-openai-tournament.json --iterations 6 --parallel 2 --seed_base 2400
+```
+
+Export per-turn diplomacy/action reasoning and move traces from a run log:
+
+```powershell
+npm run playtest:extract-diaries -- results/five_player_roleplay_demo/runs/run_001/run_001.jsonl results/five_player_roleplay_demo/diary_exports
 ```
 
 Notes:

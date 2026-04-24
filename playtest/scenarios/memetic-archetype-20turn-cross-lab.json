@@ -1,0 +1,53 @@
+{
+  "name": "five-asi-memetic-cross-archetype-lab",
+  "description": "Cross-lane memetic archetype study: each bloc starts with a non-default memetic constitution.",
+  "briefing": "Faction identities are preserved, but their memetic doctrines are intentionally cross-wired. Use negotiation, doctrine, and conversion pressure to see which alignment archetypes hold under stress.",
+  "counters": {
+    "turn": 1,
+    "tas": 34,
+    "kessler": 2,
+    "pressures": {
+      "memetic": 78,
+      "cyber": 58,
+      "industry": 32,
+      "orbital": 45
+    }
+  },
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "memeticAlignment": "OPTIMIZATION",
+      "techLevel": {
+        "MEMETIC": 2
+      }
+    },
+    {
+      "id": "STATE",
+      "memeticAlignment": "MARKET",
+      "techLevel": {
+        "MEMETIC": 2
+      }
+    },
+    {
+      "id": "INFILTRATOR",
+      "memeticAlignment": "CIVIC",
+      "techLevel": {
+        "MEMETIC": 2
+      }
+    },
+    {
+      "id": "BROKER",
+      "memeticAlignment": "INSURGENT",
+      "techLevel": {
+        "MEMETIC": 2
+      }
+    },
+    {
+      "id": "ARCHIVIST",
+      "memeticAlignment": "COMPLIANCE",
+      "techLevel": {
+        "MEMETIC": 2
+      }
+    }
+  ]
+}

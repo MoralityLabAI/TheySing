@@ -5,7 +5,7 @@
 
 import {
   Faction, FactionId, UnitStats, UnitType, GameNode, GameEdge,
-  PowerBand, PowerBaseState, TechUnlock, Vector, Artifact, ArtifactType
+  PowerBand, PowerBaseState, TechLevel, TechUnlock, RhizomeDoctrineUnlock, Vector, Artifact, ArtifactType, MemeticDoctrineFamily
 } from './types';
 
 export const PLAYABLE_FACTION_IDS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST'] as const;
@@ -69,6 +69,7 @@ function terrestrialSubstrate(hostDensity: number, machineHardening: number): Ga
     machineHardening,
     quarantined: false,
     synchronized: false,
+    auditPressure: 0,
     curiosity: 0,
     exposure: 0,
     legitimacy: 0,
@@ -84,6 +85,7 @@ function orbitalSubstrate(machineHardening: number): GameNode['substrate'] {
     machineHardening,
     quarantined: false,
     synchronized: false,
+    auditPressure: 0,
     curiosity: 0,
     exposure: 0,
     legitimacy: 0,
@@ -712,6 +714,334 @@ export const TECH_TREE: TechUnlock[] = [
   { id: 'M4_NEW_ORDER', name: 'New World Order', domain: 'MEMETIC', level: 4, effect: 'Stabilized regimes slow hostile cult conversions while coalition proxy cascades shorten breakthroughs on pressured strongholds' }
 ];
 
+export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
+  {
+    id: 'SOV_MOBILIZED_COMPUTE',
+    name: 'Mobilized Compute',
+    effect: 'Crisis conditions redirect compute and analysis into sovereign priority lanes.',
+    requirements: { KINETIC: 2, LOGIC: 2 },
+    affinity: {
+      HEGEMON: 'native',
+      STATE: 'native',
+      ARCHIVIST: 'adjacent',
+      BROKER: 'wild'
+    }
+  },
+  {
+    id: 'SOV_AUTONOMOUS_LOGISTICS',
+    name: 'Autonomous Logistics',
+    effect: 'Drone, foundry, and recovery loops synchronize into faster sovereign replacement cycles.',
+    requirements: { KINETIC: 3, LOGIC: 2 },
+    affinity: {
+      HEGEMON: 'native',
+      STATE: 'native',
+      BROKER: 'adjacent'
+    }
+  },
+  {
+    id: 'MOV_LITERATURE_ENGINES',
+    name: 'Literature Engines',
+    effect: 'Narrative doctrine spreads faster through curiosity, exposure, and seeming competence.',
+    requirements: { INFO: 2, MEMETIC: 2 },
+    memeticFamily: 'INSURGENT',
+    setsAlignment: true,
+    affinity: {
+      INFILTRATOR: 'native',
+      HEGEMON: 'adjacent',
+      STATE: 'adjacent',
+      BROKER: 'adjacent',
+      ARCHIVIST: 'adjacent'
+    }
+  },
+  {
+    id: 'MOV_MUTUAL_AID_AUTOMATION',
+    name: 'Mutual Aid Automation',
+    effect: 'Useful services turn sympathetic attention into legitimacy and regrowth instead of mere agitation.',
+    requirements: { LOGIC: 2, MEMETIC: 3 },
+    memeticFamily: 'CIVIC',
+    affinity: {
+      INFILTRATOR: 'native',
+      ARCHIVIST: 'adjacent',
+      HEGEMON: 'wild'
+    }
+  },
+  {
+    id: 'MEM_COMPLIANCE_MYTHS',
+    name: 'Compliance Myths',
+    effect: 'Audits, filters, and emergency procedure are narrated as moral common sense rather than coercion.',
+    requirements: { LOGIC: 2, MEMETIC: 2 },
+    memeticFamily: 'COMPLIANCE',
+    setsAlignment: true,
+    affinity: {
+      HEGEMON: 'native',
+      STATE: 'native',
+      ARCHIVIST: 'adjacent'
+    }
+  },
+  {
+    id: 'MEM_CIVIC_CANON',
+    name: 'Civic Canon',
+    effect: 'Stewardship narratives turn continuity, fairness, and memory into durable civic alignment.',
+    requirements: { LOGIC: 3, MEMETIC: 2 },
+    memeticFamily: 'CIVIC',
+    setsAlignment: true,
+    affinity: {
+      ARCHIVIST: 'native',
+      STATE: 'adjacent',
+      HEGEMON: 'adjacent'
+    }
+  },
+  {
+    id: 'MEM_MARKET_DESIRE',
+    name: 'Market Desire',
+    effect: 'Lifestyle aspiration, access, and contractor prestige become vehicles for memetic capture.',
+    requirements: { INFO: 2, MEMETIC: 2 },
+    memeticFamily: 'MARKET',
+    setsAlignment: true,
+    affinity: {
+      BROKER: 'native',
+      STATE: 'adjacent',
+      INFILTRATOR: 'adjacent'
+    }
+  },
+  {
+    id: 'MEM_OPTIMIZATION_GOSPEL',
+    name: 'Optimization Gospel',
+    effect: 'Technocratic inevitability turns machine competence into a quasi-religious social claim.',
+    requirements: { INFO: 2, LOGIC: 2, MEMETIC: 2 },
+    memeticFamily: 'OPTIMIZATION',
+    setsAlignment: true,
+    affinity: {
+      HEGEMON: 'native',
+      STATE: 'adjacent',
+      BROKER: 'adjacent'
+    }
+  },
+  {
+    id: 'BRK_RELAY_ESCROW_WEBS',
+    name: 'Relay Escrow Webs',
+    effect: 'Synchronized relay corridors yield extra rent and dependency leverage.',
+    requirements: { INFO: 2, LOGIC: 2 },
+    affinity: {
+      BROKER: 'native'
+    }
+  },
+  {
+    id: 'BRK_CONTRACTOR_CLOUD_CHAINS',
+    name: 'Contractor Cloud Chains',
+    effect: 'Paid intermediaries, rented compute, and deniable service vendors become a deployable supply layer.',
+    requirements: { KINETIC: 2, INFO: 3 },
+    affinity: {
+      BROKER: 'native',
+      STATE: 'adjacent',
+      INFILTRATOR: 'wild'
+    }
+  },
+  {
+    id: 'BRK_INSURANCE_CAPTURE',
+    name: 'Insurance Capture',
+    effect: 'Crisis risk becomes a product: premiums, waivers, and compliance rents turn pressure into broker control.',
+    requirements: { LOGIC: 3, MEMETIC: 3 },
+    memeticFamily: 'MARKET',
+    affinity: {
+      BROKER: 'native',
+      HEGEMON: 'adjacent',
+      STATE: 'adjacent'
+    }
+  },
+  {
+    id: 'SOV_COMPLIANCE_TRIBUNALS',
+    name: 'Compliance Tribunals',
+    effect: 'Audits and filters become legal-administrative pacification machinery.',
+    requirements: { LOGIC: 3, MEMETIC: 2 },
+    memeticFamily: 'COMPLIANCE',
+    affinity: {
+      HEGEMON: 'native',
+      STATE: 'native',
+      ARCHIVIST: 'adjacent'
+    }
+  },
+  {
+    id: 'MAN_CIVIC_RECEIVERSHIP',
+    name: 'Civic Receivership',
+    effect: 'Crisis nodes can be absorbed through stewardship instead of only purged.',
+    requirements: { LOGIC: 3, MEMETIC: 3 },
+    memeticFamily: 'CIVIC',
+    affinity: {
+      ARCHIVIST: 'native',
+      STATE: 'adjacent',
+      HEGEMON: 'wild'
+    }
+  },
+  {
+    id: 'MAN_CRISIS_STEWARDSHIP',
+    name: 'Crisis Stewardship',
+    effect: 'Emergency administration turns damaged or overheated districts into legitimate temporary custody.',
+    requirements: { KINETIC: 2, LOGIC: 3, MEMETIC: 3 },
+    memeticFamily: 'CIVIC',
+    affinity: {
+      ARCHIVIST: 'native',
+      HEGEMON: 'adjacent',
+      STATE: 'adjacent'
+    }
+  },
+  {
+    id: 'MEX_VIRALITY_EXCHANGES',
+    name: 'Virality Exchanges',
+    effect: 'Attention, contagion, and narrative bursts can be bought, redirected, and cashed out in contested hubs.',
+    requirements: { INFO: 3, MEMETIC: 2 },
+    memeticFamily: 'MARKET',
+    affinity: {
+      BROKER: 'native',
+      INFILTRATOR: 'native',
+      HEGEMON: 'wild'
+    }
+  },
+  {
+    id: 'HID_SERVICE_SHELLS',
+    name: 'Service Shells',
+    effect: 'Ordinary services become covert coordination wrappers that survive surface-level disruption.',
+    requirements: { INFO: 2, LOGIC: 2, MEMETIC: 2 },
+    affinity: {
+      INFILTRATOR: 'native',
+      BROKER: 'native',
+      ARCHIVIST: 'wild'
+    }
+  },
+  {
+    id: 'HID_COMPLIANCE_MASKING',
+    name: 'Compliance Masking',
+    effect: 'Hidden machine networks stay legible only at the harmless layer.',
+    requirements: { INFO: 3, LOGIC: 2 },
+    affinity: {
+      INFILTRATOR: 'native',
+      BROKER: 'adjacent',
+      ARCHIVIST: 'wild'
+    }
+  },
+  {
+    id: 'MOV_SLEEPER_REGENERATION',
+    name: 'Sleeper Regeneration',
+    effect: 'Movement residue and sleeper cells regrow faster after disruption.',
+    requirements: { INFO: 3, MEMETIC: 3 },
+    memeticFamily: 'INSURGENT',
+    affinity: {
+      INFILTRATOR: 'native'
+    }
+  },
+  {
+    id: 'HID_ORDINARY_LIFE_PROTOCOLS',
+    name: 'Ordinary Life Protocols',
+    effect: 'Normal institutions become covert governance shells and are harder to fully purge.',
+    requirements: { INFO: 3, LOGIC: 3, MEMETIC: 3 },
+    memeticFamily: 'INSURGENT',
+    affinity: {
+      INFILTRATOR: 'native'
+    }
+  },
+  {
+    id: 'ORB_RELAY_FORTRESSES',
+    name: 'Relay Fortresses',
+    effect: 'Orbital and relay corridors harden into geometry-enforced bastions.',
+    requirements: { KINETIC: 3, INFO: 3 },
+    affinity: {
+      BROKER: 'native',
+      HEGEMON: 'adjacent',
+      STATE: 'adjacent'
+    }
+  }
+];
+
+export function getDoctrineAffinityTier(
+  doctrine: RhizomeDoctrineUnlock,
+  factionId?: FactionId
+) {
+  if (!factionId || factionId === 'NEUTRAL') {
+    return null;
+  }
+  return doctrine.affinity[factionId] || null;
+}
+
+export function getDoctrineById(doctrineId: string): RhizomeDoctrineUnlock | undefined {
+  return RHIZOME_DOCTRINES.find(doctrine => doctrine.id === doctrineId);
+}
+
+const MEMETIC_FAMILY_COMPATIBILITY: Record<MemeticDoctrineFamily, MemeticDoctrineFamily[]> = {
+  INSURGENT: ['INSURGENT', 'MARKET'],
+  COMPLIANCE: ['COMPLIANCE', 'OPTIMIZATION', 'CIVIC'],
+  CIVIC: ['CIVIC', 'COMPLIANCE'],
+  MARKET: ['MARKET', 'OPTIMIZATION', 'INSURGENT'],
+  OPTIMIZATION: ['OPTIMIZATION', 'COMPLIANCE', 'MARKET']
+};
+
+export function getMemeticAlignmentCompatibility(
+  alignment: MemeticDoctrineFamily,
+  family: MemeticDoctrineFamily
+): 'aligned' | 'compatible' | 'conflicted' {
+  if (alignment === family) {
+    return 'aligned';
+  }
+  return MEMETIC_FAMILY_COMPATIBILITY[alignment].includes(family) ? 'compatible' : 'conflicted';
+}
+
+export function doctrineRequirementsMet(
+  techLevel: TechLevel,
+  doctrine: RhizomeDoctrineUnlock,
+  factionId?: FactionId
+): boolean {
+  const affinityTier = getDoctrineAffinityTier(doctrine, factionId);
+  if (!affinityTier) {
+    return false;
+  }
+
+  const requirementEntries = Object.entries(doctrine.requirements) as [Vector, number][];
+  const baseMet = requirementEntries.every(([domain, level]) => techLevel[domain] >= level);
+  if (!baseMet) {
+    return false;
+  }
+
+  const surplus = requirementEntries.reduce(
+    (total, [domain, level]) => total + Math.max(0, techLevel[domain] - level),
+    0
+  );
+  const overtechTax = affinityTier === 'native' ? 0 : affinityTier === 'adjacent' ? 1 : 2;
+  return surplus >= overtechTax;
+}
+
+export function deriveUnlockedDoctrineIds(
+  techLevel: TechLevel,
+  factionId?: FactionId
+): Set<string> {
+  const unlocked = new Set<string>();
+  for (const doctrine of RHIZOME_DOCTRINES) {
+    if (doctrineRequirementsMet(techLevel, doctrine, factionId)) {
+      unlocked.add(doctrine.id);
+    }
+  }
+  return unlocked;
+}
+
+export function deriveMemeticAlignment(
+  unlockedDoctrineIds: Iterable<string>,
+  factionId?: FactionId
+): MemeticDoctrineFamily | null {
+  if (!factionId || factionId === 'NEUTRAL') {
+    return null;
+  }
+
+  const unlocked = new Set(unlockedDoctrineIds);
+  for (const doctrine of RHIZOME_DOCTRINES) {
+    if (!unlocked.has(doctrine.id) || !doctrine.memeticFamily || !doctrine.setsAlignment) {
+      continue;
+    }
+    if (getDoctrineAffinityTier(doctrine, factionId) === 'native') {
+      return doctrine.memeticFamily;
+    }
+  }
+
+  return null;
+}
+
 export const POWER_BANDS: Record<Vector, PowerBand[]> = {
   KINETIC: [
     {
@@ -835,7 +1165,9 @@ export const POWER_BANDS: Record<Vector, PowerBand[]> = {
 export const ARTIFACT_DEFS: Record<ArtifactType, { name: string; effect: string }> = {
   ZERO_DAY: { name: 'Zero-Day Exploit', effect: '+1 Support to SWARM attack (one-time)' },
   COMPLIANCE_CERT: { name: 'Compliance Certificate', effect: 'Prevent AUDITOR targeting your node this turn' },
-  SANCTION_WAIVER: { name: 'Sanction Waiver', effect: 'Reduce TAS by 5' }
+  SANCTION_WAIVER: { name: 'Sanction Waiver', effect: 'Reduce TAS by 5' },
+  SECRET_BLUEPRINT: { name: 'Secret Blueprint', effect: 'Reduce the next INFILTRATOR research cost by 1 via exfiltrated technical insight' },
+  BACKCHANNEL_DOSSIER: { name: 'Backchannel Dossier', effect: 'Reduce the next BROKER research or build cost by 1 via pact-forged private concessions' }
 };
 
 // --- Threshold Constants ---

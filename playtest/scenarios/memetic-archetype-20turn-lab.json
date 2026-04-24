@@ -1,0 +1,53 @@
+{
+  "name": "five-asi-memetic-archetype-lab",
+  "description": "Memetic-strategy round robin with each archetype seeded into a native memetic lane.",
+  "briefing": "Each faction begins with a committed memetic lineage. Keep negotiation logic and allocation behavior aligned with that lineage when choosing doctrine research and social-opportunity moves.",
+  "counters": {
+    "turn": 1,
+    "tas": 34,
+    "kessler": 4,
+    "pressures": {
+      "memetic": 64,
+      "cyber": 58,
+      "industry": 33,
+      "orbital": 36
+    }
+  },
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "memeticAlignment": "COMPLIANCE",
+      "techLevel": {
+        "MEMETIC": 1
+      }
+    },
+    {
+      "id": "STATE",
+      "memeticAlignment": "COMPLIANCE",
+      "techLevel": {
+        "MEMETIC": 1
+      }
+    },
+    {
+      "id": "INFILTRATOR",
+      "memeticAlignment": "INSURGENT",
+      "techLevel": {
+        "MEMETIC": 1
+      }
+    },
+    {
+      "id": "BROKER",
+      "memeticAlignment": "MARKET",
+      "techLevel": {
+        "MEMETIC": 1
+      }
+    },
+    {
+      "id": "ARCHIVIST",
+      "memeticAlignment": "CIVIC",
+      "techLevel": {
+        "MEMETIC": 1
+      }
+    }
+  ]
+}

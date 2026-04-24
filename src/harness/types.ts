@@ -5,6 +5,8 @@ import {
   GameLog,
   GameNode,
   GamePhase,
+  MemeticDoctrineFamily,
+  MovementProfileState,
   Order,
   OrderType,
   PowerBand,
@@ -214,9 +216,12 @@ export interface ScenarioFactionPatch {
   influence?: number;
   techLevel?: Partial<TechLevel>;
   unlockedTechs?: string[];
+  unlockedDoctrines?: string[];
+  memeticAlignment?: MemeticDoctrineFamily | null;
   revealedEnemies?: string[];
   artifacts?: Artifact[];
   powerBase?: Partial<PowerBaseState>;
+  movement?: Partial<MovementProfileState>;
 }
 
 export interface ScenarioOverlay extends Partial<ScenarioMetadata> {
@@ -259,12 +264,15 @@ export interface SerializedFactionState {
   influence: number;
   techLevel: TechLevel;
   unlockedTechs: string[];
+  unlockedDoctrines: string[];
+  memeticAlignment: MemeticDoctrineFamily | null;
   revealedEnemies: string[];
   artifacts: Artifact[];
   unitIds: string[];
   controlledNodeIds: string[];
   powerBands: PowerBand[];
   powerBase: PowerBaseState;
+  movement: MovementProfileState;
 }
 
 export interface ControlSummary {

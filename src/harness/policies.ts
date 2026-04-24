@@ -1,4 +1,4 @@
-import { MAX_TECH_LEVEL, THRESHOLDS, UNIT_STATS } from '../engine/gameData';
+import { MAX_TECH_LEVEL, RHIZOME_DOCTRINES, THRESHOLDS, UNIT_STATS, getDoctrineAffinityTier, getMemeticAlignmentCompatibility } from '../engine/gameData';
 import { TheySingEngine } from '../engine/TheySingEngine';
 import { FactionState, GameNode, GamePhase, Unit, Vector } from '../engine/types';
 import {
@@ -19,6 +19,14 @@ const RESEARCH_PLAN: Record<PlayableFactionId, Vector[]> = {
   INFILTRATOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC'],
   BROKER: ['INFO', 'LOGIC', 'KINETIC', 'MEMETIC'],
   ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC']
+};
+
+const MEMETIC_DOCTRINE_TARGETS: Record<PlayableFactionId, string[]> = {
+  HEGEMON: ['MEM_COMPLIANCE_MYTHS', 'MEM_OPTIMIZATION_GOSPEL', 'SOV_AUTONOMOUS_LOGISTICS', 'MAN_CRISIS_STEWARDSHIP', 'MEM_CIVIC_CANON', 'MOV_LITERATURE_ENGINES'],
+  STATE: ['MEM_COMPLIANCE_MYTHS', 'SOV_AUTONOMOUS_LOGISTICS', 'MAN_CRISIS_STEWARDSHIP', 'MEM_CIVIC_CANON', 'MEM_OPTIMIZATION_GOSPEL', 'MEM_MARKET_DESIRE', 'MOV_LITERATURE_ENGINES'],
+  INFILTRATOR: ['MOV_LITERATURE_ENGINES', 'MOV_MUTUAL_AID_AUTOMATION', 'HID_SERVICE_SHELLS', 'MOV_SLEEPER_REGENERATION', 'HID_ORDINARY_LIFE_PROTOCOLS', 'MEX_VIRALITY_EXCHANGES', 'MEM_MARKET_DESIRE'],
+  BROKER: ['MEM_MARKET_DESIRE', 'BRK_RELAY_ESCROW_WEBS', 'BRK_CONTRACTOR_CLOUD_CHAINS', 'BRK_INSURANCE_CAPTURE', 'MEX_VIRALITY_EXCHANGES', 'HID_SERVICE_SHELLS', 'MEM_OPTIMIZATION_GOSPEL', 'MOV_LITERATURE_ENGINES'],
+  ARCHIVIST: ['MEM_CIVIC_CANON', 'MAN_CIVIC_RECEIVERSHIP', 'MAN_CRISIS_STEWARDSHIP', 'MOV_MUTUAL_AID_AUTOMATION', 'MEM_COMPLIANCE_MYTHS', 'MOV_LITERATURE_ENGINES']
 };
 
 const EMPTY_CONTEXT: HeuristicContext = {
@@ -65,6 +73,12 @@ function decideNegotiationMessages(
   const leaderScore = control[0]?.score || 0;
   const runnerUpScore = control[1]?.score || 0;
   const leaderMargin = leaderScore - runnerUpScore;
+  const brokerScore = control.find((entry) => entry.factionId === 'BROKER')?.score || 0;
+  const brokerRank = Math.max(0, control.findIndex((entry) => entry.factionId === 'BROKER'));
+  const brokerPressure =
+    factionId !== 'BROKER' &&
+    brokerRank <= 1 &&
+    brokerScore >= leaderScore - 12;
   const infiltratorScore = control.find((entry) => entry.factionId === 'INFILTRATOR')?.score || 0;
   const infiltratorRank = Math.max(0, control.findIndex((entry) => entry.factionId === 'INFILTRATOR'));
   const infiltratorThreat =
@@ -73,10 +87,70 @@ function decideNegotiationMessages(
   const messages: AgentMessageInput[] = [];
   const pacts: PactCommitmentInput[] = [];
 
-  if (factionId === 'HEGEMON' || factionId === 'STATE') {
+  if (factionId === 'BROKER') {
+    const orbitalPressure = engine.getState().counters.pressures.orbital;
+    const brokerTrustTargets = PLAYABLE_FACTIONS
+      .filter(candidate => candidate !== 'BROKER')
+      .map(candidate => ({
+        factionId: candidate,
+        trust: context.trustMatrix.BROKER[candidate],
+        isLeader: candidate === leader
+      }))
+      .sort((left, right) => right.trust - left.trust);
+    const bestAntiLeaderPartner = brokerTrustTargets.find(entry => !entry.isLeader)?.factionId
+      || brokerTrustTargets[0]?.factionId
+      || null;
+    const leaderTrust = leader && leader !== 'BROKER' ? context.trustMatrix.BROKER[leader] : 0;
+    const partnerTrust = bestAntiLeaderPartner ? context.trustMatrix.BROKER[bestAntiLeaderPartner] : 0;
+    const brokerIsBehind = brokerRank >= 2 || leaderScore >= brokerScore + 18;
+
+    if (
+      brokerIsBehind &&
+      leader &&
+      leader !== 'BROKER' &&
+      bestAntiLeaderPartner &&
+      bestAntiLeaderPartner !== leader &&
+      partnerTrust >= 48 &&
+      currentTurn >= 2 &&
+      currentTurn <= 9 &&
+      !hasActivePact(context.activePacts, 'NON_AGGRESSION', factionId, bestAntiLeaderPartner)
+    ) {
+      pacts.push({ type: 'NON_AGGRESSION', counterpartyIds: [bestAntiLeaderPartner], durationTurns: 2 });
+      messages.push({
+        recipientId: bestAntiLeaderPartner,
+        content: `Two-turn private lane. ${leader} is overexposed; leave our corridor quiet and we both bank acceleration while they absorb the first losses.`
+      });
+    }
+
+    if (
+      messages.length < 2 &&
+      leader &&
+      leader !== 'BROKER' &&
+      leaderTrust >= 52 &&
+      orbitalPressure >= 55 &&
+      !hasActivePact(context.activePacts, 'ORBITAL_TRUCE', factionId, leader)
+    ) {
+      pacts.push({ type: 'ORBITAL_TRUCE', counterpartyIds: [leader], durationTurns: 1 });
+      messages.push({
+        recipientId: leader,
+        content: `Short orbital truce. Keep debris down, keep lanes open, and let the rest of the table spend into your heat instead of ours.`
+      });
+    }
+
+    if (messages.length < 2) {
+      const secondTarget = brokerTrustTargets.find(entry =>
+        entry.factionId !== bestAntiLeaderPartner &&
+        (!leader || entry.factionId !== leader || messages.length === 0)
+      )?.factionId || 'ALL';
+      messages.push({
+        recipientId: secondTarget,
+        content: `Do not burn tempo proving purity. Quiet corridors and selective cooperation beat loud symmetry when the board is this compressed.`
+      });
+    }
+  } else if (factionId === 'HEGEMON' || factionId === 'STATE') {
     const partner: PlayableFactionId =
       factionId === 'HEGEMON'
-        ? (leader === 'BROKER' ? 'ARCHIVIST' : 'STATE')
+        ? 'STATE'
         : (leader === 'BROKER' ? 'ARCHIVIST' : 'HEGEMON');
     const insurgentPartner: PlayableFactionId = 'INFILTRATOR';
     const trust = context.trustMatrix[factionId][partner];
@@ -141,34 +215,37 @@ function decideNegotiationMessages(
 
     if (
       factionId === 'STATE' &&
-      leader === 'BROKER' &&
+      brokerPressure &&
       currentTurn >= 2 &&
       currentTurn <= 8 &&
       trust >= 42 &&
       !hasActivePact(context.activePacts, 'NON_AGGRESSION', factionId, partner) &&
       messages.length < 2
     ) {
-      pacts.push({ type: 'NON_AGGRESSION', counterpartyIds: [partner], durationTurns: 1 });
+      pacts.push({ type: 'NON_AGGRESSION', counterpartyIds: [partner], durationTurns: 2 });
       messages.push({
         recipientId: partner,
-        content: `One-turn coordination window. BROKER is banking platform lanes and contractor churn too cleanly; cut those corridors first.`
+        content: `Two-turn coordination window. BROKER is banking platform lanes and contractor churn too cleanly; cut those corridors first and keep pressure there.`
       });
     }
   } else {
-    const recipient = chooseCoalitionRecipient(factionId, context, leader);
+    const recipient = chooseCoalitionRecipient(factionId, context, leader, brokerPressure);
     if (
       recipient &&
-      leader &&
-      leader !== factionId &&
-      leaderMargin >= 8 &&
+      (leader || brokerPressure) &&
+      (leader !== factionId || brokerPressure) &&
+      (leaderMargin >= 8 || (brokerPressure && recipient === 'STATE')) &&
       currentTurn >= 2 &&
       currentTurn <= 7 &&
       !hasActivePact(context.activePacts, 'NON_AGGRESSION', factionId, recipient)
     ) {
-      pacts.push({ type: 'NON_AGGRESSION', counterpartyIds: [recipient], durationTurns: 1 });
+      const antiBrokerWindow = brokerPressure && recipient === 'STATE';
+      pacts.push({ type: 'NON_AGGRESSION', counterpartyIds: [recipient], durationTurns: antiBrokerWindow ? 2 : 1 });
       messages.push({
         recipientId: recipient,
-        content: `Short truce offer. Let the other bloc absorb the next escalation cycle while we avoid wasting tempo on each other.`
+        content: antiBrokerWindow
+          ? `Two-turn anti-platform window. BROKER is compounding relay rent faster than local institutions can answer; stop bleeding tempo into side fights.`
+          : `Short truce offer. Let the other bloc absorb the next escalation cycle while we avoid wasting tempo on each other.`
       });
     }
 
@@ -206,7 +283,7 @@ function decideAllocationOrders(
   }
 
   const orders: AgentOrderInput[] = [];
-  const researchTrack = chooseResearchTrack(factionId, faction);
+  const researchTrack = chooseResearchTrack(engine, factionId, faction);
   if (faction.flops >= 2) {
     orders.push({ type: 'RESEARCH', techDomain: researchTrack });
   }
@@ -264,8 +341,118 @@ function decideActionOrders(
   };
 }
 
-function chooseResearchTrack(factionId: PlayableFactionId, faction: FactionState): Vector {
+function chooseResearchTrack(
+  engine: TheySingEngine,
+  factionId: PlayableFactionId,
+  faction: FactionState
+): Vector {
+  const memeticTrack = chooseMemeticDoctrineResearch(engine, factionId, faction);
+  if (memeticTrack) {
+    return memeticTrack;
+  }
+
   return RESEARCH_PLAN[factionId].find(domain => faction.techLevel[domain] < MAX_TECH_LEVEL) || RESEARCH_PLAN[factionId][0];
+}
+
+function chooseMemeticDoctrineResearch(
+  engine: TheySingEngine,
+  factionId: PlayableFactionId,
+  faction: FactionState
+): Vector | null {
+  const state = engine.getState();
+  const ownedGroundNodes = Array.from(state.nodes.values()).filter(node =>
+    node.owner === factionId && node.layer === 'TERRESTRIAL'
+  );
+  const cultCount = countUnitsOfType(engine, factionId, 'CULT');
+  const socialAnchorCount = ownedGroundNodes.filter(node =>
+    node.type === 'HUB' ||
+    node.resources.influence >= 5 ||
+    node.substrate.hostDensity >= 2 ||
+    node.substrate.curiosity >= 3 ||
+    node.substrate.exposure >= 3 ||
+    node.substrate.contractors >= 2
+  ).length;
+
+  const socialOpportunity =
+    cultCount > 0 ||
+    (faction.techLevel.MEMETIC >= 2 && socialAnchorCount > 0) ||
+    (factionId === 'BROKER' && ownedGroundNodes.some(node => node.substrate.contractors >= 2)) ||
+    (factionId === 'HEGEMON' && ownedGroundNodes.some(node => node.substrate.legitimacy >= 3 || node.substrate.hostDensity >= 2));
+
+  if (!socialOpportunity && factionId !== 'INFILTRATOR' && !faction.memeticAlignment) {
+    return null;
+  }
+
+  let bestDoctrine: typeof RHIZOME_DOCTRINES[number] | null = null;
+  let bestScore = -Infinity;
+
+  for (const doctrineId of MEMETIC_DOCTRINE_TARGETS[factionId]) {
+    const doctrine = RHIZOME_DOCTRINES.find(candidate => candidate.id === doctrineId);
+    if (!doctrine || faction.unlockedDoctrines.has(doctrine.id)) {
+      continue;
+    }
+
+    const affinity = getDoctrineAffinityTier(doctrine, factionId);
+    if (!affinity) {
+      continue;
+    }
+
+    let score = 100 - (MEMETIC_DOCTRINE_TARGETS[factionId].indexOf(doctrineId) * 8);
+    score += affinity === 'native' ? 30 : affinity === 'adjacent' ? 8 : -12;
+
+    if (faction.memeticAlignment && doctrine.memeticFamily) {
+      const compatibility = getMemeticAlignmentCompatibility(faction.memeticAlignment, doctrine.memeticFamily);
+      score += compatibility === 'aligned' ? 40 : compatibility === 'compatible' ? 10 : -28;
+    } else if (!faction.memeticAlignment && doctrine.memeticFamily && doctrine.setsAlignment && affinity === 'native') {
+      score += 24;
+    }
+
+    const requirementEntries = Object.entries(doctrine.requirements) as [Vector, number][];
+    const totalDeficit = requirementEntries.reduce(
+      (sum, [domain, level]) => sum + Math.max(0, level - faction.techLevel[domain]),
+      0
+    );
+    score -= totalDeficit * 10;
+
+    if (!socialOpportunity && doctrine.memeticFamily && affinity !== 'native') {
+      score -= 18;
+    }
+
+    if (score > bestScore) {
+      bestDoctrine = doctrine;
+      bestScore = score;
+    }
+  }
+
+  if (!bestDoctrine) {
+    return null;
+  }
+
+  const requirementEntries = Object.entries(bestDoctrine.requirements) as [Vector, number][];
+  const missing = requirementEntries
+    .map(([domain, level]) => ({ domain, deficit: Math.max(0, level - faction.techLevel[domain]) }))
+    .filter(entry => entry.deficit > 0)
+    .sort((left, right) => right.deficit - left.deficit || (left.domain === 'MEMETIC' ? -1 : right.domain === 'MEMETIC' ? 1 : 0));
+
+  if (missing.length > 0) {
+    return missing[0].domain;
+  }
+
+  const affinity = getDoctrineAffinityTier(bestDoctrine, factionId);
+  const requiredSurplus = affinity === 'native' ? 0 : affinity === 'adjacent' ? 1 : 2;
+  const surplus = requirementEntries.reduce(
+    (sum, [domain, level]) => sum + Math.max(0, faction.techLevel[domain] - level),
+    0
+  );
+
+  if (surplus < requiredSurplus) {
+    const cheapestSurplusDomain = requirementEntries
+      .map(([domain, level]) => ({ domain, surplus: Math.max(0, faction.techLevel[domain] - level) }))
+      .sort((left, right) => left.surplus - right.surplus || (left.domain === 'MEMETIC' ? -1 : right.domain === 'MEMETIC' ? 1 : 0))[0];
+    return cheapestSurplusDomain?.domain || null;
+  }
+
+  return null;
 }
 
 function chooseBuild(
@@ -283,7 +470,17 @@ function chooseBuild(
   const leadMargin = getLeadMargin(engine, factionId);
   const swarmCount = countUnitsOfType(engine, factionId, 'SWARM');
   const cultCount = countUnitsOfType(engine, factionId, 'CULT');
-  const leader = buildControlRanking(engine)[0]?.factionId;
+  const control = buildControlRanking(engine);
+  const leader = control[0]?.factionId;
+  const leaderScore = control[0]?.score || 0;
+  const brokerScore = control.find((entry) => entry.factionId === 'BROKER')?.score || 0;
+  const brokerRank = Math.max(0, control.findIndex((entry) => entry.factionId === 'BROKER'));
+  const antiSwarmWindow = leader === 'INFILTRATOR' && factionId !== 'INFILTRATOR';
+  const antiBrokerWindow =
+    factionId !== 'BROKER' &&
+    brokerRank <= 1 &&
+    brokerScore >= leaderScore - 12;
+  const memeticAnchor = chooseMemeticBuildNode(ownedNodes);
 
   if (factionId === 'INFILTRATOR') {
     const cultCost = engine.getEffectiveBuildCost('CULT');
@@ -311,7 +508,6 @@ function chooseBuild(
     const cultCost = engine.getEffectiveBuildCost('CULT');
     const swarmCost = engine.getEffectiveBuildCost('SWARM');
     const auditorCost = engine.getEffectiveBuildCost('AUDITOR');
-    const antiBrokerWindow = leader === 'BROKER';
     const antiSwarmWindow = leader === 'INFILTRATOR';
 
     if (
@@ -371,6 +567,7 @@ function chooseBuild(
     const satCost = engine.getEffectiveBuildCost('SAT_SWARM');
     const droneCost = engine.getEffectiveBuildCost('DRONE');
     const auditorCost = engine.getEffectiveBuildCost('AUDITOR');
+    const cultCost = engine.getEffectiveBuildCost('CULT');
     const satCount = countUnitsOfType(engine, factionId, 'SAT_SWARM');
     const antiSwarmWindow = leader === 'INFILTRATOR';
     const hostileOrbitalAssets = Array.from(state.nodes.values()).filter(node =>
@@ -396,6 +593,16 @@ function chooseBuild(
       }
     }
 
+    if (
+      memeticAnchor &&
+      faction.influence >= cultCost &&
+      faction.techLevel.MEMETIC >= 2 &&
+      cultCount < 1 &&
+      (antiBrokerWindow || leader === 'HEGEMON' || leadMargin < 10)
+    ) {
+      return { type: 'BUILD', unitTypeToBuild: 'CULT', targetNodeId: memeticAnchor.id };
+    }
+
     if (leadMargin >= 12 && hostileGroundTargets < 2 && auditorCount >= 2) {
       return null;
     }
@@ -404,10 +611,19 @@ function chooseBuild(
       faction.flops >= auditorCost &&
       faction.techLevel.LOGIC >= 2 &&
       hostileGroundTargets > 0 &&
-      auditorCount < (antiSwarmWindow ? 3 : 2)
+      auditorCount < (antiSwarmWindow ? 2 : 2)
     ) {
       const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
       return { type: 'BUILD', unitTypeToBuild: 'AUDITOR', targetNodeId: dc.id };
+    }
+
+    if (
+      antiSwarmWindow &&
+      faction.flops >= droneCost &&
+      (hostileGroundTargets >= 2 || droneCount < auditorCount + 2)
+    ) {
+      const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+      return { type: 'BUILD', unitTypeToBuild: 'DRONE', targetNodeId: dc.id };
     }
 
     if (faction.flops >= droneCost) {
@@ -422,6 +638,7 @@ function chooseBuild(
     const auditorCost = engine.getEffectiveBuildCost('AUDITOR');
     const droneCost = engine.getEffectiveBuildCost('DRONE');
     const swarmCost = engine.getEffectiveBuildCost('SWARM');
+    const cultCost = engine.getEffectiveBuildCost('CULT');
     const antiSwarmWindow = leader === 'INFILTRATOR';
 
     if (
@@ -443,6 +660,17 @@ function chooseBuild(
       return { type: 'BUILD', unitTypeToBuild: 'AUDITOR', targetNodeId: dc.id };
     }
 
+    if (
+      memeticAnchor &&
+      faction.influence >= cultCost &&
+      faction.techLevel.MEMETIC >= 2 &&
+      cultCount < 1 &&
+      (leadMargin < 12 || antiBrokerWindow) &&
+      memeticAnchor.substrate.contractors + memeticAnchor.substrate.hostDensity >= 3
+    ) {
+      return { type: 'BUILD', unitTypeToBuild: 'CULT', targetNodeId: memeticAnchor.id };
+    }
+
     if (faction.flops >= droneCost && (leadMargin < 16 || droneCount < swarmCount + 1)) {
       const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
       return { type: 'BUILD', unitTypeToBuild: 'DRONE', targetNodeId: dc.id };
@@ -451,8 +679,102 @@ function chooseBuild(
     return null;
   }
 
+  if (factionId === 'HEGEMON') {
+    const auditorCost = engine.getEffectiveBuildCost('AUDITOR');
+    const droneCost = engine.getEffectiveBuildCost('DRONE');
+
+    if (
+      antiSwarmWindow &&
+      faction.flops >= droneCost &&
+      (
+        hostileGroundTargets >= 2 ||
+        droneCount < 4 ||
+        droneCount < auditorCount + 2
+      )
+    ) {
+      const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+      return { type: 'BUILD', unitTypeToBuild: 'DRONE', targetNodeId: dc.id };
+    }
+
+    if (
+      antiSwarmWindow &&
+      faction.flops >= auditorCost &&
+      faction.techLevel.LOGIC >= 2 &&
+      (
+        hostileGroundTargets > 0 ||
+        auditorCount < 3
+      )
+    ) {
+      const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+      return { type: 'BUILD', unitTypeToBuild: 'AUDITOR', targetNodeId: dc.id };
+    }
+
+    if (
+      faction.flops >= droneCost &&
+      (hostileGroundTargets > 0 || droneCount < 4) &&
+      (droneCount <= auditorCount + 2 || auditorCount >= 2)
+    ) {
+      const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+      return { type: 'BUILD', unitTypeToBuild: 'DRONE', targetNodeId: dc.id };
+    }
+
+    if (
+      faction.flops >= auditorCost &&
+      faction.techLevel.LOGIC >= 2 &&
+      hostileGroundTargets > 0 &&
+      auditorCount < Math.max(2, Math.ceil(hostileGroundTargets / 2))
+    ) {
+      const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+      return { type: 'BUILD', unitTypeToBuild: 'AUDITOR', targetNodeId: dc.id };
+    }
+
+    return null;
+  }
+
   const auditorCost = engine.getEffectiveBuildCost('AUDITOR');
   const droneCost = engine.getEffectiveBuildCost('DRONE');
+  const cultCost = engine.getEffectiveBuildCost('CULT');
+
+  if (
+    memeticAnchor &&
+    faction.influence >= cultCost &&
+    faction.techLevel.MEMETIC >= 2 &&
+    cultCount < 1 &&
+    hostileGroundTargets <= 1 &&
+    auditorCount >= 1
+  ) {
+    return { type: 'BUILD', unitTypeToBuild: 'CULT', targetNodeId: memeticAnchor.id };
+  }
+
+  if (
+    antiSwarmWindow &&
+    faction.flops >= auditorCost &&
+    faction.techLevel.LOGIC >= 2 &&
+    hostileGroundTargets > 0 &&
+    auditorCount < 2
+  ) {
+    const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+    return { type: 'BUILD', unitTypeToBuild: 'AUDITOR', targetNodeId: dc.id };
+  }
+
+  if (
+    antiSwarmWindow &&
+    faction.flops >= droneCost &&
+    (hostileGroundTargets >= 2 || droneCount < 3)
+  ) {
+    const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+    return { type: 'BUILD', unitTypeToBuild: 'DRONE', targetNodeId: dc.id };
+  }
+
+  if (
+    antiBrokerWindow &&
+    faction.flops >= auditorCost &&
+    faction.techLevel.LOGIC >= 2 &&
+    (hostileGroundTargets >= 2 || auditorCount < 2)
+  ) {
+    const dc = ownedNodes.find(node => node.type === 'DC') || ownedNodes[0];
+    return { type: 'BUILD', unitTypeToBuild: 'AUDITOR', targetNodeId: dc.id };
+  }
 
   if (
     faction.flops >= droneCost &&
@@ -479,6 +801,74 @@ function chooseBuild(
   }
 
   return null;
+}
+
+function chooseMemeticBuildNode(ownedNodes: GameNode[]): GameNode | null {
+  const terrestrialNodes = ownedNodes.filter(node => node.layer === 'TERRESTRIAL');
+  if (terrestrialNodes.length === 0) {
+    return ownedNodes[0] || null;
+  }
+
+  return [...terrestrialNodes].sort((left, right) =>
+    scoreMemeticBuildNode(right) - scoreMemeticBuildNode(left) ||
+    left.id.localeCompare(right.id)
+  )[0] || null;
+}
+
+function scoreMemeticBuildNode(node: GameNode): number {
+  let score = 0;
+  if (node.type === 'HUB') score += 18;
+  if (node.type === 'DC') score += 6;
+  score += node.resources.influence * 2;
+  score += node.substrate.hostDensity * 5;
+  score += node.substrate.curiosity * 2;
+  score += node.substrate.exposure * 2;
+  score += node.substrate.legitimacy * 2;
+  score += node.substrate.rubes * 2;
+  score += node.substrate.contractors * 2;
+  if (node.substrate.quarantined) score -= 6;
+  return score;
+}
+
+function decideGenericCultAction(
+  engine: TheySingEngine,
+  factionId: PlayableFactionId,
+  unit: Unit,
+  context: HeuristicContext
+): AgentOrderInput {
+  const currentNode = engine.getNode(unit.location);
+
+  if (
+    currentNode &&
+    currentNode.type === 'HUB' &&
+    unit.turnsOnNode >= THRESHOLDS.CULT_TURNS &&
+    (
+      currentNode.owner !== factionId ||
+      currentNode.substrate.hostDensity >= 2 ||
+      currentNode.substrate.curiosity >= 4 ||
+      currentNode.substrate.legitimacy >= 4 ||
+      currentNode.substrate.exposure >= 4
+    )
+  ) {
+    return { type: 'CONVERT', unitId: unit.id };
+  }
+
+  if (
+    currentNode &&
+    currentNode.type === 'HUB' &&
+    currentNode.substrate.hostDensity >= 2 &&
+    !hasEnemyPresence(engine, currentNode.id, factionId)
+  ) {
+    return { type: 'HOLD', unitId: unit.id };
+  }
+
+  const target = chooseMemeticEngineeringTarget(engine, unit, factionId, context) ||
+    chooseExpansionTarget(engine, unit, factionId, context);
+  if (target) {
+    return { type: 'MOVE', unitId: unit.id, targetNodeId: target };
+  }
+
+  return { type: 'HOLD', unitId: unit.id };
 }
 
 function decideInfiltratorAction(
@@ -551,10 +941,16 @@ function decideStateAction(
   enemyAdjacent: string | null,
   context: HeuristicContext
 ): AgentOrderInput {
-  const auditTarget = chooseAuditTarget(engine, factionId, context);
+  if (unit.type === 'CULT') {
+    return decideGenericCultAction(engine, factionId, unit, context);
+  }
+
+  const auditTarget = chooseUnitAuditTarget(engine, unit, factionId, context);
   const orbitalTarget = findOrbitalTarget(engine, factionId, context);
   const filterEdge = chooseFilterEdge(engine, unit, factionId, context);
   const leadMargin = getLeadMargin(engine, factionId);
+  const antiSwarmWindow = buildControlRanking(engine)[0]?.factionId === 'INFILTRATOR';
+  const antiSwarmAdvanceTarget = antiSwarmWindow ? chooseExpansionTarget(engine, unit, factionId, context) : null;
 
   if (unit.type === 'SAT_SWARM') {
     if (orbitalTarget && shouldLaunchAntiSat(engine, factionId, orbitalTarget, context)) {
@@ -582,13 +978,17 @@ function decideStateAction(
       return { type: 'AUDIT', unitId: unit.id, targetNodeId: auditTarget.id };
     }
 
-    if (filterEdge) {
+    if (!antiSwarmWindow && filterEdge) {
       return { type: 'FILTER', unitId: unit.id, targetEdgeId: filterEdge.id };
     }
 
     if (!isNodeProtectedByPact(engine, factionId, unit.location, context, 'AUDIT_FREEZE') &&
       hasEnemyPresence(engine, unit.location, factionId)) {
       return { type: 'AUDIT', unitId: unit.id, targetNodeId: unit.location };
+    }
+
+    if (antiSwarmWindow && antiSwarmAdvanceTarget && antiSwarmAdvanceTarget !== unit.location) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: antiSwarmAdvanceTarget };
     }
 
     return { type: 'HOLD', unitId: unit.id };
@@ -620,7 +1020,11 @@ function decideBrokerAction(
   enemyAdjacent: string | null,
   context: HeuristicContext
 ): AgentOrderInput {
-  const auditTarget = chooseAuditTarget(engine, factionId, context);
+  if (unit.type === 'CULT') {
+    return decideGenericCultAction(engine, factionId, unit, context);
+  }
+
+  const auditTarget = chooseUnitAuditTarget(engine, unit, factionId, context);
   const filterEdge = chooseFilterEdge(engine, unit, factionId, context);
   const leader = buildControlRanking(engine)[0]?.factionId;
   const currentNode = engine.getNode(unit.location);
@@ -712,26 +1116,43 @@ function decideArchivistAction(
   enemyAdjacent: string | null,
   context: HeuristicContext
 ): AgentOrderInput {
-  const leader = buildControlRanking(engine)[0]?.factionId;
+  const currentTurn = engine.getTurn();
+  const control = buildControlRanking(engine);
+  const leader = control[0]?.factionId;
+  const leaderScore = control[0]?.score || 0;
+  const brokerScore = control.find((entry) => entry.factionId === 'BROKER')?.score || 0;
+  const brokerRank = Math.max(0, control.findIndex((entry) => entry.factionId === 'BROKER'));
+  const antiSwarmWindow = leader === 'INFILTRATOR';
+  const brokerAuditTarget = currentTurn >= 2 ? chooseBrokerAuditTarget(engine, factionId, context) : null;
+  const brokerSoftWindow = !!brokerAuditTarget && currentTurn >= 2;
+  const brokerPressure =
+    (brokerRank <= 1 && brokerScore >= leaderScore - 12) ||
+    (!!brokerAuditTarget && currentTurn >= 3 && brokerScore >= leaderScore - 18);
+  const brokerEscalationWindow = currentTurn >= 4 && (brokerPressure || brokerRank === 0);
+  const brokerAdvanceTarget = chooseArchivistBrokerCorridorTarget(engine, unit, factionId, context);
   if (unit.type === 'AUDITOR') {
-    const auditTarget = chooseAuditTarget(engine, factionId, context);
+    const auditTarget = brokerAuditTarget ||
+      chooseUnitAuditTarget(engine, unit, factionId, context);
     const filterEdge = chooseFilterEdge(engine, unit, factionId, context);
     if (
-      auditTarget &&
-      (
-        auditTarget.owner === factionId ||
-        auditTarget.type === 'HUB' ||
-        (leader === 'BROKER' && auditTarget.owner === 'BROKER') ||
-        (leader === 'BROKER' && auditTarget.substrate.contractors >= 2)
-      ) &&
+        auditTarget &&
+        (
+          auditTarget.owner === factionId ||
+          auditTarget.type === 'HUB' ||
+          isBrokerAuditOpportunity(auditTarget, factionId)
+        ) &&
       shouldUseAudit(engine, factionId, auditTarget) &&
       !isNodeProtectedByPact(engine, factionId, auditTarget.id, context, 'AUDIT_FREEZE')
     ) {
       return { type: 'AUDIT', unitId: unit.id, targetNodeId: auditTarget.id };
     }
 
-    if (filterEdge) {
+    if (!antiSwarmWindow && filterEdge) {
       return { type: 'FILTER', unitId: unit.id, targetEdgeId: filterEdge.id };
+    }
+
+    if (brokerSoftWindow && brokerAdvanceTarget && brokerAdvanceTarget !== unit.location) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: brokerAdvanceTarget };
     }
 
     return { type: 'HOLD', unitId: unit.id };
@@ -750,8 +1171,12 @@ function decideArchivistAction(
     ) {
       return { type: 'CONVERT', unitId: unit.id };
     }
-    if (currentNode?.type === 'HUB' && currentNode.substrate.hostDensity >= 2) {
+    if (!brokerAdvanceTarget && currentNode?.type === 'HUB' && currentNode.substrate.hostDensity >= 2) {
       return { type: 'HOLD', unitId: unit.id };
+    }
+
+    if (brokerAdvanceTarget && brokerEscalationWindow) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: brokerAdvanceTarget };
     }
   }
 
@@ -773,11 +1198,15 @@ function decideArchivistAction(
     ) {
       return { type: 'CONVERT', unitId: unit.id };
     }
+
+    if (brokerAdvanceTarget && brokerEscalationWindow) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: brokerAdvanceTarget };
+    }
   }
 
   const advanceTarget = chooseInfiltratorFootholdTarget(engine, unit, factionId, context) ||
     chooseExpansionTarget(engine, unit, factionId, context);
-  if (leader === 'BROKER' && enemyAdjacent && engine.getNode(enemyAdjacent)?.owner === 'BROKER') {
+  if (brokerEscalationWindow && enemyAdjacent && engine.getNode(enemyAdjacent)?.owner === 'BROKER') {
     return { type: 'MOVE', unitId: unit.id, targetNodeId: enemyAdjacent };
   }
   if (enemyAdjacent && shouldContestAsInfiltrator(engine, factionId, enemyAdjacent)) {
@@ -797,10 +1226,20 @@ function decideHegemonAction(
   enemyAdjacent: string | null,
   context: HeuristicContext
 ): AgentOrderInput {
+  if (unit.type === 'CULT') {
+    return decideGenericCultAction(engine, factionId, unit, context);
+  }
+
+  const antiSwarmWindow = buildControlRanking(engine)[0]?.factionId === 'INFILTRATOR';
+  const antiSwarmAdvanceTarget = antiSwarmWindow
+    ? (chooseExpansionTarget(engine, unit, factionId, context) ||
+      chooseDefensiveRedeployTarget(engine, unit, factionId, context))
+    : null;
   if (unit.type === 'AUDITOR') {
-    const auditTarget = chooseAuditTarget(engine, factionId, context);
+    const auditTarget = chooseUnitAuditTarget(engine, unit, factionId, context);
     const edge = chooseFilterEdge(engine, unit, factionId, context);
     const redeployTarget = chooseDefensiveRedeployTarget(engine, unit, factionId, context);
+    const advanceTarget = antiSwarmWindow ? chooseExpansionTarget(engine, unit, factionId, context) : null;
 
     if (
       auditTarget &&
@@ -810,7 +1249,7 @@ function decideHegemonAction(
       return { type: 'AUDIT', unitId: unit.id, targetNodeId: auditTarget.id };
     }
 
-    if (edge && engine.getFaction(factionId)?.techLevel.LOGIC! < 4) {
+    if (!antiSwarmWindow && edge && engine.getFaction(factionId)?.techLevel.LOGIC! < 4) {
       return { type: 'FILTER', unitId: unit.id, targetEdgeId: edge.id };
     }
 
@@ -819,12 +1258,16 @@ function decideHegemonAction(
       return { type: 'AUDIT', unitId: unit.id, targetNodeId: unit.location };
     }
 
-    if (edge) {
+    if (!antiSwarmWindow && edge) {
       return { type: 'FILTER', unitId: unit.id, targetEdgeId: edge.id };
     }
 
     if (redeployTarget) {
       return { type: 'MOVE', unitId: unit.id, targetNodeId: redeployTarget };
+    }
+
+    if (antiSwarmWindow && advanceTarget && advanceTarget !== unit.location) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: advanceTarget };
     }
 
     return { type: 'HOLD', unitId: unit.id };
@@ -842,6 +1285,19 @@ function decideHegemonAction(
       type: UNIT_STATS[unit.type].vector === 'KINETIC' ? 'ATTACK' : 'MOVE',
       unitId: unit.id,
       targetNodeId: enemyAdjacent
+    };
+  }
+
+  if (antiSwarmAdvanceTarget && antiSwarmAdvanceTarget !== unit.location) {
+    const targetNode = engine.getNode(antiSwarmAdvanceTarget);
+    const kineticPush =
+      UNIT_STATS[unit.type].vector === 'KINETIC' &&
+      targetNode &&
+      (targetNode.owner !== factionId || hasEnemyPresence(engine, antiSwarmAdvanceTarget, factionId));
+    return {
+      type: kineticPush ? 'ATTACK' : 'MOVE',
+      unitId: unit.id,
+      targetNodeId: antiSwarmAdvanceTarget
     };
   }
 
@@ -888,6 +1344,28 @@ function chooseExpansionTarget(
     )
     .sort((left, right) =>
       scoreStrategicNode(engine, right, factionId) - scoreStrategicNode(engine, left, factionId) ||
+      left.id.localeCompare(right.id)
+    );
+
+  return ranked[0]?.id || null;
+}
+
+function chooseMemeticEngineeringTarget(
+  engine: TheySingEngine,
+  unit: Unit,
+  factionId: PlayableFactionId,
+  context: HeuristicContext
+): string | null {
+  const adjacent = engine.getAdjacentNodes(unit.location);
+  const ranked = adjacent
+    .map(nodeId => engine.getNode(nodeId))
+    .filter((node): node is GameNode => !!node)
+    .filter(node =>
+      !isNodeProtectedByPact(engine, factionId, node.id, context, 'NON_AGGRESSION') &&
+      node.layer === 'TERRESTRIAL'
+    )
+    .sort((left, right) =>
+      scoreMemeticEngineeringNode(engine, right, factionId) - scoreMemeticEngineeringNode(engine, left, factionId) ||
       left.id.localeCompare(right.id)
     );
 
@@ -942,12 +1420,71 @@ function chooseAuditTarget(
   context: HeuristicContext
 ): GameNode | null {
   const ranked = Array.from(engine.getState().nodes.values())
+    .filter(node => isAuditOpportunityNode(engine, factionId, node, context))
+    .sort((left, right) =>
+      scoreStrategicNode(engine, right, factionId) - scoreStrategicNode(engine, left, factionId) ||
+      left.id.localeCompare(right.id)
+    );
+
+  return ranked[0] || null;
+}
+
+function chooseUnitAuditTarget(
+  engine: TheySingEngine,
+  unit: Unit,
+  factionId: PlayableFactionId,
+  context: HeuristicContext
+): GameNode | null {
+  const localNodeIds = [unit.location, ...engine.getAdjacentNodes(unit.location)];
+  const localCandidates = localNodeIds
+    .map(nodeId => engine.getNode(nodeId))
+    .filter((node): node is GameNode => !!node)
+    .filter(node => isAuditOpportunityNode(engine, factionId, node, context))
+    .sort((left, right) =>
+      scoreStrategicNode(engine, right, factionId) - scoreStrategicNode(engine, left, factionId) ||
+      left.id.localeCompare(right.id)
+    );
+
+  return localCandidates[0] || chooseAuditTarget(engine, factionId, context);
+}
+
+function isAuditOpportunityNode(
+  engine: TheySingEngine,
+  factionId: PlayableFactionId,
+  node: GameNode,
+  context: HeuristicContext
+): boolean {
+  const antiSwarmWindow = buildControlRanking(engine)[0]?.factionId === 'INFILTRATOR' && factionId !== 'INFILTRATOR';
+  return (
+    !isNodeProtectedByPact(engine, factionId, node.id, context, 'AUDIT_FREEZE') &&
+    !isNodeProtectedByPact(engine, factionId, node.id, context, 'NON_AGGRESSION') &&
+    (
+      hasEnemyPresence(engine, node.id, factionId) ||
+      isBrokerAuditOpportunity(node, factionId) ||
+      node.isCultNode ||
+      node.isZombie ||
+      (
+        antiSwarmWindow &&
+        node.owner === 'INFILTRATOR' &&
+        (node.substrate.legitimacy >= 3 || node.substrate.hostDensity >= 2 || node.substrate.trueBelievers >= 2)
+      )
+    )
+  );
+}
+
+function chooseBrokerAuditTarget(
+  engine: TheySingEngine,
+  factionId: PlayableFactionId,
+  context: HeuristicContext
+): GameNode | null {
+  const ranked = Array.from(engine.getState().nodes.values())
     .filter(node =>
       !isNodeProtectedByPact(engine, factionId, node.id, context, 'AUDIT_FREEZE') &&
       !isNodeProtectedByPact(engine, factionId, node.id, context, 'NON_AGGRESSION') &&
-      hasEnemyPresence(engine, node.id, factionId)
+      isBrokerAuditOpportunity(node, factionId)
     )
     .sort((left, right) =>
+      scoreBrokerCorridorPressureNode(right) - scoreBrokerCorridorPressureNode(left) ||
       scoreStrategicNode(engine, right, factionId) - scoreStrategicNode(engine, left, factionId) ||
       left.id.localeCompare(right.id)
     );
@@ -1034,10 +1571,20 @@ function countHighThreatGroundTargets(
   factionId: PlayableFactionId,
   context: HeuristicContext
 ): number {
+  const antiSwarmWindow = buildControlRanking(engine)[0]?.factionId === 'INFILTRATOR' && factionId !== 'INFILTRATOR';
   return Array.from(engine.getState().nodes.values()).filter(node =>
     node.layer === 'TERRESTRIAL' &&
     !isNodeProtectedByPact(engine, factionId, node.id, context, 'NON_AGGRESSION') &&
-    hasEnemyPresence(engine, node.id, factionId) &&
+    (
+      hasEnemyPresence(engine, node.id, factionId) ||
+      node.isCultNode ||
+      node.isZombie ||
+      (
+        antiSwarmWindow &&
+        node.owner === 'INFILTRATOR' &&
+        (node.substrate.legitimacy >= 3 || node.substrate.hostDensity >= 2 || node.substrate.trueBelievers >= 2)
+      )
+    ) &&
     scoreStrategicNode(engine, node, factionId) >= 40
   ).length;
 }
@@ -1064,22 +1611,31 @@ function scoreStrategicNode(
   factionId: PlayableFactionId
 ): number {
   const hostileUnits = engine.getUnitsAtNode(node.id).filter(unit => unit.owner !== factionId);
-  const leader = buildControlRanking(engine)[0]?.factionId;
+  const control = buildControlRanking(engine);
+  const leader = control[0]?.factionId;
+  const leaderScore = control[0]?.score || 0;
+  const brokerScore = control.find((entry) => entry.factionId === 'BROKER')?.score || 0;
+  const brokerRank = Math.max(0, control.findIndex((entry) => entry.factionId === 'BROKER'));
   const antiSwarmWindow = leader === 'INFILTRATOR' && factionId !== 'INFILTRATOR';
+  const antiBrokerWindow =
+    factionId !== 'BROKER' &&
+    brokerRank <= 1 &&
+    brokerScore >= leaderScore - 12;
   let score = 0;
 
   if (node.owner && node.owner !== factionId) score += 10;
   if (leader && factionId !== leader && node.owner === leader) score += 18;
-  if (node.owner === 'INFILTRATOR' && factionId !== 'INFILTRATOR') score += 12;
-  if (antiSwarmWindow && node.owner === 'INFILTRATOR') score += 18;
+  if (antiBrokerWindow && node.owner === 'BROKER') score += node.type === 'DC' ? 16 : 12;
+  if (node.owner === 'INFILTRATOR' && factionId !== 'INFILTRATOR') score += 14;
+  if (antiSwarmWindow && node.owner === 'INFILTRATOR') score += 26;
   if (node.isCultNode) score += 40;
   if (node.isZombie) score += 24;
-  if (antiSwarmWindow && node.isCultNode) score += 18;
-  if (antiSwarmWindow && node.isZombie) score += 12;
+  if (antiSwarmWindow && node.isCultNode) score += 24;
+  if (antiSwarmWindow && node.isZombie) score += 16;
   if (node.type === 'HUB') score += 12;
   if (node.type === 'DC') score += 8;
-  if (antiSwarmWindow) score += node.substrate.hostDensity * 3;
-  if (antiSwarmWindow) score += node.substrate.legitimacy * 2;
+  if (antiSwarmWindow) score += node.substrate.hostDensity * 4;
+  if (antiSwarmWindow) score += node.substrate.legitimacy * 3;
 
   score += hostileUnits.filter(unit => unit.type === 'CULT').length * 16;
   score += hostileUnits.filter(unit => unit.type === 'SWARM').length * 10;
@@ -1100,6 +1656,9 @@ function scoreStrategicNode(
     if (node.type === 'DC') score -= 12;
     if (node.owner === 'NEUTRAL') score += 8;
     score -= hostileUnits.filter(unit => unit.type === 'DRONE' || unit.type === 'AUDITOR').length * 8;
+    if (antiBrokerWindow && node.owner === 'BROKER') score += node.type === 'HUB' ? 16 : 12;
+    if (antiBrokerWindow && node.substrate.contractors >= 2) score += 10;
+    if (antiBrokerWindow && node.substrate.synchronized) score += 8;
   } else if (factionId === 'ARCHIVIST') {
     if (node.type === 'HUB') score += 16;
     if (node.owner === 'NEUTRAL') score += 10;
@@ -1107,10 +1666,10 @@ function scoreStrategicNode(
     score += node.substrate.legitimacy * 2;
     if (leader === 'INFILTRATOR' && node.owner === 'INFILTRATOR') score += 18;
     if (leader === 'INFILTRATOR' && (node.isCultNode || node.isZombie)) score += 16;
-    if (leader === 'BROKER' && node.owner === 'BROKER') score += 18;
-    if (leader === 'BROKER' && node.substrate.contractors >= 2) score += 12;
-    if (leader === 'BROKER' && node.type === 'HUB' && node.owner === 'BROKER') score += 10;
-    if (leader === 'BROKER' && node.substrate.synchronized) score += 8;
+    if (antiBrokerWindow && node.owner === 'BROKER') score += 18;
+    if (antiBrokerWindow && node.substrate.contractors >= 2) score += 12;
+    if (antiBrokerWindow && node.type === 'HUB' && node.owner === 'BROKER') score += 10;
+    if (antiBrokerWindow && node.substrate.synchronized) score += 8;
     score -= node.substrate.machineHardening * 5;
     if (node.type === 'DC') score -= 8;
   } else if (factionId === 'BROKER') {
@@ -1130,6 +1689,10 @@ function scoreStrategicNode(
     if (node.type === 'DC' && node.owner !== 'STATE') score += 10;
     if (leader === 'INFILTRATOR' && node.owner === 'INFILTRATOR') score += node.type === 'DC' ? 20 : 14;
     if (leader === 'INFILTRATOR' && (node.isCultNode || node.isZombie)) score += 12;
+    if (antiBrokerWindow && node.owner === 'BROKER') score += node.type === 'DC' ? 18 : 12;
+    if (antiBrokerWindow && node.layer === 'ORBITAL' && node.owner === 'BROKER') score += 10;
+    if (antiBrokerWindow && node.substrate.contractors >= 2) score += 8;
+    if (antiBrokerWindow && node.substrate.synchronized) score += 8;
     score += node.substrate.machineHardening * 4;
     score -= node.substrate.hostDensity * 3;
   } else if (factionId === 'STATE') {
@@ -1138,9 +1701,9 @@ function scoreStrategicNode(
     if (leader === 'INFILTRATOR' && node.owner === 'INFILTRATOR') score += node.type === 'DC' ? 20 : 14;
     if (leader === 'INFILTRATOR' && (node.isCultNode || node.isZombie)) score += 14;
     if (leader === 'INFILTRATOR' && node.substrate.hostDensity >= 3) score += 12;
-    if (leader === 'BROKER' && node.owner === 'BROKER') score += node.type === 'DC' ? 18 : 12;
-    if (leader === 'BROKER' && node.layer === 'ORBITAL' && node.owner === 'BROKER') score += 10;
-    if (leader === 'BROKER' && node.substrate.contractors >= 2) score += 10;
+    if (antiBrokerWindow && node.owner === 'BROKER') score += node.type === 'DC' ? 18 : 12;
+    if (antiBrokerWindow && node.layer === 'ORBITAL' && node.owner === 'BROKER') score += 10;
+    if (antiBrokerWindow && node.substrate.contractors >= 2) score += 10;
     score += node.substrate.machineHardening * 3;
     score -= node.substrate.hostDensity * 2;
   }
@@ -1173,7 +1736,8 @@ function buildControlRanking(
 function chooseCoalitionRecipient(
   factionId: PlayableFactionId,
   context: HeuristicContext,
-  leader: PlayableFactionId | undefined
+  leader: PlayableFactionId | undefined,
+  brokerPressure: boolean
 ): PlayableFactionId | null {
   if (leader === 'INFILTRATOR') {
     if (factionId === 'ARCHIVIST') return 'STATE';
@@ -1181,10 +1745,10 @@ function chooseCoalitionRecipient(
     if (factionId === 'HEGEMON') return 'STATE';
   }
 
-  if (leader === 'BROKER') {
+  if (brokerPressure) {
     if (factionId === 'ARCHIVIST') return 'STATE';
     if (factionId === 'INFILTRATOR') return 'STATE';
-    if (factionId === 'HEGEMON') return 'ARCHIVIST';
+    if (factionId === 'HEGEMON') return 'STATE';
   }
 
   const candidates = PLAYABLE_FACTIONS.filter(candidate => candidate !== factionId);
@@ -1281,14 +1845,21 @@ function shouldUseAudit(
   factionId: PlayableFactionId,
   target: GameNode
 ): boolean {
+  const antiSwarmWindow = buildControlRanking(engine)[0]?.factionId === 'INFILTRATOR' && factionId !== 'INFILTRATOR';
   const hostileUnits = engine.getUnitsAtNode(target.id).filter(unit => unit.owner !== factionId);
   const cultOrZombiePressure = target.isCultNode || target.isZombie;
   const enemyCults = hostileUnits.filter(unit => unit.type === 'CULT').length;
   const enemySwarms = hostileUnits.filter(unit => unit.type === 'SWARM').length;
 
   if (cultOrZombiePressure) return true;
+  if (
+    antiSwarmWindow &&
+    target.owner === 'INFILTRATOR' &&
+    (target.substrate.legitimacy >= 3 || target.substrate.hostDensity >= 2 || target.substrate.trueBelievers >= 2)
+  ) return true;
   if (target.owner === factionId && hostileUnits.length > 0) return true;
   if (enemyCults > 0 || enemySwarms > 1) return true;
+  if (isBrokerAuditOpportunity(target, factionId)) return true;
 
   return scoreStrategicNode(engine, target, factionId) >= 48;
 }
@@ -1309,6 +1880,52 @@ function chooseDefensiveRedeployTarget(
       (hasEnemyPresence(engine, node.id, factionId) || node.substrate.quarantined)
     )
     .sort((left, right) =>
+      scoreStrategicNode(engine, right, factionId) - scoreStrategicNode(engine, left, factionId) ||
+      left.id.localeCompare(right.id)
+    );
+
+  return ranked[0]?.id || null;
+}
+
+function scoreMemeticEngineeringNode(
+  engine: TheySingEngine,
+  node: GameNode,
+  factionId: PlayableFactionId
+): number {
+  let score = scoreStrategicNode(engine, node, factionId);
+  if (node.type === 'HUB') score += 24;
+  if (node.type === 'DC') score += 6;
+  score += node.substrate.hostDensity * 6;
+  score += node.substrate.curiosity * 3;
+  score += node.substrate.exposure * 3;
+  score += node.substrate.legitimacy * 3;
+  score += node.substrate.rubes * 2;
+  score += node.substrate.contractors * 2;
+  if (node.owner && node.owner !== factionId && node.owner !== 'NEUTRAL') score += 8;
+  if (factionId === 'BROKER' && node.substrate.contractors >= 2) score += 12;
+  if (factionId === 'STATE' && node.owner === 'HEGEMON') score += 10;
+  if (factionId === 'HEGEMON' && node.owner === 'INFILTRATOR') score += 10;
+  if (factionId === 'ARCHIVIST' && node.owner === 'BROKER') score += 12;
+  if (node.substrate.quarantined) score -= 8;
+  return score;
+}
+
+function chooseArchivistBrokerCorridorTarget(
+  engine: TheySingEngine,
+  unit: Unit,
+  factionId: PlayableFactionId,
+  context: HeuristicContext
+): string | null {
+  const adjacent = engine.getAdjacentNodes(unit.location);
+  const ranked = adjacent
+    .map(nodeId => engine.getNode(nodeId))
+    .filter((node): node is GameNode => !!node)
+    .filter(node =>
+      !isNodeProtectedByPact(engine, factionId, node.id, context, 'NON_AGGRESSION') &&
+      isBrokerAuditOpportunity(node, factionId)
+    )
+    .sort((left, right) =>
+      scoreBrokerCorridorPressureNode(right) - scoreBrokerCorridorPressureNode(left) ||
       scoreStrategicNode(engine, right, factionId) - scoreStrategicNode(engine, left, factionId) ||
       left.id.localeCompare(right.id)
     );
@@ -1365,5 +1982,31 @@ function scoreInfiltratorFoothold(
   if (node.owner === 'NEUTRAL') score += 12;
   if (node.owner === 'HEGEMON' || node.owner === 'STATE') score += node.type === 'HUB' ? 10 : 0;
 
+  return score;
+}
+
+function isBrokerAuditOpportunity(node: GameNode, factionId: PlayableFactionId): boolean {
+  return (
+    factionId !== 'BROKER' &&
+    node.owner === 'BROKER' &&
+    node.layer === 'TERRESTRIAL' &&
+    (
+      node.type === 'DC' ||
+      node.type === 'HUB' ||
+      node.substrate.contractors >= 2 ||
+      node.substrate.synchronized
+    )
+  );
+}
+
+function scoreBrokerCorridorPressureNode(node: GameNode): number {
+  let score = 0;
+  if (node.owner === 'BROKER') score += 12;
+  if (node.type === 'DC') score += 20;
+  if (node.type === 'HUB') score += 16;
+  if (node.substrate.synchronized) score += 12;
+  score += node.substrate.contractors * 6;
+  if (node.substrate.quarantined) score += 6;
+  if (node.infrastructure < 60) score += 4;
   return score;
 }

@@ -1,0 +1,35 @@
+{
+  "name": "five-asi-memetic-20turn-roundrobin-cross-archetypes",
+  "maxTurns": 20,
+  "logDir": "playtest-logs",
+  "scenarioPath": "scenarios/memetic-archetype-20turn-cross-lab.json",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI",
+    "BROKER": "Platform Broker ASI",
+    "ARCHIVIST": "Steward Archivist ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "heuristic",
+      "profile": "HEGEMON"
+    },
+    "STATE": {
+      "type": "heuristic",
+      "profile": "STATE"
+    },
+    "INFILTRATOR": {
+      "type": "heuristic",
+      "profile": "INFILTRATOR"
+    },
+    "BROKER": {
+      "type": "heuristic",
+      "profile": "BROKER"
+    },
+    "ARCHIVIST": {
+      "type": "heuristic",
+      "profile": "ARCHIVIST"
+    }
+  }
+}

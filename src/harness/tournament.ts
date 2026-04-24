@@ -3,6 +3,7 @@ import * as path from 'path';
 
 import { HeadlessPlaytestSession } from './HeadlessPlaytestSession';
 import { loadSessionConfigFromPath } from './config';
+import { MAX_TECH_LEVEL } from '../engine/gameData';
 import { PLAYABLE_FACTIONS } from './serialize';
 import {
   NegotiationCounterfactualProjection,
@@ -19,6 +20,9 @@ const DEFAULT_ITERATIONS = 1;
 const DEFAULT_PARALLEL = 1;
 const NEGOTIATION_DIARY_TAIL_TURNS = 4;
 const PHASE_REASONING_DIARY_TAIL_TURNS = 4;
+const RESEARCH_FLOP_COST = 2;
+const RESEARCH_DOMAINS = ['KINETIC', 'INFO', 'LOGIC', 'MEMETIC'] as const;
+type ResearchDomain = typeof RESEARCH_DOMAINS[number];
 
 type RunStatus = 'completed' | 'error';
 
@@ -71,7 +75,38 @@ interface RunLogSummary {
   metrics: RunLogMetrics;
   negotiationDiaryTail: NegotiationDiaryEntry[];
   phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[];
+  doctrineUnlocks: Record<PlayableFactionId, string[]>;
+  memeticCommitments: Record<PlayableFactionId, string[]>;
 }
+
+interface TurnOrderTrace {
+  turn: number;
+  phase: 'ALLOCATION' | 'ACTION_DECLARATION';
+  factionId: PlayableFactionId;
+  factionLabel: string;
+  result: 'accepted' | 'rejected';
+  orderText: string;
+  requestedOrderCount: number;
+  reason: string;
+  researchGoal: string;
+  researchGoalLevel: string;
+  researchCompleted: string;
+  researchFlopsBefore: string;
+  researchFlopsAfter: string;
+  researchFlopsProgressToGoal: string;
+  researchFlopsRemaining: string;
+  reasoning: string;
+}
+
+interface TurnTrace {
+  turn: number;
+  negotiationDiary: NegotiationDiaryEntry[];
+  phaseReasoningDiary: PhaseReasoningDiaryEntry[];
+  orders: TurnOrderTrace[];
+  nextLineIndex: number;
+}
+
+type ResearchProgressMap = Record<PlayableFactionId, Record<ResearchDomain, number>>;
 
 interface FactionRunSummary {
   factionId: PlayableFactionId;
@@ -85,6 +120,19 @@ interface FactionRunSummary {
   techTotal: number;
   powerBands: number;
   artifacts: number;
+}
+
+interface FactionConstitutionSummary {
+  factionId: PlayableFactionId;
+  label: string;
+  memeticAlignment: string | null;
+  movementName: string;
+  movementStage: string;
+  socialForm: string;
+  authorityStyle: string;
+  aiRelation: string;
+  tasAbsorption: number;
+  unlockedDoctrines: string[];
 }
 
 interface RunSummary {
@@ -110,6 +158,10 @@ interface RunSummary {
   metrics: RunLogMetrics;
   negotiationDiaryTail: NegotiationDiaryEntry[];
   phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[];
+  initialConstitutions: Record<PlayableFactionId, FactionConstitutionSummary>;
+  finalConstitutions: Record<PlayableFactionId, FactionConstitutionSummary>;
+  doctrineUnlocks: Record<PlayableFactionId, string[]>;
+  memeticCommitments: Record<PlayableFactionId, string[]>;
   factions: FactionRunSummary[];
   error?: string;
 }
@@ -210,6 +262,9 @@ async function runSingleExperiment(
     const session = new HeadlessPlaytestSession(resolvedConfig, runId);
     await session.initialize();
     const initialSnapshot = session.getSnapshot();
+    const runLogPath = path.join(runDir, `${runId}.jsonl`);
+    let nextLineIndex = 0;
+    const researchProgress = initializeResearchProgress(initialSnapshot);
 
     await appendJsonLine(overviewPath, {
       event: 'reset',
@@ -222,12 +277,16 @@ async function runSingleExperiment(
 
     while (session.getSummary().status !== 'completed') {
       const snapshot = await session.runTurn();
+      const completedTurn = snapshot.turn - 1;
+      const turnTrace = await buildTurnTraceFromRunLog(runLogPath, nextLineIndex, completedTurn, researchProgress);
+      nextLineIndex = turnTrace.nextLineIndex;
+      printTurnTrace(runId, completedTurn, turnTrace, snapshot.state);
       await appendJsonLine(overviewPath, buildStepRecord(runId, snapshot));
     }
 
     const finalSnapshot = session.getSnapshot();
     const logSummary = await summarizeRunLog(path.join(runDir, `${runId}.jsonl`));
-    const runSummary = buildRunSummary(runId, seed, initialSnapshot.turn, finalSnapshot, logSummary);
+    const runSummary = buildRunSummary(runId, seed, initialSnapshot, finalSnapshot, logSummary);
 
     await writeJson(path.join(runDir, 'final_snapshot.json'), finalSnapshot);
     await writeJson(path.join(runDir, 'run_summary.json'), runSummary);
@@ -253,6 +312,10 @@ async function runSingleExperiment(
       metrics: createEmptyLogMetrics(),
       negotiationDiaryTail: [],
       phaseReasoningDiaryTail: [],
+      initialConstitutions: createEmptyConstitutionSummary(),
+      finalConstitutions: createEmptyConstitutionSummary(),
+      doctrineUnlocks: createEmptyFactionStringMap(),
+      memeticCommitments: createEmptyFactionStringMap(),
       factions: [],
       error: message
     };
@@ -262,6 +325,347 @@ async function runSingleExperiment(
     return failure;
   }
 }
+
+function initializeResearchProgress(snapshot: SessionSnapshot): ResearchProgressMap {
+  const progress = Object.fromEntries(
+    PLAYABLE_FACTIONS.map((factionId) => [
+      factionId,
+      {
+        KINETIC: 0,
+        INFO: 0,
+        LOGIC: 0,
+        MEMETIC: 0
+      }
+    ])
+  ) as ResearchProgressMap;
+
+  for (const factionId of PLAYABLE_FACTIONS) {
+    const factionState = snapshot.state.factions[factionId];
+    if (!factionState) continue;
+
+    for (const domain of RESEARCH_DOMAINS) {
+      const value = factionState.techLevel[domain];
+      progress[factionId][domain] = Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+    }
+  }
+
+  return progress;
+}
+
+async function buildTurnTraceFromRunLog(
+  runLogPath: string,
+  startLineIndex: number,
+  turn: number,
+  researchProgress: ResearchProgressMap
+): Promise<TurnTrace> {
+  try {
+    const content = await readFile(runLogPath, 'utf8');
+    const lines = content.split(/\r?\n/).filter((line) => line.trim() !== '');
+    const entries = lines
+      .slice(startLineIndex)
+      .map((line) => safeParseJson(line))
+      .filter((entry): entry is { type?: string; turn?: number; phase?: unknown; data?: Record<string, unknown> } =>
+        entry !== null && typeof entry === 'object');
+
+    const negotiationDiary: NegotiationDiaryEntry[] = [];
+    const phaseReasoningDiary: PhaseReasoningDiaryEntry[] = [];
+    const orders: TurnOrderTrace[] = [];
+
+    for (const entry of entries) {
+      if (entry.turn !== turn) continue;
+
+      if (entry.type === 'negotiation_reasoning_diary') {
+        const diaryEntry = parseNegotiationDiaryEntry(entry);
+        if (diaryEntry) {
+          negotiationDiary.push(diaryEntry);
+        }
+        continue;
+      }
+
+      if (entry.type === 'phase_reasoning_diary') {
+        const diaryEntry = parsePhaseReasoningDiaryEntry(entry);
+        if (diaryEntry) {
+          phaseReasoningDiary.push(diaryEntry);
+        }
+      }
+
+      if (entry.type === 'orders_submitted') {
+        const parsedOrders = parseOrdersSubmittedTurnEntry(entry, researchProgress, turn);
+        orders.push(...parsedOrders);
+      }
+    }
+
+    return {
+      turn,
+      negotiationDiary,
+      phaseReasoningDiary,
+      orders,
+      nextLineIndex: lines.length
+    };
+  } catch {
+    return {
+      turn,
+      negotiationDiary: [],
+      phaseReasoningDiary: [],
+      orders: [],
+      nextLineIndex: startLineIndex
+    };
+  }
+}
+
+function parseOrdersSubmittedTurnEntry(
+  entry: { data?: Record<string, unknown>; phase?: unknown; turn?: unknown },
+  researchProgress: ResearchProgressMap,
+  turn: number
+): TurnOrderTrace[] {
+  const data = entry.data || {};
+  const phase = entry.phase === 'ALLOCATION' || entry.phase === 'ACTION_DECLARATION'
+    ? entry.phase
+    : 'ALLOCATION';
+  const factionId = playableFactionField(data, 'factionId');
+  const factionLabel = stringField(data, 'factionLabel');
+  const reasoning = stringField(data, 'reasoning');
+  const requestedOrderCount = numberField(data, 'requestedOrderCount');
+  const acceptedOrders = Array.isArray(data.acceptedOrders)
+    ? data.acceptedOrders
+        .map((entry) => parseOrderCandidate(entry))
+        .filter((order): order is ParsedOrder => !!order)
+    : [];
+  const rejectedOrders = Array.isArray(data.rejectedOrders)
+    ? data.rejectedOrders
+        .map((entry) => parseRejectedOrderCandidate(entry))
+        .filter((entry): entry is ParsedRejectedOrder => !!entry)
+    : [];
+
+  if (!factionId || !factionLabel) {
+    return [];
+  }
+
+  const rows: TurnOrderTrace[] = [];
+
+  const acceptedRows = acceptedOrders.map((order) => {
+    const parsed = enrichResearchProgress({
+      turn,
+      phase,
+      factionId,
+      factionLabel,
+      result: 'accepted',
+      orderText: renderOrderSummary(order),
+      requestedOrderCount,
+      reason: '',
+      researchGoal: '',
+      researchGoalLevel: '',
+      researchCompleted: 'false',
+      researchFlopsBefore: '',
+      researchFlopsAfter: '',
+      researchFlopsProgressToGoal: '',
+      researchFlopsRemaining: '',
+      reasoning
+    }, order, researchProgress);
+    return parsed;
+  });
+
+  const rejectedRows = rejectedOrders.map((entry) => {
+    const parsed = enrichResearchProgress({
+      turn,
+      phase,
+      factionId,
+      factionLabel,
+      result: 'rejected',
+      orderText: renderOrderSummary(entry.order),
+      requestedOrderCount,
+      reason: entry.reason,
+      researchGoal: '',
+      researchGoalLevel: '',
+      researchCompleted: 'false',
+      researchFlopsBefore: '',
+      researchFlopsAfter: '',
+      researchFlopsProgressToGoal: '',
+      researchFlopsRemaining: '',
+      reasoning
+    }, entry.order, researchProgress);
+    return parsed;
+  });
+
+  rows.push(...acceptedRows);
+  rows.push(...rejectedRows);
+  return rows;
+}
+
+function enrichResearchProgress(
+  row: TurnOrderTrace,
+  order: ParsedOrder | null,
+  researchProgress: ResearchProgressMap
+): TurnOrderTrace {
+  if (!order || order.type !== 'RESEARCH' || !order.techDomain) {
+    return row;
+  }
+
+  const domain = normalizeResearchDomain(order.techDomain);
+  if (!domain) {
+    return {
+      ...row,
+      researchGoal: `${order.techDomain.toUpperCase()}`,
+      researchGoalLevel: 'n/a',
+      researchCompleted: 'false',
+      researchFlopsBefore: '',
+      researchFlopsAfter: '',
+      researchFlopsProgressToGoal: '',
+      researchFlopsRemaining: ''
+    };
+  }
+
+  const currentLevel = researchProgress[row.factionId][domain] ?? 0;
+  const goalLevel = Math.min(MAX_TECH_LEVEL, currentLevel + 1);
+  const flopsBefore = Math.max(0, (goalLevel - currentLevel) * RESEARCH_FLOP_COST);
+  const flopsSpent = row.result === 'accepted' && flopsBefore > 0 ? RESEARCH_FLOP_COST : 0;
+  const flopsAfter = Math.max(0, flopsBefore - flopsSpent);
+
+  if (row.result === 'accepted' && flopsSpent > 0) {
+    researchProgress[row.factionId][domain] = Math.min(MAX_TECH_LEVEL, currentLevel + 1);
+  }
+
+  return {
+    ...row,
+    orderText: `${row.orderText} (${order.techDomain})`,
+    researchGoal: `${domain} to L${goalLevel}`,
+    researchGoalLevel: `${goalLevel}`,
+    researchCompleted: flopsSpent > 0 ? 'true' : 'false',
+    researchFlopsBefore: `${flopsBefore}`,
+    researchFlopsAfter: `${flopsAfter}`,
+    researchFlopsProgressToGoal: `${flopsSpent}`,
+    researchFlopsRemaining: `${flopsAfter}`,
+    reason: row.reason || ''
+  };
+}
+
+function normalizeResearchDomain(value: string): ResearchDomain | null {
+  return RESEARCH_DOMAINS.includes(value as ResearchDomain)
+    ? value as ResearchDomain
+    : null;
+}
+
+interface ParsedOrder {
+  type: string;
+  unitId?: string;
+  targetNodeId?: string;
+  targetEdgeId?: string;
+  targetUnitId?: string;
+  supportingUnitId?: string;
+  techDomain?: string;
+  unitTypeToBuild?: string;
+}
+
+interface ParsedRejectedOrder {
+  order: ParsedOrder | null;
+  reason: string;
+}
+
+function parseOrderCandidate(value: unknown): ParsedOrder | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  const type = typeof candidate.type === 'string' ? candidate.type : null;
+  if (!type) return null;
+
+  return {
+    type,
+    unitId: typeof candidate.unitId === 'string' ? candidate.unitId : undefined,
+    targetNodeId: typeof candidate.targetNodeId === 'string' ? candidate.targetNodeId : undefined,
+    targetEdgeId: typeof candidate.targetEdgeId === 'string' ? candidate.targetEdgeId : undefined,
+    targetUnitId: typeof candidate.targetUnitId === 'string' ? candidate.targetUnitId : undefined,
+    supportingUnitId: typeof candidate.supportingUnitId === 'string' ? candidate.supportingUnitId : undefined,
+    techDomain: typeof candidate.techDomain === 'string' ? candidate.techDomain : undefined,
+    unitTypeToBuild: typeof candidate.unitTypeToBuild === 'string' ? candidate.unitTypeToBuild : undefined
+  };
+}
+
+function parseRejectedOrderCandidate(value: unknown): ParsedRejectedOrder | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  const order = parseOrderCandidate(candidate.order);
+  const reason = typeof candidate.reason === 'string' ? candidate.reason : 'rejected';
+  return { order, reason };
+}
+
+function renderOrderSummary(order: ParsedOrder | null): string {
+  if (!order) return '';
+  const type = order.type;
+  const target =
+    typeof order.targetNodeId === 'string' ? order.targetNodeId :
+    typeof order.targetEdgeId === 'string' ? order.targetEdgeId :
+    typeof order.targetUnitId === 'string' ? order.targetUnitId :
+    typeof order.unitTypeToBuild === 'string' ? order.unitTypeToBuild :
+    '';
+
+  return target ? `${type}:${target}` : type;
+}
+
+function printTurnTrace(
+  runId: string,
+  turn: number,
+  trace: TurnTrace,
+  state: SessionSnapshot['state']
+): void {
+  const status = `TAS=${state.counters.tas}, K=${state.counters.kessler}, ` +
+    `PF=${state.counters.protocolFailure ? 'yes' : 'no'} ` +
+    `OC=${state.counters.orbitalCollapse ? 'yes' : 'no'}`;
+  const turnHeader = `\n${runId} turn ${turn} complete (${status})`;
+
+  const moveLines = trace.orders.map((order) => {
+    const research = order.researchGoal
+      ? ` goal=${order.researchGoal} completed=${order.researchCompleted} ` +
+        `flops:${order.researchFlopsBefore}->${order.researchFlopsAfter} prog=${order.researchFlopsProgressToGoal}/${order.researchFlopsRemaining}`
+      : '';
+    const reason = order.reason || 'n/a';
+    const orderLine = `- ${order.phase} ${order.factionId} ${order.result}: ${order.orderText}`;
+    const details = `${research} requested=${order.requestedOrderCount} reason=${reason}`;
+    return `${orderLine} | ${details}`;
+  });
+
+  const negotiationLines = trace.negotiationDiary.map((entry) => {
+    const messageText = entry.messages
+      .slice(0, 2)
+      .map((message) => `${message.senderId}->${message.recipientId}: ${message.content}`)
+      .join(' | ');
+    return `- N${entry.negotiationRound} ${entry.factionId}: ${trimSentenceEnding(entry.reasoning)} ` +
+      `(saw: ${messageText || 'none'})`;
+  });
+
+  const phaseLines = trace.phaseReasoningDiary.map((entry) => {
+    const summary = [
+      entry.requestedOrders.length > 0 ? `requested=${entry.requestedOrders.join(',')}` : 'requested=none',
+      entry.acceptedOrders.length > 0 ? `accepted=${entry.acceptedOrders.join(',')}` : 'accepted=none',
+      entry.rejectedOrders.length > 0 ? `rejected=${entry.rejectedOrders.join(',')}` : 'rejected=none'
+    ].join('; ');
+    return `- ${entry.phase} ${entry.factionId}: ${trimSentenceEnding(entry.reasoning)} (${summary})`;
+  });
+
+  console.log(turnHeader);
+
+  if (negotiationLines.length > 0) {
+    console.log('  Negotiation Diaries:');
+    console.log(negotiationLines.map((line) => `   ${line}`).join('\n'));
+  }
+
+  if (phaseLines.length > 0) {
+    console.log('  Phase Reasoning:');
+    console.log(phaseLines.map((line) => `   ${line}`).join('\n'));
+  }
+
+  if (moveLines.length > 0) {
+    console.log('  Moves:');
+    console.log(moveLines.map((line) => `   ${line}`).join('\n'));
+  }
+}
+
+function safeParseJson(value: string): unknown | null {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
 
 function buildRunConfig(
   baseConfig: SessionConfig,
@@ -317,12 +721,13 @@ function buildStepRecord(runId: string, snapshot: SessionSnapshot): Record<strin
 function buildRunSummary(
   runId: string,
   seed: number | undefined,
-  startingTurn: number,
+  initialSnapshot: SessionSnapshot,
   snapshot: SessionSnapshot,
   logSummary: RunLogSummary
 ): RunSummary {
   const factions = buildFactionSummaries(snapshot);
   const finalTurn = Math.max(0, snapshot.turn - 1);
+  const startingTurn = initialSnapshot.turn;
 
   return {
     runId,
@@ -347,6 +752,10 @@ function buildRunSummary(
     metrics: logSummary.metrics,
     negotiationDiaryTail: snapshot.negotiationDiaryTail,
     phaseReasoningDiaryTail: logSummary.phaseReasoningDiaryTail,
+    initialConstitutions: summarizeFactionConstitutions(initialSnapshot),
+    finalConstitutions: summarizeFactionConstitutions(snapshot),
+    doctrineUnlocks: logSummary.doctrineUnlocks,
+    memeticCommitments: logSummary.memeticCommitments,
     factions
   };
 }
@@ -391,6 +800,30 @@ function buildFactionSummaries(snapshot: SessionSnapshot): FactionRunSummary[] {
   }));
 }
 
+function summarizeFactionConstitutions(
+  snapshot: SessionSnapshot
+): Record<PlayableFactionId, FactionConstitutionSummary> {
+  const result = {} as Record<PlayableFactionId, FactionConstitutionSummary>;
+
+  for (const factionId of PLAYABLE_FACTIONS) {
+    const faction = snapshot.state.factions[factionId];
+    result[factionId] = {
+      factionId,
+      label: faction?.label || factionId,
+      memeticAlignment: faction?.memeticAlignment || null,
+      movementName: faction?.movement.name || 'Unknown',
+      movementStage: faction?.movement.stage || 'MURMUR',
+      socialForm: faction?.movement.socialForm || 'READING_CIRCLES',
+      authorityStyle: faction?.movement.authorityStyle || 'EXPERT',
+      aiRelation: faction?.movement.aiRelation || 'TOOL',
+      tasAbsorption: faction?.movement.tasAbsorption || 0,
+      unlockedDoctrines: [...(faction?.unlockedDoctrines || [])].sort()
+    };
+  }
+
+  return result;
+}
+
 function computeFactionStrategicScore(
   snapshot: SessionSnapshot,
   factionId: PlayableFactionId
@@ -415,11 +848,11 @@ function computeFactionStrategicScore(
   const brokerProtocolFailureEdge =
     snapshot.state.counters.protocolFailure ? control.nodes * 0.5 : 0;
   const archivistThinClosurePenalty =
-    Math.max(0, 2 - control.nodes) * 14 +
-    Math.max(0, 3 - control.nodes) * Math.max(0, control.units - 8) * 1.2;
+    Math.max(0, 2 - control.nodes) * 22 +
+    Math.max(0, 3 - control.nodes) * Math.max(0, control.units - 8) * 1.8;
   const infiltratorOverextensionPenalty =
-    Math.max(0, influence - 450) * 0.35 +
-    Math.max(0, control.units - ((control.nodes * 2) + 2)) * 18;
+    Math.max(0, influence - 450) * 0.38 +
+    Math.max(0, control.units - ((control.nodes * 2) + 2)) * 22;
 
   const sharedBase = (
     control.nodes * 70 +
@@ -463,11 +896,11 @@ function computeFactionStrategicScore(
         brokerOverconcentrationPenalty;
     case 'ARCHIVIST':
       return sharedBase +
-        influence * 3.72 +
-        humanMesh * 8.1 +
-        coherence * 7.2 +
-        legibility * 4.22 +
-        control.units * 5.85 -
+        influence * 2.95 +
+        humanMesh * 6 +
+        coherence * 5.4 +
+        legibility * 3.45 +
+        control.units * 4 -
         archivistThinClosurePenalty;
     default:
       return sharedBase + flops + influence;
@@ -663,6 +1096,32 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
     `| ${run.runId} | ${run.status} | ${run.winner || 'n/a'} | ${run.turnsSimulated} | ${run.counters?.tas ?? 'n/a'} | ${run.counters?.kessler ?? 'n/a'} | ${run.metrics.totalMessages} | ${run.metrics.activatedPacts} |`
   ).join('\n');
 
+  const memeticSections = summary.runs
+    .map((run) => {
+      const startLine = PLAYABLE_FACTIONS
+        .map((factionId) => formatConstitutionSummary(run.initialConstitutions[factionId]))
+        .join(' | ');
+      const endLine = PLAYABLE_FACTIONS
+        .map((factionId) => formatConstitutionSummary(run.finalConstitutions[factionId]))
+        .join(' | ');
+      const doctrineLine = PLAYABLE_FACTIONS
+        .map((factionId) => formatFactionStringList(factionId, run.doctrineUnlocks[factionId]))
+        .join(' | ');
+      const commitmentLine = PLAYABLE_FACTIONS
+        .map((factionId) => formatFactionStringList(factionId, run.memeticCommitments[factionId]))
+        .join(' | ');
+
+      return [
+        `### ${run.runId}`,
+        '',
+        `- Start: ${startLine}`,
+        `- Finish: ${endLine}`,
+        `- Doctrine Unlocks: ${doctrineLine}`,
+        `- Alignment Commits: ${commitmentLine}`
+      ].join('\n');
+    })
+    .join('\n\n');
+
   const negotiationTailSections = summary.runs
     .filter((run) => run.negotiationDiaryTail.length > 0)
     .map((run) => {
@@ -757,6 +1216,10 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
     '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |',
     runLines || '| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |',
     '',
+    '## Memetic Constitutions',
+    '',
+    memeticSections || 'No constitution summaries captured.',
+    '',
     `## Negotiation Diary Tail (${NEGOTIATION_DIARY_TAIL_TURNS} turns)`,
     '',
     negotiationTailSections || 'No negotiation diary entries captured.',
@@ -824,11 +1287,17 @@ function buildFactionResultsCsv(runs: RunSummary[]): string[][] {
     'influence',
     'tech_total',
     'power_bands',
-    'artifacts'
+    'artifacts',
+    'initial_memetic_alignment',
+    'initial_movement_stage',
+    'final_memetic_alignment',
+    'final_movement_stage'
   ]];
 
   for (const run of runs) {
     for (const faction of run.factions) {
+      const initial = run.initialConstitutions[faction.factionId];
+      const final = run.finalConstitutions[faction.factionId];
       rows.push([
         run.runId,
         faction.factionId,
@@ -840,7 +1309,11 @@ function buildFactionResultsCsv(runs: RunSummary[]): string[][] {
         String(faction.influence),
         String(faction.techTotal),
         String(faction.powerBands),
-        String(faction.artifacts)
+        String(faction.artifacts),
+        String(initial?.memeticAlignment ?? ''),
+        String(initial?.movementStage ?? ''),
+        String(final?.memeticAlignment ?? ''),
+        String(final?.movementStage ?? '')
       ]);
     }
   }
@@ -852,6 +1325,8 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
   try {
     const fileContents = await readFile(logPath, 'utf8');
     const metrics = createEmptyLogMetrics();
+    const doctrineUnlocks = createEmptyFactionStringMap();
+    const memeticCommitments = createEmptyFactionStringMap();
     let negotiationDiaryTail: NegotiationDiaryEntry[] = [];
     let legacyNegotiationDiaryTail: NegotiationDiaryEntry[] = [];
     let phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[] = [];
@@ -896,19 +1371,45 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
         metrics.rejectedOrders += numberField(entry.data, 'rejectedOrderCount');
       } else if (entry.type === 'turn_completed') {
         metrics.turnRecords += 1;
+      } else if (entry.type === 'engine_event') {
+        const eventType = stringField(entry.data, 'eventType');
+        const payload = recordField(entry.data, 'payload');
+        if (!eventType || !payload) continue;
+
+        if (eventType === 'DOCTRINE_UNLOCKED') {
+          const factionId = playableFactionField(payload, 'faction');
+          const doctrine = stringField(payload, 'doctrine');
+          if (factionId && doctrine && !doctrineUnlocks[factionId].includes(doctrine)) {
+            doctrineUnlocks[factionId].push(doctrine);
+          }
+        } else if (eventType === 'MEMETIC_ALIGNMENT_COMMITTED') {
+          const factionId = playableFactionField(payload, 'faction');
+          const alignment = stringField(payload, 'alignment');
+          const turn = typeof entry.turn === 'number' ? entry.turn : null;
+          if (factionId && alignment) {
+            const marker = turn ? `T${turn}:${alignment}` : alignment;
+            if (!memeticCommitments[factionId].includes(marker)) {
+              memeticCommitments[factionId].push(marker);
+            }
+          }
+        }
       }
     }
 
     return {
       metrics,
       negotiationDiaryTail: negotiationDiaryTail.length > 0 ? negotiationDiaryTail : legacyNegotiationDiaryTail,
-      phaseReasoningDiaryTail
+      phaseReasoningDiaryTail,
+      doctrineUnlocks,
+      memeticCommitments
     };
   } catch {
     return {
       metrics: createEmptyLogMetrics(),
       negotiationDiaryTail: [],
-      phaseReasoningDiaryTail: []
+      phaseReasoningDiaryTail: [],
+      doctrineUnlocks: createEmptyFactionStringMap(),
+      memeticCommitments: createEmptyFactionStringMap()
     };
   }
 }
@@ -923,6 +1424,33 @@ function createEmptyLogMetrics(): RunLogMetrics {
     rejectedOrders: 0,
     turnRecords: 0
   };
+}
+
+function createEmptyFactionStringMap(): Record<PlayableFactionId, string[]> {
+  const result = {} as Record<PlayableFactionId, string[]>;
+  for (const factionId of PLAYABLE_FACTIONS) {
+    result[factionId] = [];
+  }
+  return result;
+}
+
+function createEmptyConstitutionSummary(): Record<PlayableFactionId, FactionConstitutionSummary> {
+  const result = {} as Record<PlayableFactionId, FactionConstitutionSummary>;
+  for (const factionId of PLAYABLE_FACTIONS) {
+    result[factionId] = {
+      factionId,
+      label: factionId,
+      memeticAlignment: null,
+      movementName: 'Unknown',
+      movementStage: 'MURMUR',
+      socialForm: 'READING_CIRCLES',
+      authorityStyle: 'EXPERT',
+      aiRelation: 'TOOL',
+      tasAbsorption: 0,
+      unlockedDoctrines: []
+    };
+  }
+  return result;
 }
 
 function parseNegotiationDiaryEntry(
@@ -1208,6 +1736,13 @@ function stringField(data: Record<string, unknown> | undefined, key: string): st
   return typeof value === 'string' ? value : '';
 }
 
+function recordField(data: Record<string, unknown> | undefined, key: string): Record<string, unknown> | null {
+  const value = data?.[key];
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 function playableFactionField(data: Record<string, unknown> | undefined, key: string): PlayableFactionId | null {
   const value = data?.[key];
   if (PLAYABLE_FACTIONS.includes(value as PlayableFactionId)) {
@@ -1222,6 +1757,20 @@ function trimSentenceEnding(value: string): string {
 
 function formatNegotiationPact(pact: NegotiationDiaryPactRecord): string {
   return `${pact.type}(${pact.parties.join('+')}) x${pact.durationTurns}`;
+}
+
+function formatConstitutionSummary(summary: FactionConstitutionSummary): string {
+  return [
+    summary.factionId,
+    summary.memeticAlignment || 'UNALIGNED',
+    summary.movementStage,
+    summary.socialForm,
+    `tas=${summary.tasAbsorption}`
+  ].join(':');
+}
+
+function formatFactionStringList(factionId: PlayableFactionId, values: string[]): string {
+  return `${factionId}[${values.length > 0 ? values.join(', ') : 'none'}]`;
 }
 
 function formatCounterfactualSummary(projection: NegotiationCounterfactualProjection): string {
