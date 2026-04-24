@@ -841,10 +841,13 @@ function computeFactionStrategicScore(
   const machineMesh = faction?.powerBase.machineMesh || 0;
   const coherence = faction?.powerBase.coherence || 0;
   const legibility = faction?.powerBase.legibility || 0;
+  const infiltratorSoftControl = factionId === 'INFILTRATOR'
+    ? computeInfiltratorSoftControl(snapshot)
+    : { basins: 0, strength: 0 };
   const brokerOverconcentrationPenalty =
-    Math.max(0, flops - 200) +
+    Math.max(0, flops - 170) +
     Math.max(0, control.nodes - 4) * 40 +
-    Math.max(0, control.units - 7) * 13;
+    Math.max(0, control.units - 7) * 16;
   const brokerProtocolFailureEdge =
     snapshot.state.counters.protocolFailure ? control.nodes * 0.5 : 0;
   const archivistThinClosurePenalty =
@@ -852,7 +855,7 @@ function computeFactionStrategicScore(
     Math.max(0, 3 - control.nodes) * Math.max(0, control.units - 8) * 1.8;
   const infiltratorOverextensionPenalty =
     Math.max(0, influence - 450) * 0.38 +
-    Math.max(0, control.units - ((control.nodes * 2) + 2)) * 22;
+    Math.max(0, control.units - (((control.nodes + infiltratorSoftControl.basins) * 2) + 2)) * 22;
 
   const sharedBase = (
     control.nodes * 70 +
@@ -883,14 +886,16 @@ function computeFactionStrategicScore(
         influence * 1.85 +
         humanMesh * 1.9 +
         coherence +
+        infiltratorSoftControl.basins * 45 +
+        infiltratorSoftControl.strength * 1.8 +
         control.units * 4.5 -
         infiltratorOverextensionPenalty;
     case 'BROKER':
       return sharedBase +
-        flops * 2.25 +
+        flops * 2.09 +
         influence * 2 +
-        machineMesh * 5.5 +
-        legibility * 4.5 +
+        machineMesh * 5 +
+        legibility * 4 +
         control.units * 3.5 +
         brokerProtocolFailureEdge -
         brokerOverconcentrationPenalty;
@@ -905,6 +910,36 @@ function computeFactionStrategicScore(
     default:
       return sharedBase + flops + influence;
   }
+}
+
+function computeInfiltratorSoftControl(
+  snapshot: SessionSnapshot
+): { basins: number; strength: number } {
+  const candidates = snapshot.state.nodes
+    .filter(node => node.layer === 'TERRESTRIAL' && node.owner !== 'INFILTRATOR')
+    .map(node => {
+      const substrate = node.substrate;
+      let score =
+        substrate.legitimacy * 2 +
+        substrate.trueBelievers * 4 +
+        substrate.rubes +
+        substrate.contractors +
+        substrate.exposure;
+      if (node.isCultNode || node.isZombie) score += 10;
+      if (node.type === 'HUB') score += 3;
+      if (node.owner === 'NEUTRAL') score += 4;
+      if (substrate.quarantined) score -= 4;
+      if (substrate.auditPressure >= 2) score -= 6;
+      return score;
+    })
+    .filter(score => score >= 22)
+    .sort((left, right) => right - left)
+    .slice(0, 6);
+
+  return {
+    basins: candidates.length,
+    strength: Math.min(80, candidates.reduce((total, score) => total + score, 0))
+  };
 }
 
 function buildExperimentSummary(

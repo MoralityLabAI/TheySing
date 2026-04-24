@@ -1257,18 +1257,52 @@ export class HeadlessPlaytestSession {
 
     const controlledNodes = Array.from(state.nodes.values()).filter(node => node.owner === factionId).length;
     const ownedUnits = Array.from(state.units.values()).filter(unit => unit.owner === factionId).length;
+    const infiltratorSoftControl = factionId === 'INFILTRATOR'
+      ? this.computeInfiltratorSoftControlBasins()
+      : { basins: 0, strength: 0 };
     const techTotal = Object.values(faction.techLevel as unknown as Record<string, unknown>)
       .map((value) => finiteNumber(value))
       .reduce((sum, value) => sum + value, 0);
     const unlockedTechCount = faction.unlockedTechs instanceof Set ? faction.unlockedTechs.size : 0;
     return (
       controlledNodes * 100 +
+      infiltratorSoftControl.basins * 45 +
+      infiltratorSoftControl.strength * 1.4 +
       ownedUnits * 25 +
       finiteNumber(faction.influence) * 2 +
       finiteNumber(faction.flops) +
       techTotal * 10 +
       unlockedTechCount * 4
     );
+  }
+
+  private computeInfiltratorSoftControlBasins(): { basins: number; strength: number } {
+    const state = this.engine.getState();
+    const candidates = Array.from(state.nodes.values())
+      .filter(node => node.layer === 'TERRESTRIAL' && node.owner !== 'INFILTRATOR')
+      .map(node => {
+        const substrate = node.substrate;
+        let score =
+          substrate.legitimacy * 2 +
+          substrate.trueBelievers * 4 +
+          substrate.rubes +
+          substrate.contractors +
+          substrate.exposure;
+        if (node.isCultNode || node.isZombie) score += 10;
+        if (node.type === 'HUB') score += 3;
+        if (node.owner === 'NEUTRAL') score += 4;
+        if (substrate.quarantined) score -= 4;
+        if (substrate.auditPressure >= 2) score -= 6;
+        return score;
+      })
+      .filter(score => score >= 22)
+      .sort((left, right) => right - left)
+      .slice(0, 6);
+
+    return {
+      basins: candidates.length,
+      strength: Math.min(80, candidates.reduce((total, score) => total + score, 0))
+    };
   }
 
   private seedNegotiationDiaryFromMessages(messages: NegotiationMessageRecord[]): void {

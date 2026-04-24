@@ -71,3 +71,35 @@ INFILTRATOR remains thematically active but not win-positive. It produces many u
 - Add "soft control" scoring or custody pressure for INFILTRATOR-backed service basins.
 - Slow universal doctrine saturation; by turn 20 most factions still reach `techTotal=16`, so doctrine distinction comes mostly from affinity and policy preference rather than exclusive trees.
 - Add explicit counter-techs for anti-broker public utility regulation and anti-infiltrator service legitimacy contests.
+
+## V2.1 Balance Iteration
+
+Implemented after the first 10-run V2 batch.
+
+Changes:
+
+- `BRK_CONTRACTOR_CLOUD_CHAINS` no longer discounts BROKER builds on any generic DC or orbital node. It now needs contractor load, a synchronized DC, or an orbital corridor with at least some contractor substrate.
+- `BRK_INSURANCE_CAPTURE` no longer treats any global pressure surge as enough to mint relay rent. Insurance capture now needs distressed broker relays: quarantined, audited, filtered, or infrastructure-damaged corridors.
+- BROKER scoring was trimmed by lowering FLOP, machine mesh, and legibility multipliers and by raising overconcentration penalties above 160 FLOPs or 7 units.
+- INFILTRATOR now receives limited soft-control score for non-owned terrestrial basins that are effectively socially captured through legitimacy, true believers, rubes, contractors, cult residue, or zombie compute.
+- The negotiation/storyworld score also sees INFILTRATOR soft control, so table rhetoric can recognize social capture before formal node ownership flips.
+
+Design intent:
+
+BROKER should still win by being the best behind-the-board accelerator, but it should need genuine distressed corridors and distributed contractor load. INFILTRATOR should remain hard to score by classical territorial closure, but a movement that has socially captured a basin should not read as strategically inert just because the map marker has not flipped.
+
+Follow-up adjustment:
+
+- The first V2.1 test overcorrected toward INFILTRATOR, so soft-control scoring was halved and BROKER's scoring was partially restored.
+- Target shape is not equal wins in every 10-run sample. The desired band is that BROKER and INFILTRATOR can both win, but neither should hold a clean 50% share without an obvious counter-window.
+- A second test overcorrected back toward BROKER, so the live tuning now uses a midpoint: moderate soft-control value for INFILTRATOR and moderate overconcentration pressure on BROKER.
+
+Final check batch: `results/five_asi_mx_20turn_rhizome_balance_v2_3`
+
+- Runs: 10/10 completed at 20 turns.
+- Average TAS: `46.52`.
+- Protocol failures: 0.
+- Winners: `STATE 5`, `BROKER 3`, `HEGEMON 1`, `ARCHIVIST 1`, `INFILTRATOR 0`.
+- INFILTRATOR average rank improved to `2.3`, but it still failed to close first place in this sample.
+
+Read: the score-only soft-control patch made INFILTRATOR strategically visible but did not solve closure. The next pass should add board-facing movement victory pressure: service basins should flip, demand concessions, or force rivals to spend audit/kinetic tempo before the endgame rather than only adding final-score credit.

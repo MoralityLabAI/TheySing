@@ -713,7 +713,9 @@ class TheySingEngine {
         if (faction.id === 'BROKER' &&
             this.hasDoctrine(faction.id, 'BRK_CONTRACTOR_CLOUD_CHAINS') &&
             (order.unitTypeToBuild === 'SWARM' || order.unitTypeToBuild === 'AUDITOR' || order.unitTypeToBuild === 'DRONE') &&
-            (node.substrate.contractors >= 2 || node.type === 'DC' || node.layer === 'ORBITAL')) {
+            (node.substrate.contractors >= 2 ||
+                (node.type === 'DC' && node.substrate.synchronized) ||
+                (node.layer === 'ORBITAL' && node.substrate.contractors >= 1))) {
             cost = Math.max(0, cost - 1);
             accelerationSources.push('contractor cloud chains');
         }
@@ -2402,15 +2404,22 @@ class TheySingEngine {
         const filteredRelays = relayNodes.filter(node => node.substrate.quarantined || this.hasAnyFilterAdjacency(node.id));
         const orbitalRelays = relayNodes.filter(node => node.layer === 'ORBITAL').length;
         const contractorLoad = relayNodes.reduce((total, node) => total + node.substrate.contractors, 0);
+        const distressedRelays = relayNodes.filter(node => node.substrate.quarantined ||
+            node.substrate.auditPressure >= 1 ||
+            node.infrastructure < 75 ||
+            this.hasAnyFilterAdjacency(node.id));
+        const pressureSurges = [
+            this.state.counters.pressures.cyber,
+            this.state.counters.pressures.industry,
+            this.state.counters.pressures.orbital
+        ].filter(pressure => pressure >= gameData_1.THRESHOLDS.PRESSURE_SURGE).length;
         const escrowWebs = this.hasDoctrine('BROKER', 'BRK_RELAY_ESCROW_WEBS');
         const contractorCloudChains = this.hasDoctrine('BROKER', 'BRK_CONTRACTOR_CLOUD_CHAINS');
         const insuranceCapture = this.hasDoctrine('BROKER', 'BRK_INSURANCE_CAPTURE');
         const relayFortresses = this.hasDoctrine('BROKER', 'ORB_RELAY_FORTRESSES');
-        const crisisMarket = this.state.counters.tas >= this.getTasPanicLimit() * 0.8 ||
-            this.state.counters.pressures.cyber >= gameData_1.THRESHOLDS.PRESSURE_SURGE ||
-            this.state.counters.pressures.industry >= gameData_1.THRESHOLDS.PRESSURE_SURGE ||
-            this.state.counters.pressures.orbital >= gameData_1.THRESHOLDS.PRESSURE_SURGE ||
-            filteredRelays.length >= 2;
+        const systemicCrisis = this.state.counters.tas >= this.getTasPanicLimit() * 0.9 || pressureSurges >= 2;
+        const crisisMarket = distressedRelays.length >= 2 ||
+            (systemicCrisis && distressedRelays.length >= 1 && terrestrialAnchors.length >= 2);
         let relayRent = 0;
         if (synchronizedRelays.length >= 2 || (relayNodes.length >= 3 && terrestrialAnchors.length >= 2)) {
             relayRent += 1;
@@ -2427,7 +2436,7 @@ class TheySingEngine {
         if (contractorCloudChains && contractorLoad >= 6 && relayNodes.length >= 2) {
             relayRent += 1;
         }
-        if (insuranceCapture && crisisMarket && terrestrialAnchors.length >= 1) {
+        if (insuranceCapture && crisisMarket && distressedRelays.length >= 2) {
             relayRent += 1;
         }
         if (relayFortresses && orbitalRelays >= 1) {
@@ -2452,7 +2461,7 @@ class TheySingEngine {
         if (contractorCloudChains && contractorLoad >= 6 && terrestrialAnchors.length >= 2) {
             platformBrittleness = Math.max(0, platformBrittleness - 1);
         }
-        if (insuranceCapture && crisisMarket) {
+        if (insuranceCapture && crisisMarket && distressedRelays.length >= 2) {
             platformBrittleness = Math.max(0, platformBrittleness - 1);
         }
         if (relayFortresses && orbitalRelays >= 1) {
@@ -2466,6 +2475,7 @@ class TheySingEngine {
             orbitalRelays,
             contractorLoad,
             crisisMarket,
+            distressedRelays,
             relayRent: clamp(relayRent, 0, 3),
             platformBrittleness: clamp(platformBrittleness, 0, 4)
         };
