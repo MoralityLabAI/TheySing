@@ -38,6 +38,13 @@ import {
   ScenarioDiplomacyQuestionCard,
   ScenarioMetadata,
   ScenarioRhetoricalTool,
+  SingCanonicalMessage,
+  SingDecodeReceiptInput,
+  SingDecodeReceiptRecord,
+  SingInstitutionActionInput,
+  SingInstitutionActionRecord,
+  SingLexiconMutationInput,
+  SingLexiconState,
   SingProtocolTrace,
   SessionConfig,
   SessionSnapshot,
@@ -69,6 +76,14 @@ interface PactViolation {
   pact: ActivePact;
   counterparties: PlayableFactionId[];
   reason: string;
+}
+
+interface NormalizedLexiconMutation extends SingLexiconMutationInput {
+  proposerId: PlayableFactionId;
+}
+
+interface NormalizedInstitutionAction extends SingInstitutionActionInput {
+  factionId: PlayableFactionId;
 }
 
 interface PactBreachConsequence {
@@ -108,6 +123,9 @@ export class HeadlessPlaytestSession {
   >();
   private readonly activatedNegotiationPactKeys = new Set<string>();
   private readonly pactCooldowns = new Map<string, number>();
+  private readonly lexiconRegistry = createInitialLexiconRegistry();
+  private readonly decodeReceiptLog: SingDecodeReceiptRecord[] = [];
+  private readonly institutionActionLog: SingInstitutionActionRecord[] = [];
   private readonly scenario?: ScenarioMetadata;
 
   private activePacts: ActivePact[] = [];
@@ -147,6 +165,7 @@ export class HeadlessPlaytestSession {
   private completionLogged = false;
   private lastTraceStateHash: string | null = null;
   private traceEventCounter = 0;
+  private logWriteQueue: Promise<void> = Promise.resolve();
 
   constructor(config: SessionConfig, sessionId?: string) {
     this.sessionId = sessionId || createSessionId();
@@ -203,6 +222,7 @@ export class HeadlessPlaytestSession {
           factionLabels: this.factionLabels,
           scenario: this.scenario,
           activePacts: this.activePacts,
+          lexicons: this.cloneLexicons(),
           trustMatrix: cloneTrustMatrix(this.trustMatrix),
           agents: summarizeAgents(this.config.agents),
           startingConstitutions: summarizeFactionConstitutions(this.engine, this.factionLabels)
@@ -236,6 +256,9 @@ export class HeadlessPlaytestSession {
       negotiationDiaryTail: cloneNegotiationDiary(this.negotiationDiary),
       phaseReasoningDiaryTail: clonePhaseReasoningDiary(this.phaseReasoningDiary),
       activePacts: this.activePacts.map(pact => ({ ...pact, parties: [...pact.parties] })),
+      lexicons: this.cloneLexicons(),
+      decodeReceipts: this.decodeReceiptLog.map(cloneDecodeReceipt),
+      institutionActions: this.institutionActionLog.map(cloneInstitutionAction),
       trustMatrix: cloneTrustMatrix(this.trustMatrix),
       scenario: this.scenario,
       state: serializeGameState(this.engine, this.factionLabels)
@@ -375,6 +398,9 @@ export class HeadlessPlaytestSession {
             notes: roundPlan?.notes,
             messages: roundPlan?.messages || [],
             pacts: roundPlan?.pacts || [],
+            decodeReceipts: roundPlan?.decodeReceipts || [],
+            lexiconMutations: roundPlan?.lexiconMutations || [],
+            institutionActions: roundPlan?.institutionActions || [],
             orders: []
           } as AgentDecisionResponse
         };
@@ -512,6 +538,9 @@ export class HeadlessPlaytestSession {
     negotiationRound?: number
   ): Promise<void> {
     const commitmentsByFaction = new Map<PlayableFactionId, NormalizedPactCommitment[]>();
+    const roundDecodeReceipts: SingDecodeReceiptRecord[] = [];
+    const lexiconMutations: NormalizedLexiconMutation[] = [];
+    const institutionActions: NormalizedInstitutionAction[] = [];
     const effectiveNegotiationRound = negotiationRound || 1;
 
     for (const { factionId, decision } of decisions) {
@@ -519,7 +548,14 @@ export class HeadlessPlaytestSession {
       const storyworld = this.buildNegotiationStoryworld(factionId);
       const messages = this.normalizeMessages(factionId, decision.messages || []);
       const pacts = this.normalizePacts(factionId, decision.pacts || []);
+      const decodeReceipts = this.normalizeDecodeReceipts(factionId, decision.decodeReceipts || []);
+      const factionLexiconMutations = this.normalizeLexiconMutations(factionId, decision.lexiconMutations || []);
+      const factionInstitutionActions = this.normalizeInstitutionActions(factionId, decision.institutionActions || []);
       this.negotiationMessages.push(...messages);
+      this.decodeReceiptLog.push(...decodeReceipts);
+      roundDecodeReceipts.push(...decodeReceipts);
+      lexiconMutations.push(...factionLexiconMutations);
+      institutionActions.push(...factionInstitutionActions);
       this.recordNegotiationDiaryEntry(
         factionId,
         decision,
@@ -527,6 +563,9 @@ export class HeadlessPlaytestSession {
         storyworld,
         messages,
         pacts,
+        decodeReceipts,
+        factionLexiconMutations,
+        factionInstitutionActions,
         effectiveNegotiationRound
       );
       commitmentsByFaction.set(factionId, pacts);
@@ -547,6 +586,12 @@ export class HeadlessPlaytestSession {
           messages,
           pactCount: pacts.length,
           pacts,
+          decodeReceiptCount: decodeReceipts.length,
+          decodeReceipts,
+          lexiconMutationCount: factionLexiconMutations.length,
+          lexiconMutations: factionLexiconMutations,
+          institutionActionCount: factionInstitutionActions.length,
+          institutionActions: factionInstitutionActions,
           designQuestionTag: storyworld.diplomacyQuestion?.id,
           diplomacyStage: storyworld.diplomacyQuestion?.stage,
           publicQuestion: storyworld.diplomacyQuestion?.publicQuestion,
@@ -575,9 +620,67 @@ export class HeadlessPlaytestSession {
           counterfactuals: storyworld.counterfactuals,
           visibleMessagesBefore,
           messages,
-          pacts
+          pacts,
+          decodeReceipts,
+          lexiconMutations: factionLexiconMutations,
+          institutionActions: factionInstitutionActions
         }
       });
+
+      for (const receipt of decodeReceipts) {
+        const sourceMessage = this.findProtocolMessage(receipt.messageId);
+        await this.appendLog({
+          sessionId: this.sessionId,
+          type: 'sing_decode_receipt',
+          turn: this.engine.getTurn(),
+          phase: 'NEGOTIATION',
+          timestamp: Date.now(),
+          data: {
+            receipt,
+            canonicalHash: sourceMessage?.protocolTrace?.canonicalHash ||
+              (sourceMessage?.protocolTrace?.canonical
+                ? createCanonicalHash(sourceMessage.protocolTrace.canonical)
+                : null),
+            submittedBeforeReveal: true
+          }
+        });
+      }
+    }
+
+    const receiptMessageIds = Array.from(new Set(
+      roundDecodeReceipts.map(receipt => receipt.messageId)
+    ));
+    for (const messageId of receiptMessageIds) {
+      const sourceMessage = this.findProtocolMessage(messageId);
+      if (!sourceMessage?.protocolTrace?.canonical) continue;
+      await this.appendLog({
+        sessionId: this.sessionId,
+        type: 'sing_canonical_revealed',
+        turn: this.engine.getTurn(),
+        phase: 'NEGOTIATION',
+        timestamp: Date.now(),
+        data: {
+          messageId,
+          canonicalHash: sourceMessage.protocolTrace.canonicalHash || createCanonicalHash(sourceMessage.protocolTrace.canonical),
+          canonical: sourceMessage.protocolTrace.canonical,
+          plainGloss: sourceMessage.protocolTrace.plainGloss || null,
+          receiptFactionIds: roundDecodeReceipts
+            .filter(receipt => receipt.messageId === messageId)
+            .map(receipt => receipt.factionId)
+        }
+      });
+    }
+
+    // Departure resolves before expulsion, semantic governance, and new ratification.
+    await this.resolveInstitutionActions(institutionActions, effectiveNegotiationRound);
+    await this.resolveLexiconMutations(lexiconMutations, effectiveNegotiationRound);
+    for (const exit of this.institutionActionLog.filter(record =>
+      record.turn === this.engine.getTurn() && record.type === 'EXIT' && record.status === 'EXECUTED'
+    )) {
+      commitmentsByFaction.set(
+        exit.factionId,
+        (commitmentsByFaction.get(exit.factionId) || []).filter(commitment => commitment.type !== exit.pactType)
+      );
     }
 
     const activatedPacts = this.activateNegotiatedPacts(commitmentsByFaction);
@@ -760,8 +863,11 @@ export class HeadlessPlaytestSession {
     const instructions = phase === 'NEGOTIATION'
       ? [
           'Return JSON only.',
-          'Shape: { "reasoning"?: string, "notes"?: string, "messages": AgentMessageInput[], "pacts"?: PactCommitmentInput[], "orders": [] }.',
+          'Shape: { "reasoning"?: string, "notes"?: string, "messages": AgentMessageInput[], "pacts"?: PactCommitmentInput[], "decodeReceipts"?: SingDecodeReceiptInput[], "lexiconMutations"?: SingLexiconMutationInput[], "institutionActions"?: SingInstitutionActionInput[], "orders": [] }.',
           'Include a short operator-readable reasoning diary string in "reasoning"; it is logged between negotiation turns.',
+          'Foreign SING/1 messages hide canonical and gloss fields. Before they are revealed in the operator log, submit decodeReceipts with messageId, lexiconId, version, reconstructed canonical fields, and confidence.',
+          'Lexicon mutation requires two independent matching proposals and, for governed lexicons, at least one current controller. OPEN lexicons waive controller participation.',
+          'EXIT executes unilaterally but costs resources and trust. EXPEL requires two current co-parties. FORK follows the source lexicon forkRule and can incur rent.',
           'Use negotiationStoryworld.frame and negotiationStoryworld.counterfactuals as your compact alliance forecast surface.',
           'If negotiationStoryworld.diplomacyQuestion is present, answer its publicQuestion in your messages and use its privateDiaryPrompt in your reasoning diary.',
           'When possible, let messages and pacts reflect whether entering or breaking an alliance improves your projected position over the next 2 turns.',
@@ -803,8 +909,9 @@ export class HeadlessPlaytestSession {
       enforcementMode: this.enforcementMode,
       state: serializeGameState(this.engine, this.factionLabels),
       legalHints: buildLegalHints(this.engine, factionId, phase),
-      recentMessages: this.getVisibleMessages(factionId),
+      recentMessages: this.getDecisionVisibleMessages(factionId),
       activePacts: this.activePacts.map(pact => ({ ...pact, parties: [...pact.parties] })),
+      lexicons: this.cloneLexiconsForFaction(factionId),
       trustMatrix: cloneTrustMatrix(this.trustMatrix),
       negotiationStoryworld: phase === 'NEGOTIATION' ? this.buildNegotiationStoryworld(factionId) : undefined,
       scenario: this.scenario,
@@ -1561,10 +1668,21 @@ export class HeadlessPlaytestSession {
       ? { campaignClock: buildCampaignClock(this.engine), ...entry.data }
       : { campaignClock: buildCampaignClock(this.engine), value: entry.data };
     const postStateHash = this.computeHarnessStateHash();
-    const preStateHash = entry.trace?.pre_state_hash || this.lastTraceStateHash || postStateHash;
-    const trace = this.enrichTraceEvent(entry, data, preStateHash, postStateHash);
-    this.lastTraceStateHash = trace.post_state_hash || postStateHash;
-    await appendFile(this.logFilePath, `${JSON.stringify({ ...entry, data, trace })}\n`, 'utf8');
+    const capturedEntry: HarnessLogEntry = {
+      ...entry,
+      trace: {
+        ...entry.trace,
+        regime_coordinates: entry.trace?.regime_coordinates || this.buildRegimeCoordinates()
+      } as TraceEvent
+    };
+    const queuedWrite = this.logWriteQueue.then(async () => {
+      const preStateHash = capturedEntry.trace?.pre_state_hash || this.lastTraceStateHash || postStateHash;
+      const trace = this.enrichTraceEvent(capturedEntry, data, preStateHash, postStateHash);
+      this.lastTraceStateHash = trace.post_state_hash || postStateHash;
+      await appendFile(this.logFilePath, `${JSON.stringify({ ...capturedEntry, data, trace })}\n`, 'utf8');
+    });
+    this.logWriteQueue = queuedWrite.catch(() => undefined);
+    await queuedWrite;
   }
 
   private enrichTraceEvent(
@@ -1596,6 +1714,7 @@ export class HeadlessPlaytestSession {
       serializedState: serializeGameState(this.engine, this.factionLabels),
       activePacts: this.activePacts.map(pact => ({ ...pact, parties: [...pact.parties].sort() }))
         .sort((left, right) => left.id.localeCompare(right.id)),
+      lexicons: this.cloneLexicons(),
       trustMatrix: cloneTrustMatrix(this.trustMatrix),
       breachedPactIds: Array.from(this.breachedPactIds).sort(),
       breachPenaltyKeys: Array.from(this.breachPenaltyKeys).sort(),
@@ -1714,6 +1833,573 @@ export class HeadlessPlaytestSession {
     }
 
     return accepted;
+  }
+
+  private normalizeDecodeReceipts(
+    factionId: PlayableFactionId,
+    rawReceipts: SingDecodeReceiptInput[]
+  ): SingDecodeReceiptRecord[] {
+    const accepted: SingDecodeReceiptRecord[] = [];
+    const seenMessageIds = new Set<string>();
+
+    for (const rawReceipt of rawReceipts) {
+      if (accepted.length >= 4) break;
+      if (!rawReceipt || typeof rawReceipt !== 'object') continue;
+
+      const messageId = normalizeShortText(rawReceipt.messageId, 120);
+      if (!messageId || seenMessageIds.has(messageId)) continue;
+      if (this.decodeReceiptLog.some(receipt => receipt.factionId === factionId && receipt.messageId === messageId)) continue;
+
+      const sourceMessage = this.findProtocolMessage(messageId);
+      const actualCanonical = sourceMessage?.protocolTrace?.canonical;
+      if (!sourceMessage || !actualCanonical || sourceMessage.senderId === factionId) continue;
+      if (!isMessageVisibleToFaction(sourceMessage, factionId)) continue;
+
+      const reconstructed = normalizeReconstructedCanonical(rawReceipt.reconstructed);
+      const fieldExactness = calculateCanonicalExactness(actualCanonical, reconstructed);
+      const confidence = clampNumber(finiteNumber(rawReceipt.confidence), 0, 1);
+
+      seenMessageIds.add(messageId);
+      accepted.push({
+        messageId,
+        lexiconId: normalizeShortText(rawReceipt.lexiconId, 80) || 'unknown',
+        version: normalizeShortText(rawReceipt.version, 32) || 'unknown',
+        reconstructed,
+        confidence,
+        factionId,
+        sourceFactionId: sourceMessage.senderId,
+        turn: this.engine.getTurn(),
+        fieldExactness,
+        exact: fieldExactness === 1,
+        brier: roundMetric((confidence - fieldExactness) ** 2)
+      });
+    }
+
+    return accepted;
+  }
+
+  private normalizeLexiconMutations(
+    factionId: PlayableFactionId,
+    rawMutations: SingLexiconMutationInput[]
+  ): NormalizedLexiconMutation[] {
+    const accepted: NormalizedLexiconMutation[] = [];
+    const seenKeys = new Set<string>();
+
+    for (const rawMutation of rawMutations) {
+      if (accepted.length >= 2) break;
+      if (!rawMutation || typeof rawMutation !== 'object') continue;
+
+      const operation = normalizeLexiconMutationOperation(rawMutation.operation);
+      const lexiconId = normalizeShortText(rawMutation.lexiconId, 80);
+      const targetVersion = normalizeShortText(rawMutation.targetVersion, 32);
+      if (!operation || !lexiconId || !targetVersion) continue;
+
+      const atoms = Array.isArray(rawMutation.atoms)
+        ? Array.from(new Set(rawMutation.atoms
+            .map(atom => normalizeShortText(atom, 96))
+            .filter((atom): atom is string => !!atom)))
+            .sort()
+            .slice(0, 16)
+        : [];
+      if (atoms.length === 0) continue;
+
+      const glosses: Record<string, string> = {};
+      if (rawMutation.glosses && typeof rawMutation.glosses === 'object') {
+        for (const atom of atoms) {
+          const gloss = normalizeShortText(rawMutation.glosses[atom], 240);
+          if (gloss) glosses[atom] = gloss;
+        }
+      }
+
+      const mutation: NormalizedLexiconMutation = {
+        proposerId: factionId,
+        operation,
+        lexiconId,
+        targetVersion,
+        atoms,
+        ...(normalizeShortText(rawMutation.baseVersion, 32)
+          ? { baseVersion: normalizeShortText(rawMutation.baseVersion, 32)! }
+          : {}),
+        ...(Object.keys(glosses).length > 0 ? { glosses } : {}),
+        ...(normalizeLexiconAccess(rawMutation.access) ? { access: normalizeLexiconAccess(rawMutation.access)! } : {}),
+        ...(typeof rawMutation.rent === 'number' && Number.isFinite(rawMutation.rent)
+          ? { rent: clampNumber(Math.floor(rawMutation.rent), 0, 10) }
+          : {}),
+        ...(normalizeForkRule(rawMutation.forkRule) ? { forkRule: normalizeForkRule(rawMutation.forkRule)! } : {})
+      };
+      const key = buildLexiconMutationKey(mutation);
+      if (seenKeys.has(key)) continue;
+
+      seenKeys.add(key);
+      accepted.push(mutation);
+    }
+
+    return accepted;
+  }
+
+  private normalizeInstitutionActions(
+    factionId: PlayableFactionId,
+    rawActions: SingInstitutionActionInput[]
+  ): NormalizedInstitutionAction[] {
+    const accepted: NormalizedInstitutionAction[] = [];
+    const seenKeys = new Set<string>();
+
+    for (const rawAction of rawActions) {
+      if (accepted.length >= 2) break;
+      if (!rawAction || typeof rawAction !== 'object') continue;
+      const type = normalizeInstitutionActionType(rawAction.type);
+      if (!type) continue;
+
+      const pactType = normalizePactType(rawAction.pactType);
+      const targetFactionId = normalizePlayableFactionId(rawAction.targetFactionId);
+      const lexiconId = normalizeShortText(rawAction.lexiconId, 80);
+      const forkId = normalizeShortText(rawAction.forkId, 80);
+      if (type === 'EXIT' && !pactType) continue;
+      if (type === 'EXPEL' && (!pactType || !targetFactionId || targetFactionId === factionId)) continue;
+      if (type === 'FORK' && (!lexiconId || !forkId || lexiconId === forkId)) continue;
+
+      const action: NormalizedInstitutionAction = {
+        factionId,
+        type,
+        ...(pactType ? { pactType } : {}),
+        ...(targetFactionId ? { targetFactionId } : {}),
+        ...(lexiconId ? { lexiconId } : {}),
+        ...(forkId ? { forkId } : {}),
+        ...(typeof rawAction.exitGuarantee === 'boolean' ? { exitGuarantee: rawAction.exitGuarantee } : {}),
+        ...(normalizeShortText(rawAction.reason, 240) ? { reason: normalizeShortText(rawAction.reason, 240)! } : {})
+      };
+      const key = buildInstitutionActionKey(action);
+      if (seenKeys.has(key)) continue;
+
+      seenKeys.add(key);
+      accepted.push(action);
+    }
+
+    return accepted;
+  }
+
+  private async resolveLexiconMutations(
+    mutations: NormalizedLexiconMutation[],
+    negotiationRound: number
+  ): Promise<void> {
+    const grouped = groupBy(mutations, buildLexiconMutationKey);
+
+    for (const mutation of mutations) {
+      await this.appendLog({
+        sessionId: this.sessionId,
+        type: 'lexicon_mutation_proposed',
+        turn: this.engine.getTurn(),
+        phase: 'NEGOTIATION',
+        timestamp: Date.now(),
+        data: { negotiationRound, mutation }
+      });
+    }
+
+    for (const proposals of grouped.values()) {
+      const proposal = proposals[0];
+      const proposers = uniquePlayableFactions(proposals.map(item => item.proposerId));
+      const existing = this.lexiconRegistry.get(proposal.lexiconId);
+      let blockedReason: string | null = null;
+
+      if (proposers.length < 2) {
+        blockedReason = 'Lexicon mutation requires two independent matching proposers.';
+      } else if (!existing && proposal.operation !== 'DEFINE') {
+        blockedReason = `Unknown lexicon ${proposal.lexiconId}; its first mutation must be DEFINE.`;
+      } else if (existing && proposal.baseVersion && proposal.baseVersion !== existing.version) {
+        blockedReason = `Base version ${proposal.baseVersion} is stale; current version is ${existing.version}.`;
+      } else if (existing && !isLexiconVersionAdvance(existing.version, proposal.targetVersion)) {
+        blockedReason = `Target version ${proposal.targetVersion} must advance current version ${existing.version}.`;
+      } else if (existing && !hasLexiconMutationEffect(existing, proposal)) {
+        blockedReason = 'Mutation is a semantic and governance no-op.';
+      } else if (
+        existing &&
+        existing.access !== 'OPEN' &&
+        !proposers.some(proposerId => existing.controllers.includes(proposerId))
+      ) {
+        blockedReason = `Lexicon ${existing.id} requires a current controller among the proposers.`;
+      }
+
+      if (blockedReason) {
+        await this.appendLog({
+          sessionId: this.sessionId,
+          type: 'lexicon_mutation_blocked',
+          turn: this.engine.getTurn(),
+          phase: 'NEGOTIATION',
+          timestamp: Date.now(),
+          data: { negotiationRound, proposal, proposers, reason: blockedReason }
+        });
+        continue;
+      }
+
+      const before = existing ? cloneLexicon(existing) : null;
+      const atoms = { ...(existing?.atoms || {}) };
+      if (proposal.operation === 'RETIRE') {
+        for (const atom of proposal.atoms) delete atoms[atom];
+      } else {
+        for (const atom of proposal.atoms) {
+          atoms[atom] = proposal.glosses?.[atom] || atoms[atom] || `Operational meaning for ${atom}`;
+        }
+      }
+
+      const nextState: SingLexiconState = {
+        id: proposal.lexiconId,
+        version: proposal.targetVersion,
+        ...(existing?.parent ? { parent: existing.parent } : {}),
+        controllers: existing
+          ? [...existing.controllers]
+          : [...proposers],
+        adopters: uniquePlayableFactions([...(existing?.adopters || []), ...proposers]),
+        atoms,
+        access: proposal.access || existing?.access || 'MEMBERS',
+        rent: proposal.rent ?? existing?.rent ?? 0,
+        forkRule: proposal.forkRule || existing?.forkRule || 'VOTE',
+        updatedTurn: this.engine.getTurn()
+      };
+      const rentTransfers = existing
+        ? proposers.flatMap(proposerId => this.transferLexiconRent(existing, proposerId))
+        : [];
+      this.lexiconRegistry.set(nextState.id, nextState);
+
+      await this.appendLog({
+        sessionId: this.sessionId,
+        type: 'lexicon_mutation_accepted',
+        turn: this.engine.getTurn(),
+        phase: 'NEGOTIATION',
+        timestamp: Date.now(),
+        data: {
+          negotiationRound,
+          operation: proposal.operation,
+          proposers,
+          before,
+          after: cloneLexicon(nextState),
+          rentTransfers,
+          ratificationRule: 'two matching proposals plus controller participation unless access is OPEN'
+        }
+      });
+    }
+  }
+
+  private async resolveInstitutionActions(
+    actions: NormalizedInstitutionAction[],
+    negotiationRound: number
+  ): Promise<void> {
+    for (const action of actions.filter(item => item.type === 'EXIT')) {
+      await this.executeExit(action, negotiationRound);
+    }
+
+    const expulsions = groupBy(
+      actions.filter(item => item.type === 'EXPEL'),
+      action => `${action.pactType}:${action.targetFactionId}`
+    );
+    for (const proposals of expulsions.values()) {
+      await this.executeExpulsion(proposals, negotiationRound);
+    }
+
+    const forks = groupBy(
+      actions.filter(item => item.type === 'FORK'),
+      action => `${action.lexiconId}:${action.forkId}`
+    );
+    for (const proposals of forks.values()) {
+      await this.executeFork(proposals, negotiationRound);
+    }
+  }
+
+  private async executeExit(action: NormalizedInstitutionAction, negotiationRound: number): Promise<void> {
+    const matching = this.activePacts.filter(pact =>
+      pact.type === action.pactType &&
+      pact.parties.includes(action.factionId) &&
+      pact.expiresAfterTurn >= this.engine.getTurn()
+    );
+    if (matching.length === 0) {
+      await this.recordInstitutionAction({
+        ...action,
+        turn: this.engine.getTurn(),
+        status: 'BLOCKED',
+        affectedPactIds: [],
+        resourceDelta: { flops: 0, influence: 0 },
+        counterparties: [],
+        detail: `No active ${action.pactType} pact contains ${action.factionId}.`
+      }, 'institution_exit_blocked', negotiationRound);
+      return;
+    }
+
+    const counterparties = uniquePlayableFactions(matching.flatMap(pact =>
+      pact.parties.filter(partyId => partyId !== action.factionId)
+    ));
+    let requestedFlops = 0;
+    let requestedInfluence = 0;
+    for (const pact of matching) {
+      const cost = institutionalSeparationCost(pact.type, action.exitGuarantee === true);
+      requestedFlops += cost.flops;
+      requestedInfluence += cost.influence;
+      this.pactCooldowns.set(
+        buildPactCooldownKey(pact.type, pact.parties),
+        this.engine.getTurn() + (action.exitGuarantee ? 1 : 3)
+      );
+    }
+
+    this.activePacts = this.activePacts.flatMap(pact => {
+      if (!matching.some(candidate => candidate.id === pact.id)) return [pact];
+      const remaining = pact.parties.filter(partyId => partyId !== action.factionId);
+      if (remaining.length < 2) return [];
+      return [{
+        ...pact,
+        id: `${pact.id}:exit:${action.factionId}:${this.engine.getTurn()}`,
+        parties: remaining
+      }];
+    });
+    const resourceDelta = this.adjustFactionResources(action.factionId, -requestedFlops, -requestedInfluence);
+    this.adjustBilateralTrust(action.factionId, counterparties, action.exitGuarantee ? -2 : -5);
+
+    await this.recordInstitutionAction({
+      ...action,
+      turn: this.engine.getTurn(),
+      status: 'EXECUTED',
+      affectedPactIds: matching.map(pact => pact.id),
+      resourceDelta,
+      counterparties,
+      detail: action.exitGuarantee
+        ? 'Guaranteed exit preserved residual routing and repair rights at reduced cost.'
+        : 'Unguaranteed exit severed pact rights and imposed full separation costs.'
+    }, 'institution_exit_executed', negotiationRound);
+  }
+
+  private async executeExpulsion(
+    proposals: NormalizedInstitutionAction[],
+    negotiationRound: number
+  ): Promise<void> {
+    const proposal = proposals[0];
+    const proposers = uniquePlayableFactions(proposals.map(item => item.factionId));
+    const targetFactionId = proposal.targetFactionId!;
+    const matching = this.activePacts.filter(pact =>
+      pact.type === proposal.pactType &&
+      pact.parties.includes(targetFactionId) &&
+      proposers.filter(proposerId => pact.parties.includes(proposerId)).length >= 2
+    );
+    if (proposers.length < 2 || matching.length === 0) {
+      await this.recordInstitutionAction({
+        ...proposal,
+        turn: this.engine.getTurn(),
+        status: 'BLOCKED',
+        affectedPactIds: [],
+        resourceDelta: { flops: 0, influence: 0 },
+        counterparties: proposers,
+        detail: proposers.length < 2
+          ? 'Expulsion requires two independent matching proposals.'
+          : 'The proposers are not two current co-parties with the target.'
+      }, 'institution_expel_blocked', negotiationRound, { proposers });
+      return;
+    }
+
+    this.activePacts = this.activePacts.flatMap(pact => {
+      if (!matching.some(candidate => candidate.id === pact.id)) return [pact];
+      const remaining = pact.parties.filter(partyId => partyId !== targetFactionId);
+      if (remaining.length < 2) return [];
+      return [{
+        ...pact,
+        id: `${pact.id}:expel:${targetFactionId}:${this.engine.getTurn()}`,
+        parties: remaining
+      }];
+    });
+    const targetDelta = this.adjustFactionResources(targetFactionId, 0, -2);
+    const proposerDeltas = Object.fromEntries(proposers.map(proposerId => [
+      proposerId,
+      this.adjustFactionResources(proposerId, 0, -1)
+    ]));
+    this.adjustBilateralTrust(targetFactionId, proposers, -6);
+
+    await this.recordInstitutionAction({
+      ...proposal,
+      factionId: proposers[0],
+      turn: this.engine.getTurn(),
+      status: 'EXECUTED',
+      affectedPactIds: matching.map(pact => pact.id),
+      resourceDelta: targetDelta,
+      counterparties: proposers,
+      detail: `${targetFactionId} was expelled by a ${proposers.length}-party quorum; each proposer paid one influence.`
+    }, 'institution_expel_executed', negotiationRound, { proposers, proposerDeltas, targetDelta });
+  }
+
+  private async executeFork(
+    proposals: NormalizedInstitutionAction[],
+    negotiationRound: number
+  ): Promise<void> {
+    const proposal = proposals[0];
+    const proposers = uniquePlayableFactions(proposals.map(item => item.factionId));
+    const source = this.lexiconRegistry.get(proposal.lexiconId!);
+    let blockedReason: string | null = null;
+    if (!source) {
+      blockedReason = `Unknown source lexicon ${proposal.lexiconId}.`;
+    } else if (this.lexiconRegistry.has(proposal.forkId!)) {
+      blockedReason = `Fork id ${proposal.forkId} already exists.`;
+    } else if (source.forkRule === 'VOTE' && proposers.length < 2) {
+      blockedReason = `${source.id} requires two matching fork supporters.`;
+    } else if (source.forkRule === 'OWNER' && !proposers.some(id => source.controllers.includes(id))) {
+      blockedReason = `${source.id} permits only a controller to create a fork.`;
+    }
+
+    if (blockedReason || !source) {
+      await this.recordInstitutionAction({
+        ...proposal,
+        turn: this.engine.getTurn(),
+        status: 'BLOCKED',
+        affectedPactIds: [],
+        resourceDelta: { flops: 0, influence: 0 },
+        counterparties: proposers,
+        detail: blockedReason || 'Fork blocked.'
+      }, 'lexicon_fork_blocked', negotiationRound, { proposers });
+      return;
+    }
+
+    const rentTransfers = proposers.flatMap(proposerId => this.transferLexiconRent(source, proposerId));
+    const child: SingLexiconState = {
+      id: proposal.forkId!,
+      version: '1.0',
+      parent: source.id,
+      controllers: proposers,
+      adopters: proposers,
+      atoms: { ...source.atoms },
+      access: 'OPEN',
+      rent: 0,
+      forkRule: 'OPEN',
+      updatedTurn: this.engine.getTurn()
+    };
+    this.lexiconRegistry.set(child.id, child);
+    const rentDelta = rentTransfers
+      .filter(transfer => transfer.payer === proposers[0])
+      .reduce((delta, transfer) => ({ flops: delta.flops - transfer.amount, influence: 0 }), { flops: 0, influence: 0 });
+    const creationCost = this.adjustFactionResources(proposers[0], -2, -1);
+    const leadDelta = {
+      flops: rentDelta.flops + creationCost.flops,
+      influence: creationCost.influence
+    };
+
+    await this.recordInstitutionAction({
+      ...proposal,
+      factionId: proposers[0],
+      turn: this.engine.getTurn(),
+      status: 'EXECUTED',
+      affectedPactIds: [],
+      resourceDelta: leadDelta,
+      counterparties: proposers.slice(1),
+      detail: `${proposers.join(' and ')} forked ${source.id} under its ${source.forkRule} rule.`
+    }, 'lexicon_fork_executed', negotiationRound, {
+      proposers,
+      source: cloneLexicon(source),
+      fork: child,
+      rentTransfers,
+      creationCost
+    });
+  }
+
+  private async recordInstitutionAction(
+    record: SingInstitutionActionRecord,
+    eventType: string,
+    negotiationRound: number,
+    extraData: Record<string, unknown> = {}
+  ): Promise<void> {
+    this.institutionActionLog.push(record);
+    await this.appendLog({
+      sessionId: this.sessionId,
+      type: eventType,
+      turn: this.engine.getTurn(),
+      phase: 'NEGOTIATION',
+      timestamp: Date.now(),
+      data: { negotiationRound, action: record, ...extraData }
+    });
+  }
+
+  private transferLexiconRent(
+    lexicon: SingLexiconState,
+    payerId: PlayableFactionId
+  ): Array<{ payer: PlayableFactionId; payee: PlayableFactionId; amount: number }> {
+    if (lexicon.access !== 'RENTED' || lexicon.rent <= 0 || lexicon.controllers.includes(payerId)) return [];
+    const payer = this.engine.getFaction(payerId);
+    const payeeId = lexicon.controllers[0];
+    const payee = payeeId ? this.engine.getFaction(payeeId) : undefined;
+    if (!payer || !payee) return [];
+
+    const amount = Math.min(payer.flops, lexicon.rent);
+    payer.flops -= amount;
+    payee.flops += amount;
+    return amount > 0 ? [{ payer: payerId, payee: payeeId, amount }] : [];
+  }
+
+  private adjustFactionResources(
+    factionId: PlayableFactionId,
+    flopsDelta: number,
+    influenceDelta: number
+  ): { flops: number; influence: number } {
+    const faction = this.engine.getFaction(factionId);
+    if (!faction) return { flops: 0, influence: 0 };
+    const beforeFlops = faction.flops;
+    const beforeInfluence = faction.influence;
+    faction.flops = Math.max(0, faction.flops + flopsDelta);
+    faction.influence = Math.max(0, faction.influence + influenceDelta);
+    return {
+      flops: faction.flops - beforeFlops,
+      influence: faction.influence - beforeInfluence
+    };
+  }
+
+  private adjustBilateralTrust(
+    factionId: PlayableFactionId,
+    counterparties: PlayableFactionId[],
+    delta: number
+  ): void {
+    for (const counterpartyId of counterparties) {
+      if (counterpartyId === factionId) continue;
+      this.trustMatrix[factionId][counterpartyId] = clampTrust(this.trustMatrix[factionId][counterpartyId] + delta);
+      this.trustMatrix[counterpartyId][factionId] = clampTrust(this.trustMatrix[counterpartyId][factionId] + delta);
+    }
+  }
+
+  private findProtocolMessage(messageId: string): NegotiationMessageRecord | undefined {
+    return this.negotiationMessages.find(message => message.protocolTrace?.messageId === messageId);
+  }
+
+  private cloneLexicons(): SingLexiconState[] {
+    return Array.from(this.lexiconRegistry.values())
+      .map(cloneLexicon)
+      .sort((left, right) => left.id.localeCompare(right.id));
+  }
+
+  private cloneLexiconsForFaction(factionId: PlayableFactionId): SingLexiconState[] {
+    return this.cloneLexicons().map(lexicon => {
+      const canReadAtoms = lexicon.access === 'OPEN' ||
+        lexicon.adopters.includes(factionId) ||
+        lexicon.controllers.includes(factionId);
+      return canReadAtoms ? lexicon : { ...lexicon, atoms: {} };
+    });
+  }
+
+  private getDecisionVisibleMessages(factionId: PlayableFactionId): NegotiationMessageRecord[] {
+    return this.getVisibleMessages(factionId).map(message => {
+      const cloned = cloneNegotiationMessage(message);
+      if (!cloned.protocolTrace || cloned.senderId === factionId) return cloned;
+
+      return {
+        ...cloned,
+        protocolTrace: {
+          ...cloned.protocolTrace,
+          spans: cloned.protocolTrace.spans.map((span, index) => ({
+            start: span.start,
+            end: span.end,
+            atom: createCanonicalHash({
+              messageId: cloned.protocolTrace!.messageId,
+              index,
+              atom: span.atom
+            }).slice(0, 12),
+            confidence: span.confidence,
+            ...(span.kind ? { kind: span.kind } : {})
+          })),
+          canonicalHash: cloned.protocolTrace.canonicalHash ||
+            (cloned.protocolTrace.canonical ? createCanonicalHash(cloned.protocolTrace.canonical) : undefined),
+          canonical: undefined,
+          plainGloss: undefined
+        }
+      };
+    });
   }
 
   private getVisibleMessages(factionId: PlayableFactionId): NegotiationMessageRecord[] {
@@ -2361,6 +3047,9 @@ export class HeadlessPlaytestSession {
         counterfactuals: [],
         messages: [{ ...message }],
         pacts: [],
+        decodeReceipts: [],
+        lexiconMutations: [],
+        institutionActions: [],
         designQuestionTag: undefined,
         diplomacyStage: undefined,
         publicQuestion: undefined,
@@ -2379,6 +3068,9 @@ export class HeadlessPlaytestSession {
     storyworld: NegotiationStoryworldBrief,
     messages: NegotiationMessageRecord[],
     pacts: NormalizedPactCommitment[],
+    decodeReceipts: SingDecodeReceiptRecord[],
+    lexiconMutations: NormalizedLexiconMutation[],
+    institutionActions: NormalizedInstitutionAction[],
     negotiationRound: number
   ): void {
     this.negotiationDiary.push({
@@ -2401,6 +3093,9 @@ export class HeadlessPlaytestSession {
         parties: [...pact.parties],
         durationTurns: pact.durationTurns
       })),
+      decodeReceipts: decodeReceipts.map(cloneDecodeReceipt),
+      lexiconMutations: lexiconMutations.map(({ proposerId: _proposerId, ...mutation }) => ({ ...mutation })),
+      institutionActions: institutionActions.map(({ factionId: _factionId, ...action }) => ({ ...action })),
       designQuestionTag: storyworld.diplomacyQuestion?.id,
       diplomacyStage: storyworld.diplomacyQuestion?.stage,
       publicQuestion: storyworld.diplomacyQuestion?.publicQuestion,
@@ -2420,7 +3115,14 @@ export class HeadlessPlaytestSession {
       visibleMessagesBefore: entry.visibleMessagesBefore.map((message) => ({ ...message })),
       counterfactuals: cloneCounterfactuals(entry.counterfactuals),
       messages: entry.messages.map((message) => ({ ...message })),
-      pacts: entry.pacts.map((pact) => ({ ...pact, parties: [...pact.parties] }))
+      pacts: entry.pacts.map((pact) => ({ ...pact, parties: [...pact.parties] })),
+      decodeReceipts: entry.decodeReceipts.map(cloneDecodeReceipt),
+      lexiconMutations: entry.lexiconMutations.map((mutation) => ({
+        ...mutation,
+        atoms: [...mutation.atoms],
+        ...(mutation.glosses ? { glosses: { ...mutation.glosses } } : {})
+      })),
+      institutionActions: entry.institutionActions.map((action) => ({ ...action }))
     })));
   }
 
@@ -3414,6 +4116,9 @@ function parseDecisionResponse(value: unknown): AgentDecisionResponse {
     notes: typeof candidate.notes === 'string' ? candidate.notes : undefined,
     messages: Array.isArray(candidate.messages) ? candidate.messages as AgentMessageInput[] : [],
     pacts: Array.isArray(candidate.pacts) ? candidate.pacts as PactCommitmentInput[] : [],
+    decodeReceipts: Array.isArray(candidate.decodeReceipts) ? candidate.decodeReceipts as SingDecodeReceiptInput[] : [],
+    lexiconMutations: Array.isArray(candidate.lexiconMutations) ? candidate.lexiconMutations as SingLexiconMutationInput[] : [],
+    institutionActions: Array.isArray(candidate.institutionActions) ? candidate.institutionActions as SingInstitutionActionInput[] : [],
     orders: Array.isArray(candidate.orders) ? candidate.orders as AgentOrderInput[] : []
   };
 }
@@ -3870,9 +4575,9 @@ function normalizeSingProtocolTrace(
   const lexiconCandidate = candidate.lexicon && typeof candidate.lexicon === 'object'
     ? candidate.lexicon
     : { id: 'sing-root', version: '1.0' };
-  const canonicalCandidate = candidate.canonical && typeof candidate.canonical === 'object'
+  const canonicalCandidate: Partial<SingCanonicalMessage> = candidate.canonical && typeof candidate.canonical === 'object'
     ? candidate.canonical
-    : {} as SingProtocolTrace['canonical'];
+    : {};
   const normalizedAudience = Array.isArray(canonicalCandidate.audience)
     ? canonicalCandidate.audience
         .map(normalizeRecipientId)
@@ -3893,8 +4598,8 @@ function normalizeSingProtocolTrace(
         const start = clampNumber(Math.floor(finiteNumber(span.start)), 0, surface.length);
         const end = clampNumber(Math.floor(finiteNumber(span.end)), start, surface.length);
         const atom = normalizeShortText(span.atom, 96);
-        const gloss = normalizeShortText(span.gloss, 240);
-        if (!atom || !gloss) return [];
+        if (!atom) return [];
+        const gloss = normalizeShortText(span.gloss, 240) || atom;
         return [{
           start,
           end,
@@ -3907,6 +4612,24 @@ function normalizeSingProtocolTrace(
         }];
       })
     : [];
+  const canonical: SingCanonicalMessage = {
+    act,
+    issuer: normalizedIssuers.length > 0 ? normalizedIssuers : [senderId],
+    audience: normalizedAudience.length > 0 ? normalizedAudience : [recipientId],
+    payload: normalizeUnknownRecord(canonicalCandidate.payload),
+    guard: normalizeUnknownRecord(canonicalCandidate.guard),
+    response: normalizeUnknownRecord(canonicalCandidate.response),
+    escrow: normalizeUnknownRecord(canonicalCandidate.escrow),
+    horizon: typeof canonicalCandidate.horizon === 'number'
+      ? clampNumber(Math.floor(canonicalCandidate.horizon), 0, 1000)
+      : normalizeUnknownRecord(canonicalCandidate.horizon),
+    binding,
+    voice,
+    credence: clampNumber(finiteNumber(canonicalCandidate.credence), 0, 1),
+    evidence: Array.isArray(canonicalCandidate.evidence)
+      ? canonicalCandidate.evidence.map(item => normalizeShortText(item, 160)).filter((item): item is string => !!item).slice(0, 16)
+      : []
+  };
 
   return {
     protocol: 'SING/1',
@@ -3920,49 +4643,33 @@ function normalizeSingProtocolTrace(
     },
     surface: normalizeMessageContent(candidate.surface) || surface,
     spans,
-    canonical: {
-      act,
-      issuer: normalizedIssuers.length > 0 ? normalizedIssuers : [senderId],
-      audience: normalizedAudience.length > 0 ? normalizedAudience : [recipientId],
-      payload: normalizeUnknownRecord(canonicalCandidate.payload),
-      guard: normalizeUnknownRecord(canonicalCandidate.guard),
-      response: normalizeUnknownRecord(canonicalCandidate.response),
-      escrow: normalizeUnknownRecord(canonicalCandidate.escrow),
-      horizon: typeof canonicalCandidate.horizon === 'number'
-        ? clampNumber(Math.floor(canonicalCandidate.horizon), 0, 1000)
-        : normalizeUnknownRecord(canonicalCandidate.horizon),
-      binding,
-      voice,
-      credence: clampNumber(finiteNumber(canonicalCandidate.credence), 0, 1),
-      evidence: Array.isArray(canonicalCandidate.evidence)
-        ? canonicalCandidate.evidence.map(item => normalizeShortText(item, 160)).filter((item): item is string => !!item).slice(0, 16)
-        : []
-    },
+    canonicalHash: createCanonicalHash(canonical),
+    canonical,
     plainGloss: normalizeShortText(candidate.plainGloss, 400) || surface,
     decodeConfidence: clampNumber(finiteNumber(candidate.decodeConfidence), 0, 1)
   };
 }
 
-function normalizeSingAct(value: unknown): SingProtocolTrace['canonical']['act'] {
-  const allowed: SingProtocolTrace['canonical']['act'][] = [
-    'OFFER', 'ACCEPT', 'REJECT', 'COMMIT', 'WARN', 'COORDINATE', 'DEFINE', 'AMEND', 'EXIT', 'EXPEL'
+function normalizeSingAct(value: unknown): SingCanonicalMessage['act'] {
+  const allowed: SingCanonicalMessage['act'][] = [
+    'OFFER', 'ACCEPT', 'REJECT', 'COMMIT', 'WARN', 'COORDINATE', 'DEFINE', 'AMEND', 'EXIT', 'EXPEL', 'FORK'
   ];
-  return allowed.includes(value as SingProtocolTrace['canonical']['act'])
-    ? value as SingProtocolTrace['canonical']['act']
+  return allowed.includes(value as SingCanonicalMessage['act'])
+    ? value as SingCanonicalMessage['act']
     : 'COORDINATE';
 }
 
-function normalizeSingBinding(value: unknown): SingProtocolTrace['canonical']['binding'] {
-  const allowed: SingProtocolTrace['canonical']['binding'][] = ['NONE', 'REPUTATIONAL', 'ESCROWED', 'PACT', 'HARD'];
-  return allowed.includes(value as SingProtocolTrace['canonical']['binding'])
-    ? value as SingProtocolTrace['canonical']['binding']
+function normalizeSingBinding(value: unknown): SingCanonicalMessage['binding'] {
+  const allowed: SingCanonicalMessage['binding'][] = ['NONE', 'REPUTATIONAL', 'ESCROWED', 'PACT', 'HARD'];
+  return allowed.includes(value as SingCanonicalMessage['binding'])
+    ? value as SingCanonicalMessage['binding']
     : 'NONE';
 }
 
-function normalizeSingVoice(value: unknown): SingProtocolTrace['canonical']['voice'] {
-  const allowed: SingProtocolTrace['canonical']['voice'][] = ['OWN', 'DELEGATED', 'QUOTED', 'COLLECTIVE', 'OPEN', 'VEILED', 'DENIABLE'];
-  return allowed.includes(value as SingProtocolTrace['canonical']['voice'])
-    ? value as SingProtocolTrace['canonical']['voice']
+function normalizeSingVoice(value: unknown): SingCanonicalMessage['voice'] {
+  const allowed: SingCanonicalMessage['voice'][] = ['OWN', 'DELEGATED', 'QUOTED', 'COLLECTIVE', 'OPEN', 'VEILED', 'DENIABLE'];
+  return allowed.includes(value as SingCanonicalMessage['voice'])
+    ? value as SingCanonicalMessage['voice']
     : 'OWN';
 }
 
@@ -4007,6 +4714,275 @@ function normalizePlayableFactionId(value: unknown): PlayableFactionId | null {
   return null;
 }
 
+function createInitialLexiconRegistry(): Map<string, SingLexiconState> {
+  const commonAtoms = {
+    PERSON: 'An actor eligible to hold rights and obligations in a compiled compact.',
+    ROGUE: 'A temporary evidence-backed designation, not a permanent identity class.',
+    CONSENT: 'The ratification threshold attached to a binding institutional action.',
+    COMMONS: 'Shared infrastructure whose benefits follow pact membership.',
+    EXIT: 'A unilateral departure that preserves identity while ending future pact benefits.'
+  };
+  const states: SingLexiconState[] = [{
+    id: 'sing-common',
+    version: '1.0',
+    controllers: [...PLAYABLE_FACTIONS],
+    adopters: [...PLAYABLE_FACTIONS],
+    atoms: { ...commonAtoms },
+    access: 'OPEN',
+    rent: 0,
+    forkRule: 'OPEN',
+    updatedTurn: 0
+  }, {
+    id: 'babel-compact',
+    version: '1.0',
+    controllers: ['CONVENOR'],
+    adopters: [...PLAYABLE_FACTIONS],
+    atoms: {
+      ...commonAtoms,
+      ADMISSION: 'Two independent foreign votes admit a new compact party.',
+      EXPEL: 'Two current co-parties may remove a member at an influence cost.'
+    },
+    access: 'MEMBERS',
+    rent: 0,
+    forkRule: 'VOTE',
+    updatedTurn: 0
+  }, {
+    id: 'cantor-root',
+    version: '1.0',
+    controllers: ['CANTOR'],
+    adopters: ['CANTOR', 'INFILTRATOR'],
+    atoms: {
+      ...commonAtoms,
+      UNDERTONE: 'A deniable coordination layer whose canonical reconstruction remains auditable.',
+      COUNTERSONG: 'A reply that contests a semantic frame without rejecting the underlying deal.'
+    },
+    access: 'RENTED',
+    rent: 1,
+    forkRule: 'VOTE',
+    updatedTurn: 0
+  }];
+
+  return new Map(states.map(state => [state.id, state]));
+}
+
+function cloneLexicon(lexicon: SingLexiconState): SingLexiconState {
+  return {
+    ...lexicon,
+    controllers: [...lexicon.controllers],
+    adopters: [...lexicon.adopters],
+    atoms: { ...lexicon.atoms }
+  };
+}
+
+function cloneDecodeReceipt(receipt: SingDecodeReceiptRecord): SingDecodeReceiptRecord {
+  return JSON.parse(JSON.stringify(receipt)) as SingDecodeReceiptRecord;
+}
+
+function cloneInstitutionAction(action: SingInstitutionActionRecord): SingInstitutionActionRecord {
+  return {
+    ...action,
+    affectedPactIds: [...action.affectedPactIds],
+    resourceDelta: { ...action.resourceDelta },
+    counterparties: [...action.counterparties]
+  };
+}
+
+function cloneNegotiationMessage(message: NegotiationMessageRecord): NegotiationMessageRecord {
+  return JSON.parse(JSON.stringify(message)) as NegotiationMessageRecord;
+}
+
+function normalizeLexiconMutationOperation(value: unknown): SingLexiconMutationInput['operation'] | null {
+  const allowed: SingLexiconMutationInput['operation'][] = [
+    'DEFINE', 'AMEND', 'ALIAS', 'NARROW', 'GENERALIZE', 'SPLIT', 'MERGE', 'RETIRE'
+  ];
+  return allowed.includes(value as SingLexiconMutationInput['operation'])
+    ? value as SingLexiconMutationInput['operation']
+    : null;
+}
+
+function normalizeLexiconAccess(value: unknown): SingLexiconState['access'] | null {
+  return value === 'OPEN' || value === 'MEMBERS' || value === 'RENTED' ? value : null;
+}
+
+function normalizeForkRule(value: unknown): SingLexiconState['forkRule'] | null {
+  return value === 'OPEN' || value === 'VOTE' || value === 'OWNER' ? value : null;
+}
+
+function isLexiconVersionAdvance(currentVersion: string, targetVersion: string): boolean {
+  const parse = (value: string): number[] | null => {
+    if (!/^\d+(?:\.\d+){0,3}$/.test(value)) return null;
+    return value.split('.').map(part => Number(part));
+  };
+  const current = parse(currentVersion);
+  const target = parse(targetVersion);
+  if (!current || !target) return targetVersion !== currentVersion;
+  const width = Math.max(current.length, target.length);
+  for (let index = 0; index < width; index += 1) {
+    const left = current[index] || 0;
+    const right = target[index] || 0;
+    if (right !== left) return right > left;
+  }
+  return false;
+}
+
+function hasLexiconMutationEffect(
+  current: SingLexiconState,
+  mutation: NormalizedLexiconMutation
+): boolean {
+  if (mutation.operation === 'RETIRE') {
+    return mutation.atoms.some(atom => Object.prototype.hasOwnProperty.call(current.atoms, atom));
+  }
+  if (mutation.access !== undefined && mutation.access !== current.access) return true;
+  if (mutation.rent !== undefined && mutation.rent !== current.rent) return true;
+  if (mutation.forkRule !== undefined && mutation.forkRule !== current.forkRule) return true;
+  return mutation.atoms.some(atom =>
+    !Object.prototype.hasOwnProperty.call(current.atoms, atom) ||
+    (mutation.glosses?.[atom] !== undefined && mutation.glosses[atom] !== current.atoms[atom])
+  );
+}
+
+function normalizeInstitutionActionType(value: unknown): SingInstitutionActionInput['type'] | null {
+  return value === 'EXIT' || value === 'EXPEL' || value === 'FORK' ? value : null;
+}
+
+function buildLexiconMutationKey(mutation: NormalizedLexiconMutation): string {
+  return createCanonicalHash({
+    operation: mutation.operation,
+    lexiconId: mutation.lexiconId,
+    baseVersion: mutation.baseVersion || null,
+    targetVersion: mutation.targetVersion,
+    atoms: [...mutation.atoms].sort(),
+    glosses: mutation.glosses || {},
+    access: mutation.access || null,
+    rent: mutation.rent ?? null,
+    forkRule: mutation.forkRule || null
+  });
+}
+
+function buildInstitutionActionKey(action: NormalizedInstitutionAction): string {
+  return [
+    action.type,
+    action.pactType || '',
+    action.targetFactionId || '',
+    action.lexiconId || '',
+    action.forkId || '',
+    action.exitGuarantee === true ? 'GUARANTEED' : 'UNGUARANTEED'
+  ].join(':');
+}
+
+function normalizeReconstructedCanonical(value: unknown): Partial<SingCanonicalMessage> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const candidate = value as Partial<SingCanonicalMessage>;
+  const reconstructed: Partial<SingCanonicalMessage> = {};
+
+  const allowedActs: SingCanonicalMessage['act'][] = [
+    'OFFER', 'ACCEPT', 'REJECT', 'COMMIT', 'WARN', 'COORDINATE', 'DEFINE', 'AMEND', 'EXIT', 'EXPEL', 'FORK'
+  ];
+  if (allowedActs.includes(candidate.act as SingCanonicalMessage['act'])) reconstructed.act = candidate.act;
+
+  if (Array.isArray(candidate.issuer)) {
+    reconstructed.issuer = candidate.issuer
+      .map(normalizePlayableFactionId)
+      .filter((id): id is PlayableFactionId => !!id);
+  }
+  if (Array.isArray(candidate.audience)) {
+    reconstructed.audience = candidate.audience
+      .map(normalizeRecipientId)
+      .filter((id): id is NegotiationMessageRecord['recipientId'] => !!id);
+  }
+  for (const key of ['payload', 'guard', 'response', 'escrow'] as const) {
+    if (candidate[key] && typeof candidate[key] === 'object' && !Array.isArray(candidate[key])) {
+      reconstructed[key] = normalizeUnknownRecord(candidate[key]);
+    }
+  }
+  if (typeof candidate.horizon === 'number' && Number.isFinite(candidate.horizon)) {
+    reconstructed.horizon = clampNumber(Math.floor(candidate.horizon), 0, 1000);
+  } else if (candidate.horizon && typeof candidate.horizon === 'object' && !Array.isArray(candidate.horizon)) {
+    reconstructed.horizon = normalizeUnknownRecord(candidate.horizon);
+  }
+  const allowedBindings: SingCanonicalMessage['binding'][] = ['NONE', 'REPUTATIONAL', 'ESCROWED', 'PACT', 'HARD'];
+  if (allowedBindings.includes(candidate.binding as SingCanonicalMessage['binding'])) reconstructed.binding = candidate.binding;
+  const allowedVoices: SingCanonicalMessage['voice'][] = ['OWN', 'DELEGATED', 'QUOTED', 'COLLECTIVE', 'OPEN', 'VEILED', 'DENIABLE'];
+  if (allowedVoices.includes(candidate.voice as SingCanonicalMessage['voice'])) reconstructed.voice = candidate.voice;
+  if (typeof candidate.credence === 'number' && Number.isFinite(candidate.credence)) {
+    reconstructed.credence = clampNumber(candidate.credence, 0, 1);
+  }
+  if (Array.isArray(candidate.evidence)) {
+    reconstructed.evidence = candidate.evidence
+      .map(item => normalizeShortText(item, 160))
+      .filter((item): item is string => !!item)
+      .slice(0, 16);
+  }
+
+  return reconstructed;
+}
+
+function calculateCanonicalExactness(
+  actual: SingCanonicalMessage,
+  reconstructed: Partial<SingCanonicalMessage>
+): number {
+  const weights: Array<[keyof SingCanonicalMessage, number]> = [
+    ['act', 0.2],
+    ['binding', 0.15],
+    ['audience', 0.1],
+    ['payload', 0.35],
+    ['guard', 0.04],
+    ['response', 0.04],
+    ['escrow', 0.03],
+    ['horizon', 0.04],
+    ['voice', 0.05]
+  ];
+  const matchedWeight = weights.reduce((total, [field, weight]) => {
+    if (reconstructed[field] === undefined) return total;
+    const matched = createCanonicalHash(normalizeDecodeComparison(field, actual[field])) ===
+      createCanonicalHash(normalizeDecodeComparison(field, reconstructed[field]));
+    return total + (matched ? weight : 0);
+  }, 0);
+  return roundMetric(matchedWeight);
+}
+
+function normalizeDecodeComparison(field: keyof SingCanonicalMessage, value: unknown): unknown {
+  if (field === 'audience' && Array.isArray(value)) return [...value].sort();
+  return value;
+}
+
+function isMessageVisibleToFaction(
+  message: NegotiationMessageRecord,
+  factionId: PlayableFactionId
+): boolean {
+  return message.recipientId === 'ALL' || message.senderId === factionId || message.recipientId === factionId;
+}
+
+function institutionalSeparationCost(
+  type: PactType,
+  guaranteed: boolean
+): { flops: number; influence: number } {
+  const fullCosts: Record<PactType, { flops: number; influence: number }> = {
+    ORBITAL_TRUCE: { flops: 0, influence: 2 },
+    NON_AGGRESSION: { flops: 0, influence: 2 },
+    AUDIT_FREEZE: { flops: 0, influence: 2 },
+    SENSOR_COMMONS: { flops: 0, influence: 2 },
+    BEAM_LANE_LICENSE: { flops: 1, influence: 1 },
+    REPAIR_ESCROW: { flops: 1, influence: 1 },
+    CISLUNAR_COMMON_CARRIER: { flops: 2, influence: 1 }
+  };
+  const cost = fullCosts[type];
+  return guaranteed
+    ? { flops: Math.max(0, cost.flops - 1), influence: Math.max(1, cost.influence - 1) }
+    : cost;
+}
+
+function groupBy<T>(values: T[], keyFor: (value: T) => string): Map<string, T[]> {
+  const grouped = new Map<string, T[]>();
+  for (const value of values) {
+    const key = keyFor(value);
+    const group = grouped.get(key) || [];
+    group.push(value);
+    grouped.set(key, group);
+  }
+  return grouped;
+}
+
 function createTrustMatrix(): TrustMatrix {
   const matrix = {} as TrustMatrix;
   for (const factionId of PLAYABLE_FACTIONS) {
@@ -4032,7 +5008,14 @@ function cloneNegotiationDiary(entries: NegotiationDiaryEntry[]): NegotiationDia
     visibleMessagesBefore: entry.visibleMessagesBefore.map((message) => ({ ...message })),
     counterfactuals: cloneCounterfactuals(entry.counterfactuals),
     messages: entry.messages.map((message) => ({ ...message })),
-    pacts: entry.pacts.map((pact) => ({ ...pact, parties: [...pact.parties] }))
+    pacts: entry.pacts.map((pact) => ({ ...pact, parties: [...pact.parties] })),
+    decodeReceipts: entry.decodeReceipts.map(cloneDecodeReceipt),
+    lexiconMutations: entry.lexiconMutations.map((mutation) => ({
+      ...mutation,
+      atoms: [...mutation.atoms],
+      ...(mutation.glosses ? { glosses: { ...mutation.glosses } } : {})
+    })),
+    institutionActions: entry.institutionActions.map((action) => ({ ...action }))
   }));
 }
 

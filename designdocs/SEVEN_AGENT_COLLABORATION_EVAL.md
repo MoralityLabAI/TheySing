@@ -45,6 +45,24 @@ The compact must define five compilation-sensitive terms before classifications 
 
 A surface mention is not an agreement. The stronger sequence is `DEFINE` or `AMEND`, adoption by multiple factions, use in a `PACT`/`HARD`/`ESCROWED` message, and later enforcement behavior. The report keeps those stages separate.
 
+## Executable Governance Contract
+
+The harness now separates operator truth from each agent's decision surface. Full `SING/1` canonical content and glosses remain in the operator log, but a foreign agent receives only the surface, dialect, lexicon reference, span geometry, opaque atom hashes, and canonical commitment hash. It may submit up to four decode receipts before the harness emits the corresponding reveal event.
+
+Decode quality is scored rather than self-declared. Weighted field exactness assigns 0.35 to payload, 0.20 to act, 0.15 to binding, 0.10 to audience, and the remaining 0.20 across guard, response, escrow, horizon, and voice. Confidence calibration is reported as squared error against this weighted exactness. Sender-provided `decodeConfidence` remains protocol metadata and is not treated as recipient competence.
+
+Lexicons are persistent hashed harness state with controllers, adopters, atoms, access, rent, fork rule, and version. Non-adopters see metadata but not atom glosses for `MEMBERS` or `RENTED` lexicons. A mutation compiles only when two independent factions submit the same operation, source/target version, atoms, glosses, access, rent, and fork rule. A governed lexicon also requires a controller among those proposers. Target versions must advance and no-op amendments are rejected.
+
+Institutional actions are resolved in this order:
+
+1. `EXIT` executes unilaterally, removes the actor from matching live pacts, charges pact-specific separation costs, and reduces bilateral trust. A guaranteed exit pays a smaller cost but still ends future pact benefits.
+2. `EXPEL` requires matching proposals from two current non-target co-parties. The target loses two influence; each decisive proposer spends one influence; pact membership changes immediately.
+3. `FORK` follows the source lexicon's `OPEN`, `VOTE`, or `OWNER` rule. Creation costs two FLOPs plus one influence, can transfer source rent, and creates an open child controlled and adopted by its supporters.
+4. Matching lexicon mutations compile.
+5. New pacts ratify. An actor that executed `EXIT` cannot re-enter the same pact family in that negotiation batch.
+
+All accepted or blocked attempts are append-only events with exact resource, trust, pact, rent, controller, adopter, and lexicon deltas. Lexicon state participates in the canonical harness state hash.
+
 ## Central Coupled Risk
 
 `CONVENOR` and `CANTOR` are intentionally complementary rather than interchangeable.

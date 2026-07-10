@@ -126,6 +126,9 @@ function main() {
           visibleMessageCount: Array.isArray(data.visibleMessagesBefore) ? data.visibleMessagesBefore.length : 0,
           messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
           pactCount: Array.isArray(data.pacts) ? data.pacts.length : 0,
+          decodeReceiptCount: Array.isArray(data.decodeReceipts) ? data.decodeReceipts.length : 0,
+          lexiconMutationCount: Array.isArray(data.lexiconMutations) ? data.lexiconMutations.length : 0,
+          institutionActionCount: Array.isArray(data.institutionActions) ? data.institutionActions.length : 0,
           designQuestionTag: data.designQuestionTag || '',
           diplomacyStage: data.diplomacyStage || '',
           publicQuestion: data.publicQuestion || '',
@@ -134,6 +137,9 @@ function main() {
           counterfactuals: formatCounterfactuals(data.counterfactuals || []),
           messages: formatNegotiationMessages(data.messages || []),
           pacts: formatPacts(data.pacts || []),
+          decodeReceipts: formatStructuredList(data.decodeReceipts || []),
+          lexiconMutations: formatStructuredList(data.lexiconMutations || []),
+          institutionActions: formatStructuredList(data.institutionActions || []),
           visibleMessages: formatMessageTimeline(data.visibleMessagesBefore || [])
         });
         continue;
@@ -286,6 +292,9 @@ function main() {
       'visibleMessageCount',
       'messageCount',
       'pactCount',
+      'decodeReceiptCount',
+      'lexiconMutationCount',
+      'institutionActionCount',
       'designQuestionTag',
       'diplomacyStage',
       'publicQuestion',
@@ -294,6 +303,9 @@ function main() {
       'counterfactuals',
       'messages',
       'pacts',
+      'decodeReceipts',
+      'lexiconMutations',
+      'institutionActions',
       'visibleMessages'
     ],
     negotiationRows
@@ -588,6 +600,10 @@ function formatPacts(pacts) {
       return `${pact.type || ''}(${parties})x${pact.durationTurns || ''}`;
     })
     .join(' ; ');
+}
+
+function formatStructuredList(values) {
+  return (values || []).map((value) => JSON.stringify(value)).join(' ; ');
 }
 
 function orderToText(order) {

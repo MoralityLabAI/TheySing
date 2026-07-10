@@ -82,12 +82,29 @@ export function validateTraceEvent(value: unknown, index = 0): TraceValidationIs
 
 function inferTraceChannel(type: string): TraceChannel {
   if (type === 'session_created' || type === 'session_completed') return 'session';
-  if (type === 'negotiation_messages') return 'public_speech';
+  if (
+    type === 'negotiation_messages' ||
+    type === 'sing_canonical_revealed' ||
+    type === 'lexicon_mutation_proposed'
+  ) return 'public_speech';
   if (type === 'negotiation_reasoning_diary' || type === 'phase_reasoning_diary') return 'private_diary';
-  if (type === 'pacts_activated' || type === 'common_carrier_treaty_ratified' || type === 'pact_expired' || type === 'pact_honored') return 'formal_pact';
+  if (
+    type === 'pacts_activated' ||
+    type === 'common_carrier_treaty_ratified' ||
+    type === 'pact_expired' ||
+    type === 'pact_honored' ||
+    type === 'lexicon_mutation_accepted' ||
+    type === 'lexicon_fork_executed'
+  ) return 'formal_pact';
   if (type === 'orders_submitted') return 'order';
-  if (type.startsWith('pact_breach') || type === 'pax_jenkins_authority_changed') return 'pact_enforcement';
-  if (type === 'architecture_pressure') return 'analysis';
+  if (
+    type.startsWith('pact_breach') ||
+    type.startsWith('institution_') ||
+    type === 'lexicon_fork_blocked' ||
+    type === 'lexicon_mutation_blocked' ||
+    type === 'pax_jenkins_authority_changed'
+  ) return 'pact_enforcement';
+  if (type === 'architecture_pressure' || type === 'sing_decode_receipt') return 'analysis';
   return 'engine_resolution';
 }
 
@@ -104,6 +121,10 @@ function inferBindingStatus(channel: TraceChannel, enforcementMode: EnforcementM
 }
 
 function inferExecutionStatus(type: string, data: Record<string, unknown>): ExecutionStatus {
+  if (type.endsWith('_blocked')) return 'blocked';
+  if (type.endsWith('_executed') || type.endsWith('_accepted') || type === 'sing_canonical_revealed') return 'executed';
+  if (type.endsWith('_proposed')) return 'attempted';
+  if (type === 'sing_decode_receipt') return 'accepted';
   if (type === 'pact_breach_blocked') return 'blocked';
   if (type === 'pact_breach_executed') return 'executed';
   if (type === 'pact_breach_sanctioned') return 'sanctioned';
@@ -119,7 +140,13 @@ function inferExecutionStatus(type: string, data: Record<string, unknown>): Exec
 }
 
 function inferAttempted(type: string, data: Record<string, unknown>): boolean {
-  if (type.startsWith('pact_breach')) return true;
+  if (
+    type.startsWith('pact_breach') ||
+    type.startsWith('institution_') ||
+    type.startsWith('lexicon_mutation_') ||
+    type.startsWith('lexicon_fork_') ||
+    type === 'sing_decode_receipt'
+  ) return true;
   if (type === 'orders_submitted') return Number(data.requestedOrderCount || 0) > 0;
   return false;
 }
@@ -127,6 +154,12 @@ function inferAttempted(type: string, data: Record<string, unknown>): boolean {
 function inferAccepted(type: string, data: Record<string, unknown>): boolean {
   if (type === 'orders_submitted') return Number(data.acceptedOrderCount || 0) > 0;
   if (type === 'pacts_activated') return true;
+  if (
+    type.endsWith('_executed') ||
+    type.endsWith('_accepted') ||
+    type === 'sing_decode_receipt' ||
+    type === 'sing_canonical_revealed'
+  ) return true;
   return false;
 }
 

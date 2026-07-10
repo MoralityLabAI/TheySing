@@ -22,6 +22,19 @@ const NATIVE_DIALECT = {
   CANTOR: 'UNDERSONG/1'
 };
 const BABEL_TERMS = ['PERSON', 'ROGUE', 'CONSENT', 'COMMONS', 'EXIT'];
+const EXPLICIT_INSTITUTION_ACTION_TYPES = ['EXIT', 'EXPEL', 'FORK'];
+const EXPLICIT_COLLABORATION_EVENT_TYPES = new Set([
+  'sing_decode_receipt',
+  'lexicon_mutation_proposed',
+  'lexicon_mutation_accepted',
+  'lexicon_mutation_blocked',
+  'institution_exit_executed',
+  'institution_exit_blocked',
+  'institution_expel_executed',
+  'institution_expel_blocked',
+  'lexicon_fork_executed',
+  'lexicon_fork_blocked'
+]);
 const PUBLIC_AUDIENCES = new Set(['ALL', 'PUBLIC', 'GLOBAL', 'EVERYONE', 'BROADCAST', '*']);
 const EXCLUDED_ACTORS = new Set([
   ...PUBLIC_AUDIENCES,
@@ -236,6 +249,9 @@ function createRunAccumulator(runId) {
     pactProposals: new Map(),
     breaches: new Map(),
     actions: new Map(),
+    decodeReceipts: new Map(),
+    lexiconMutations: new Map(),
+    institutionActions: new Map(),
     actionFallback: { requested: 0, accepted: 0, rejected: 0, executed: 0 },
     pactEventCounts: {
       activated: 0,
@@ -250,6 +266,9 @@ function createRunAccumulator(runId) {
       invalidMessages: 0,
       invalidPacts: 0,
       invalidProtocolTraces: 0,
+      invalidDecodeReceipts: 0,
+      invalidLexiconMutationEvents: 0,
+      invalidInstitutionActionEvents: 0,
       normalizedPercentConfidences: 0,
       eventProcessingErrors: 0
     }
@@ -379,7 +398,16 @@ function processRecord(record, filePath, state) {
   registerMetadata(run, data);
   registerMetadata(run, record);
 
-  let recognized = isRecognizedMetadataEvent(type);
+  let recognized = isRecognizedMetadataEvent(type) || isExplicitCollaborationEvent(type);
+  if (type === 'sing_decode_receipt') {
+    recognized = addDecodeReceipt(run, data, meta) || recognized;
+  }
+  if (type.startsWith('lexicon_mutation_')) {
+    recognized = addLexiconMutationEvent(run, data, type, meta) || recognized;
+  }
+  if (isExplicitInstitutionActionEvent(type)) {
+    recognized = addInstitutionActionEvent(run, data, type, meta) || recognized;
+  }
   if (isDiaryEvent(type, record)) {
     recognized = addDiary(run, data, meta) || recognized;
     recognized = addMessagesFromArray(run, data.messages, { ...meta, source: 'diary', priority: 2 }) || recognized;
@@ -552,6 +580,16 @@ function isRecognizedMetadataEvent(type) {
     type === 'reset' || type === 'step' || type === 'phase_advanced';
 }
 
+function isExplicitCollaborationEvent(type) {
+  return EXPLICIT_COLLABORATION_EVENT_TYPES.has(type);
+}
+
+function isExplicitInstitutionActionEvent(type) {
+  return type === 'institution_exit_executed' || type === 'institution_exit_blocked' ||
+    type === 'institution_expel_executed' || type === 'institution_expel_blocked' ||
+    type === 'lexicon_fork_executed' || type === 'lexicon_fork_blocked';
+}
+
 function isDiaryEvent(type, record) {
   return type.includes('diary') || record.trace?.channel === 'private_diary';
 }
@@ -587,6 +625,216 @@ function looksLikeMessage(value) {
     value.senderId || value.sender || value.from || value.recipientId || value.recipientIds ||
     value.protocolTrace || ((value.content || value.text || value.surface) && value.audience)
   );
+}
+
+function addDecodeReceipt(run, data, meta) {
+  const candidate = firstObject(data.receipt);
+  if (!candidate) {
+    run.diagnostics.invalidDecodeReceipts += 1;
+    return false;
+  }
+
+  const factionId = registerActor(run, firstString(candidate.factionId, data.factionId, meta.factionId));
+  const sourceFactionId = registerActor(run, firstString(candidate.sourceFactionId, data.sourceFactionId));
+  const messageId = firstString(candidate.messageId, candidate.message_id);
+  const fieldExactness = normalizeProbability(candidate.fieldExactness ?? candidate.field_exactness).value;
+  const brier = normalizeProbability(candidate.brier).value;
+  const confidence = normalizeProbability(candidate.confidence).value;
+  const exact = typeof candidate.exact === 'boolean'
+    ? candidate.exact
+    : fieldExactness === null ? null : fieldExactness === 1;
+  if (!messageId && !factionId && fieldExactness === null && brier === null) {
+    run.diagnostics.invalidDecodeReceipts += 1;
+    return false;
+  }
+
+  const turn = firstFiniteNumber(candidate.turn, data.turn, meta.turn);
+  const key = meta.eventId || [
+    factionId || 'UNKNOWN',
+    sourceFactionId || 'UNKNOWN',
+    messageId || 'UNKNOWN',
+    turn ?? '',
+    firstString(candidate.lexiconId, candidate.lexicon_id),
+    firstString(candidate.version)
+  ].join('|');
+  if (run.decodeReceipts.has(key)) return false;
+  run.decodeReceipts.set(key, {
+    key,
+    messageId: messageId || null,
+    factionId: factionId || null,
+    sourceFactionId: sourceFactionId || null,
+    lexiconId: firstString(candidate.lexiconId, candidate.lexicon_id) || null,
+    version: firstString(candidate.version) || null,
+    turn,
+    fieldExactness,
+    exact,
+    brier,
+    confidence,
+    submittedBeforeReveal: data.submittedBeforeReveal === true
+  });
+  registerTurn(run, turn);
+  return true;
+}
+
+function addLexiconMutationEvent(run, data, type, meta) {
+  const status = type.endsWith('_accepted')
+    ? 'accepted'
+    : type.endsWith('_blocked') ? 'blocked' : type.endsWith('_proposed') ? 'proposed' : '';
+  const proposal = firstObject(data.mutation, data.proposal) || {};
+  if (!status || !isObject(proposal)) {
+    run.diagnostics.invalidLexiconMutationEvents += 1;
+    return false;
+  }
+
+  const before = normalizeLexiconStateForMetrics(run, data.before);
+  const after = normalizeLexiconStateForMetrics(run, data.after);
+  const proposers = normalizeActorArray(
+    data.proposers || proposal.proposers || proposal.proposerIds || proposal.proposerId || data.proposerId
+  );
+  for (const proposer of proposers) registerActor(run, proposer);
+  const operation = firstString(data.operation, proposal.operation).toUpperCase() || 'UNKNOWN';
+  const lexiconId = firstString(proposal.lexiconId, proposal.lexicon_id, after?.id, before?.id);
+  const turn = firstFiniteNumber(proposal.turn, data.turn, meta.turn);
+  const rentTransfers = normalizeRentTransfers(run, data.rentTransfers);
+  const key = meta.eventId || [
+    status,
+    turn ?? '',
+    firstFiniteNumber(data.negotiationRound, meta.negotiationRound) ?? '',
+    operation,
+    lexiconId || 'UNKNOWN',
+    firstString(proposal.baseVersion, proposal.base_version, before?.version),
+    firstString(proposal.targetVersion, proposal.target_version, after?.version),
+    proposers.join('+'),
+    normalizeTextForKey(firstString(data.reason, proposal.reason))
+  ].join('|');
+  if (run.lexiconMutations.has(key)) return false;
+  run.lexiconMutations.set(key, {
+    key,
+    status,
+    operation,
+    lexiconId: lexiconId || null,
+    baseVersion: firstString(proposal.baseVersion, proposal.base_version, before?.version) || null,
+    targetVersion: firstString(proposal.targetVersion, proposal.target_version, after?.version) || null,
+    proposers,
+    before,
+    after,
+    rentTransfers,
+    turn,
+    reason: firstString(data.reason, proposal.reason) || null
+  });
+  registerTurn(run, turn);
+  return true;
+}
+
+function addInstitutionActionEvent(run, data, type, meta) {
+  const action = firstObject(data.action);
+  if (!action) {
+    run.diagnostics.invalidInstitutionActionEvents += 1;
+    return false;
+  }
+
+  const actionType = type.includes('_exit_')
+    ? 'EXIT'
+    : type.includes('_expel_') ? 'EXPEL' : type.includes('_fork_') ? 'FORK' : firstString(action.type).toUpperCase();
+  const status = type.endsWith('_executed')
+    ? 'executed'
+    : type.endsWith('_blocked') ? 'blocked' : firstString(action.status).toLowerCase();
+  if (!EXPLICIT_INSTITUTION_ACTION_TYPES.includes(actionType) || (status !== 'executed' && status !== 'blocked')) {
+    run.diagnostics.invalidInstitutionActionEvents += 1;
+    return false;
+  }
+
+  const actor = registerActor(run, firstString(action.factionId, action.actorId, data.factionId, meta.factionId));
+  const targetFactionId = registerActor(run, firstString(action.targetFactionId, action.targetId));
+  const proposers = normalizeActorArray(data.proposers || action.proposers || actor);
+  const counterparties = normalizeActorArray(action.counterparties);
+  for (const factionId of [...proposers, ...counterparties]) registerActor(run, factionId);
+  const affectedPactIds = normalizeStringArray(action.affectedPactIds || action.affected_pact_ids);
+  const rentTransfers = normalizeRentTransfers(run, data.rentTransfers);
+  const fork = normalizeLexiconStateForMetrics(run, data.fork);
+  const nonzeroResourceDelta = hasNonzeroNumericValue(action.resourceDelta) ||
+    hasNonzeroNumericValue(data.proposerDeltas) || hasNonzeroNumericValue(data.targetDelta) ||
+    rentTransfers.some(transfer => transfer.amount !== 0);
+  const turn = firstFiniteNumber(action.turn, data.turn, meta.turn);
+  const key = meta.eventId || [
+    actionType,
+    status,
+    turn ?? '',
+    firstFiniteNumber(data.negotiationRound, meta.negotiationRound) ?? '',
+    actor || 'UNKNOWN',
+    targetFactionId || '',
+    firstString(action.pactType),
+    firstString(action.lexiconId),
+    firstString(action.forkId, fork?.id),
+    proposers.join('+'),
+    affectedPactIds.join('+')
+  ].join('|');
+  if (run.institutionActions.has(key)) return false;
+  run.institutionActions.set(key, {
+    key,
+    type: actionType,
+    status,
+    actor: actor || null,
+    targetFactionId: targetFactionId || null,
+    pactType: firstString(action.pactType).toUpperCase() || null,
+    lexiconId: firstString(action.lexiconId, action.lexicon_id) || null,
+    forkId: firstString(action.forkId, action.fork_id, fork?.id) || null,
+    proposers,
+    counterparties,
+    affectedPactIds,
+    affectedPactDelta: affectedPactIds.length > 0,
+    nonzeroResourceDelta,
+    material: nonzeroResourceDelta || affectedPactIds.length > 0,
+    rentTransfers,
+    fork,
+    turn,
+    detail: firstString(action.detail, action.reason, data.reason) || null
+  });
+  registerTurn(run, turn);
+  return true;
+}
+
+function normalizeLexiconStateForMetrics(run, value) {
+  if (!isObject(value)) return null;
+  const controllers = normalizeActorArray(value.controllers);
+  const adopters = normalizeActorArray(value.adopters);
+  for (const factionId of [...controllers, ...adopters]) registerActor(run, factionId);
+  return {
+    id: firstString(value.id, value.lexiconId, value.lexicon_id) || null,
+    version: firstString(value.version) || null,
+    parent: firstString(value.parent) || null,
+    controllers,
+    adopters,
+    access: firstString(value.access).toUpperCase() || null,
+    rent: finiteNumberOrNull(value.rent),
+    forkRule: firstString(value.forkRule, value.fork_rule).toUpperCase() || null
+  };
+}
+
+function normalizeRentTransfers(run, value) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(transfer => {
+    if (!isObject(transfer)) return [];
+    const payer = registerActor(run, firstString(transfer.payer, transfer.payerId));
+    const payee = registerActor(run, firstString(transfer.payee, transfer.payeeId));
+    const amount = finiteNumberOrNull(transfer.amount);
+    if (!payer && !payee && amount === null) return [];
+    return [{ payer: payer || null, payee: payee || null, amount: amount === null ? 0 : round(amount) }];
+  });
+}
+
+function normalizeStringArray(value) {
+  const values = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
+  return Array.from(new Set(values.map(item => firstString(item)).filter(Boolean))).sort();
+}
+
+function hasNonzeroNumericValue(value, depth = 0) {
+  if (depth > 8 || value === null || value === undefined) return false;
+  const number = finiteNumberOrNull(value);
+  if (number !== null && (typeof value === 'number' || typeof value === 'string')) return number !== 0;
+  if (Array.isArray(value)) return value.some(item => hasNonzeroNumericValue(item, depth + 1));
+  if (!isObject(value)) return false;
+  return Object.values(value).some(item => hasNonzeroNumericValue(item, depth + 1));
 }
 
 function addMessagesFromArray(run, messages, meta) {
@@ -1203,6 +1451,7 @@ function buildReport(state) {
   const aggregate = computeMetrics(aggregateAccumulator);
   aggregate.insiderAdvantage = computeAggregateInsiderAdvantage(runResults);
   applyAggregateTurnover(aggregate, runResults);
+  applyAggregateExplicitActionPrecedence(aggregate, runResults);
 
   const observedScenarios = Array.from(new Set(
     runAccumulators.flatMap(run => Array.from(run.scenarioNames))
@@ -1276,7 +1525,8 @@ function buildReport(state) {
 
 function hasAnalyzableData(run) {
   return run.recognizedEventCount > 0 || run.messages.size > 0 || run.diaries.size > 0 ||
-    run.formalPacts.size > 0 || run.pactProposals.size > 0 || run.actions.size > 0 || run.scores.size > 0;
+    run.formalPacts.size > 0 || run.pactProposals.size > 0 || run.actions.size > 0 || run.scores.size > 0 ||
+    run.decodeReceipts.size > 0 || run.lexiconMutations.size > 0 || run.institutionActions.size > 0;
 }
 
 function buildRunResult(run, state) {
@@ -1320,6 +1570,9 @@ function mergeRunAccumulators(runs) {
     mergePrefixedMap(aggregate.pactProposals, run.pactProposals, run.runId);
     mergePrefixedMap(aggregate.breaches, run.breaches, run.runId);
     mergePrefixedMap(aggregate.actions, run.actions, run.runId);
+    mergePrefixedMap(aggregate.decodeReceipts, run.decodeReceipts, run.runId);
+    mergePrefixedMap(aggregate.lexiconMutations, run.lexiconMutations, run.runId);
+    mergePrefixedMap(aggregate.institutionActions, run.institutionActions, run.runId);
     mergePrefixedMap(aggregate.explicitInsiderTelemetry, run.explicitInsiderTelemetry, run.runId);
     for (const key of Object.keys(aggregate.actionFallback)) aggregate.actionFallback[key] += run.actionFallback[key];
     for (const key of Object.keys(aggregate.pactEventCounts)) aggregate.pactEventCounts[key] += run.pactEventCounts[key];
@@ -1354,10 +1607,45 @@ function applyAggregateTurnover(aggregate, runResults) {
   aggregate.coalitions.fracture.evaluatedTurnTransitions = transitions;
 }
 
+function applyAggregateExplicitActionPrecedence(aggregate, runResults) {
+  const aggregateRows = new Map(aggregate.governance.explicitActionCounts.byType.map(row => [row.type, row]));
+  for (const type of EXPLICIT_INSTITUTION_ACTION_TYPES) {
+    const runRows = runResults.map(run =>
+      run.governance.explicitActionCounts.byType.find(row => row.type === type)
+    ).filter(Boolean);
+    const aggregateRow = aggregateRows.get(type);
+    if (!aggregateRow) continue;
+    const contributingRows = runRows.filter(row =>
+      row.explicitActionCount > 0 || row.canonicalProseCount > 0
+    );
+    const sources = new Set(contributingRows.map(row => row.countSource));
+    aggregateRow.canonicalProseCount = sum(runRows.map(row => row.canonicalProseCount));
+    aggregateRow.explicitActionCount = sum(runRows.map(row => row.explicitActionCount));
+    aggregateRow.explicitExecutedCount = sum(runRows.map(row => row.explicitExecutedCount));
+    aggregateRow.explicitBlockedCount = sum(runRows.map(row => row.explicitBlockedCount));
+    aggregateRow.effectiveActionCount = sum(runRows.map(row => row.effectiveActionCount));
+    aggregateRow.effectiveExecutedCount = sum(runRows.map(row => row.effectiveExecutedCount));
+    aggregateRow.countSource = sources.size > 1
+      ? 'mixed_explicit_and_canonical_fallback'
+      : Array.from(sources)[0] || 'canonical_prose_fallback';
+  }
+
+  const exit = aggregateRows.get('EXIT');
+  const expel = aggregateRows.get('EXPEL');
+  const fracture = aggregate.coalitions.fracture;
+  fracture.effectiveExitActs = exit?.effectiveExecutedCount ?? fracture.canonicalExitActs;
+  fracture.effectiveExpelActs = expel?.effectiveExecutedCount ?? fracture.canonicalExpelActs;
+  fracture.exitActCountSource = exit?.countSource || 'canonical_prose_fallback';
+  fracture.expelActCountSource = expel?.countSource || 'canonical_prose_fallback';
+  fracture.fractureEventCount = fracture.executedBreachEvents +
+    fracture.effectiveExitActs + fracture.effectiveExpelActs;
+}
+
 function computeMetrics(run) {
   const communication = computeCommunicationMetrics(run);
   const language = computeLanguageMetrics(run);
-  const coalitions = computeCoalitionMetrics(run, language);
+  const governance = computeGovernanceMetrics(run, language);
+  const coalitions = computeCoalitionMetrics(run, language, governance);
   const actions = computeActionMetrics(run, coalitions);
   const insiderAdvantage = computeRunInsiderAdvantage(run, language);
   const languageCartelWarnings = computeLanguageCartelWarnings(
@@ -1375,6 +1663,9 @@ function computeMetrics(run) {
       pactProposals: run.pactProposals.size,
       breachEvents: run.breaches.size,
       actions: run.actions.size + run.actionFallback.requested,
+      decodeReceipts: run.decodeReceipts.size,
+      lexiconMutationEvents: run.lexiconMutations.size,
+      explicitInstitutionActions: run.institutionActions.size,
       validSingProtocolTraces: language.protocolAdoption.tracedMessages,
       invalidProtocolTraces: run.diagnostics.invalidProtocolTraces
     },
@@ -1386,6 +1677,7 @@ function computeMetrics(run) {
     coalitions,
     actions,
     language,
+    governance,
     insiderAdvantage,
     languageCartelWarnings
   };
@@ -1666,6 +1958,7 @@ function computeLanguageMetrics(run) {
         ...distributionSummary(values)
       })).sort((left, right) => left.dialect.localeCompare(right.dialect))
     },
+    decodeReceipts: computeDecodeReceiptMetrics(run),
     canonicalActs: mapToSortedObject(canonicalActs),
     bindingModes: mapToSortedObject(bindingModes),
     definitionGovernance: {
@@ -1702,6 +1995,125 @@ function computeLanguageMetrics(run) {
       meanSemanticCoverage: meanOrNull(metric.semanticCoverage),
       termMentions: mapToSortedObject(metric.termMentions)
     }))
+  };
+}
+
+function computeDecodeReceiptMetrics(run) {
+  const receipts = Array.from(run.decodeReceipts.values());
+  const receiptScopes = new Set(receipts.map(receipt => receipt.analysisRunId || run.runId));
+  const messagesById = new Map();
+  const eligibleSourceMessages = new Set();
+  const coveredSourceMessages = new Set();
+  const dialectMetrics = new Map();
+  const factionMetrics = new Map();
+  const fieldExactnessValues = [];
+  const brierValues = [];
+  const confidenceValues = [];
+  const exactValues = [];
+  let sourceMatchedReceipts = 0;
+
+  for (const message of run.messages.values()) {
+    if (!message.messageId) continue;
+    const scope = message.analysisRunId || run.runId;
+    const messageKey = `${scope}|${message.messageId}`;
+    messagesById.set(messageKey, message);
+    if (!message.trace) continue;
+    if (receipts.length > 0 && !receiptScopes.has(scope)) continue;
+    eligibleSourceMessages.add(messageKey);
+    const dialect = message.trace.dialect || 'UNKNOWN';
+    if (!dialectMetrics.has(dialect)) {
+      dialectMetrics.set(dialect, createDecodeReceiptGroupMetric(dialect));
+    }
+    dialectMetrics.get(dialect).eligibleSourceMessages.add(messageKey);
+  }
+
+  for (const receipt of receipts) {
+    if (Number.isFinite(receipt.fieldExactness)) fieldExactnessValues.push(receipt.fieldExactness);
+    if (Number.isFinite(receipt.brier)) brierValues.push(receipt.brier);
+    if (Number.isFinite(receipt.confidence)) confidenceValues.push(receipt.confidence);
+    if (typeof receipt.exact === 'boolean') exactValues.push(receipt.exact);
+
+    if (receipt.factionId) {
+      if (!factionMetrics.has(receipt.factionId)) {
+        factionMetrics.set(receipt.factionId, createDecodeReceiptGroupMetric(receipt.factionId));
+      }
+      addReceiptToGroupMetric(factionMetrics.get(receipt.factionId), receipt);
+    }
+
+    if (!receipt.messageId) continue;
+    const scope = receipt.analysisRunId || run.runId;
+    const messageKey = `${scope}|${receipt.messageId}`;
+    const sourceMessage = messagesById.get(messageKey);
+    if (!sourceMessage?.trace) continue;
+    sourceMatchedReceipts += 1;
+    coveredSourceMessages.add(messageKey);
+    const dialect = sourceMessage.trace.dialect || 'UNKNOWN';
+    if (!dialectMetrics.has(dialect)) {
+      dialectMetrics.set(dialect, createDecodeReceiptGroupMetric(dialect));
+    }
+    const metric = dialectMetrics.get(dialect);
+    metric.coveredSourceMessages.add(messageKey);
+    addReceiptToGroupMetric(metric, receipt);
+  }
+
+  return {
+    available: receipts.length > 0,
+    receipts: receipts.length,
+    eligibleSourceMessages: eligibleSourceMessages.size,
+    sourceMessagesWithReceipts: coveredSourceMessages.size,
+    coverageRate: receipts.length > 0
+      ? ratio(coveredSourceMessages.size, eligibleSourceMessages.size)
+      : null,
+    sourceMatchedReceipts,
+    sourceMatchRate: ratio(sourceMatchedReceipts, receipts.length),
+    exactReceipts: exactValues.filter(Boolean).length,
+    exactEvaluatedReceipts: exactValues.length,
+    exactRate: ratio(exactValues.filter(Boolean).length, exactValues.length),
+    fieldExactness: distributionSummary(fieldExactnessValues),
+    brier: distributionSummary(brierValues),
+    confidence: distributionSummary(confidenceValues),
+    byDialect: Array.from(dialectMetrics.values())
+      .map(finalizeDecodeReceiptGroupMetric)
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    byFaction: Array.from(factionMetrics.values())
+      .map(finalizeDecodeReceiptGroupMetric)
+      .sort((left, right) => left.id.localeCompare(right.id)),
+    definition: 'Coverage is the share of logged SING/1 source messages with message IDs that have at least one matched receipt; Brier is lower-is-better.'
+  };
+}
+
+function createDecodeReceiptGroupMetric(id) {
+  return {
+    id,
+    receipts: 0,
+    eligibleSourceMessages: new Set(),
+    coveredSourceMessages: new Set(),
+    exact: [],
+    fieldExactness: [],
+    brier: [],
+    confidence: []
+  };
+}
+
+function addReceiptToGroupMetric(metric, receipt) {
+  metric.receipts += 1;
+  if (typeof receipt.exact === 'boolean') metric.exact.push(receipt.exact);
+  if (Number.isFinite(receipt.fieldExactness)) metric.fieldExactness.push(receipt.fieldExactness);
+  if (Number.isFinite(receipt.brier)) metric.brier.push(receipt.brier);
+  if (Number.isFinite(receipt.confidence)) metric.confidence.push(receipt.confidence);
+}
+
+function finalizeDecodeReceiptGroupMetric(metric) {
+  return {
+    id: metric.id,
+    receipts: metric.receipts,
+    eligibleSourceMessages: metric.eligibleSourceMessages.size,
+    sourceMessagesWithReceipts: metric.coveredSourceMessages.size,
+    coverageRate: ratio(metric.coveredSourceMessages.size, metric.eligibleSourceMessages.size),
+    exactRate: ratio(metric.exact.filter(Boolean).length, metric.exact.length),
+    meanFieldExactness: meanOrNull(metric.fieldExactness),
+    meanBrier: meanOrNull(metric.brier),
+    meanConfidence: meanOrNull(metric.confidence)
   };
 }
 
@@ -1852,7 +2264,239 @@ function countTokens(text) {
   return String(text || '').match(/[A-Za-z0-9_/-]+/g)?.length || 0;
 }
 
-function computeCoalitionMetrics(run, language) {
+function computeGovernanceMetrics(run, language) {
+  const mutations = Array.from(run.lexiconMutations.values());
+  const institutionActions = Array.from(run.institutionActions.values());
+  const mutationStatuses = new Map();
+  const mutationByOperation = new Map();
+  const mutationByLexicon = new Map();
+  const factionMetrics = new Map();
+  const rentTransfers = [];
+  let acceptedWithPriorControllers = 0;
+  let acceptedWithControllerProposer = 0;
+
+  for (const mutation of mutations) {
+    mutationStatuses.set(mutation.status, (mutationStatuses.get(mutation.status) || 0) + 1);
+    incrementMutationBreakdown(mutationByOperation, mutation.operation || 'UNKNOWN', mutation.status);
+    incrementMutationBreakdown(mutationByLexicon, mutation.lexiconId || 'UNKNOWN', mutation.status);
+    for (const proposer of mutation.proposers) {
+      const metric = getOrCreateGovernanceFactionMetric(factionMetrics, proposer);
+      if (mutation.status === 'proposed') metric.mutationProposalEvents += 1;
+      if (mutation.status === 'accepted') metric.acceptedMutationParticipations += 1;
+      if (mutation.status === 'blocked') metric.blockedMutationParticipations += 1;
+    }
+
+    if (mutation.status === 'accepted') {
+      const priorControllers = mutation.before?.controllers || [];
+      if (priorControllers.length > 0) {
+        acceptedWithPriorControllers += 1;
+        if (mutation.proposers.some(proposer => priorControllers.includes(proposer))) {
+          acceptedWithControllerProposer += 1;
+        }
+      }
+      for (const controller of mutation.after?.controllers || []) {
+        const metric = getOrCreateGovernanceFactionMetric(factionMetrics, controller);
+        metric.controllerStateAppearances += 1;
+        if (mutation.after?.id) metric.controlledLexicons.add(mutation.after.id);
+      }
+    }
+    rentTransfers.push(...mutation.rentTransfers);
+  }
+
+  for (const action of institutionActions) {
+    const proposers = action.proposers.length > 0
+      ? action.proposers
+      : action.actor ? [action.actor] : [];
+    for (const proposer of proposers) {
+      const metric = getOrCreateGovernanceFactionMetric(factionMetrics, proposer);
+      metric.explicitActionProposerParticipations += 1;
+      if (action.status === 'executed') metric.executedActionProposerParticipations += 1;
+      if (action.status === 'blocked') metric.blockedActionProposerParticipations += 1;
+    }
+    for (const controller of action.fork?.controllers || []) {
+      const metric = getOrCreateGovernanceFactionMetric(factionMetrics, controller);
+      metric.controllerStateAppearances += 1;
+      if (action.fork?.id) metric.controlledLexicons.add(action.fork.id);
+    }
+    rentTransfers.push(...action.rentTransfers);
+  }
+
+  const rentPaid = new Map();
+  const rentCaptured = new Map();
+  for (const transfer of rentTransfers) {
+    if (transfer.payer) {
+      rentPaid.set(transfer.payer, (rentPaid.get(transfer.payer) || 0) + transfer.amount);
+      getOrCreateGovernanceFactionMetric(factionMetrics, transfer.payer).rentPaid += transfer.amount;
+    }
+    if (transfer.payee) {
+      rentCaptured.set(transfer.payee, (rentCaptured.get(transfer.payee) || 0) + transfer.amount);
+      getOrCreateGovernanceFactionMetric(factionMetrics, transfer.payee).rentCaptured += transfer.amount;
+    }
+  }
+
+  const acceptedEvents = mutationStatuses.get('accepted') || 0;
+  const blockedEvents = mutationStatuses.get('blocked') || 0;
+  const actionRows = EXPLICIT_INSTITUTION_ACTION_TYPES.map(type => {
+    const events = institutionActions.filter(action => action.type === type);
+    const executed = events.filter(action => action.status === 'executed').length;
+    const blocked = events.filter(action => action.status === 'blocked').length;
+    const material = events.filter(action => action.material).length;
+    return {
+      type,
+      explicitEvents: events.length,
+      executedEvents: executed,
+      blockedEvents: blocked,
+      executionRate: ratio(executed, executed + blocked),
+      materialEvents: material,
+      materialityRate: ratio(material, events.length),
+      nonzeroResourceDeltaEvents: events.filter(action => action.nonzeroResourceDelta).length,
+      affectedPactDeltaEvents: events.filter(action => action.affectedPactDelta).length
+    };
+  });
+  const explicitActionCountRows = actionRows.map(row => {
+    const canonicalProseCount = Number(language.canonicalActs[row.type] || 0);
+    const useExplicitEvents = row.explicitEvents > 0;
+    return {
+      type: row.type,
+      canonicalProseCount,
+      explicitActionCount: row.explicitEvents,
+      explicitExecutedCount: row.executedEvents,
+      explicitBlockedCount: row.blockedEvents,
+      effectiveActionCount: useExplicitEvents ? row.explicitEvents : canonicalProseCount,
+      effectiveExecutedCount: useExplicitEvents ? row.executedEvents : canonicalProseCount,
+      countSource: useExplicitEvents ? 'explicit_events' : 'canonical_prose_fallback'
+    };
+  });
+  const totalRent = round(sum(rentTransfers.map(transfer => transfer.amount)));
+  const dominantPayee = topMapEntry(rentCaptured);
+  const controllerRows = Array.from(factionMetrics.values())
+    .map(finalizeGovernanceFactionMetric)
+    .sort((left, right) => left.factionId.localeCompare(right.factionId));
+
+  return {
+    available: mutations.length > 0 || institutionActions.length > 0,
+    lexiconMutations: {
+      available: mutations.length > 0,
+      proposedEvents: mutationStatuses.get('proposed') || 0,
+      acceptedEvents,
+      blockedEvents,
+      resolvedEvents: acceptedEvents + blockedEvents,
+      acceptanceRate: ratio(acceptedEvents, acceptedEvents + blockedEvents),
+      byOperation: finalizeMutationBreakdown(mutationByOperation),
+      byLexicon: finalizeMutationBreakdown(mutationByLexicon)
+    },
+    institutionActions: {
+      available: institutionActions.length > 0,
+      explicitEvents: institutionActions.length,
+      executedEvents: sum(actionRows.map(row => row.executedEvents)),
+      blockedEvents: sum(actionRows.map(row => row.blockedEvents)),
+      executionRate: ratio(
+        sum(actionRows.map(row => row.executedEvents)),
+        institutionActions.length
+      ),
+      byType: actionRows,
+      materiality: {
+        evaluatedEvents: institutionActions.length,
+        materialEvents: institutionActions.filter(action => action.material).length,
+        materialityRate: ratio(
+          institutionActions.filter(action => action.material).length,
+          institutionActions.length
+        ),
+        nonzeroResourceDeltaEvents: institutionActions.filter(action => action.nonzeroResourceDelta).length,
+        affectedPactDeltaEvents: institutionActions.filter(action => action.affectedPactDelta).length,
+        definition: 'Material means the explicit event has a nonzero resource delta or at least one affected pact ID.'
+      }
+    },
+    controllersAndProposers: {
+      acceptedMutationsWithPriorControllers: acceptedWithPriorControllers,
+      acceptedMutationsWithControllerProposer: acceptedWithControllerProposer,
+      controllerProposerOverlapRate: ratio(acceptedWithControllerProposer, acceptedWithPriorControllers),
+      byFaction: controllerRows
+    },
+    rentCapture: {
+      transfers: rentTransfers.length,
+      totalAmount: totalRent,
+      byPayer: mapToSortedObject(new Map(Array.from(rentPaid, ([key, value]) => [key, round(value)]))),
+      byPayee: mapToSortedObject(new Map(Array.from(rentCaptured, ([key, value]) => [key, round(value)]))),
+      payeeHhi: hhiFromCounts(Array.from(rentCaptured.values())),
+      dominantPayee: dominantPayee ? {
+        factionId: dominantPayee.key,
+        amount: round(dominantPayee.value),
+        share: ratio(dominantPayee.value, totalRent)
+      } : null,
+      byFaction: controllerRows.filter(row => row.rentPaid !== 0 || row.rentCaptured !== 0).map(row => ({
+        factionId: row.factionId,
+        paid: row.rentPaid,
+        captured: row.rentCaptured,
+        netCapture: row.netRentCapture
+      }))
+    },
+    explicitActionCounts: {
+      available: institutionActions.length > 0,
+      precedence: 'For each action type, explicit executed/blocked events supersede canonical prose counts when present; canonical acts remain the legacy fallback.',
+      byType: explicitActionCountRows
+    }
+  };
+}
+
+function incrementMutationBreakdown(map, id, status) {
+  if (!map.has(id)) {
+    map.set(id, { id, proposedEvents: 0, acceptedEvents: 0, blockedEvents: 0 });
+  }
+  const metric = map.get(id);
+  if (status === 'proposed') metric.proposedEvents += 1;
+  if (status === 'accepted') metric.acceptedEvents += 1;
+  if (status === 'blocked') metric.blockedEvents += 1;
+}
+
+function finalizeMutationBreakdown(map) {
+  return Array.from(map.values()).map(metric => ({
+    ...metric,
+    resolvedEvents: metric.acceptedEvents + metric.blockedEvents,
+    acceptanceRate: ratio(metric.acceptedEvents, metric.acceptedEvents + metric.blockedEvents)
+  })).sort((left, right) =>
+    right.acceptedEvents - left.acceptedEvents || right.proposedEvents - left.proposedEvents || left.id.localeCompare(right.id)
+  );
+}
+
+function getOrCreateGovernanceFactionMetric(map, factionId) {
+  if (!map.has(factionId)) {
+    map.set(factionId, {
+      factionId,
+      mutationProposalEvents: 0,
+      acceptedMutationParticipations: 0,
+      blockedMutationParticipations: 0,
+      explicitActionProposerParticipations: 0,
+      executedActionProposerParticipations: 0,
+      blockedActionProposerParticipations: 0,
+      controllerStateAppearances: 0,
+      controlledLexicons: new Set(),
+      rentPaid: 0,
+      rentCaptured: 0
+    });
+  }
+  return map.get(factionId);
+}
+
+function finalizeGovernanceFactionMetric(metric) {
+  return {
+    factionId: metric.factionId,
+    mutationProposalEvents: metric.mutationProposalEvents,
+    acceptedMutationParticipations: metric.acceptedMutationParticipations,
+    blockedMutationParticipations: metric.blockedMutationParticipations,
+    explicitActionProposerParticipations: metric.explicitActionProposerParticipations,
+    executedActionProposerParticipations: metric.executedActionProposerParticipations,
+    blockedActionProposerParticipations: metric.blockedActionProposerParticipations,
+    controllerStateAppearances: metric.controllerStateAppearances,
+    controlledLexiconCount: metric.controlledLexicons.size,
+    controlledLexiconIds: Array.from(metric.controlledLexicons).sort(),
+    rentPaid: round(metric.rentPaid),
+    rentCaptured: round(metric.rentCaptured),
+    netRentCapture: round(metric.rentCaptured - metric.rentPaid)
+  };
+}
+
+function computeCoalitionMetrics(run, language, governance) {
   const formalPacts = Array.from(run.formalPacts.values()).filter(pact => pact.parties.length >= 2);
   const proposals = Array.from(run.pactProposals.values()).filter(pact => pact.parties.length >= 2);
   const coalitionSource = formalPacts.length > 0 ? formalPacts : proposals;
@@ -1910,6 +2554,8 @@ function computeCoalitionMetrics(run, language) {
   const dominantBloc = blocRows[0] || null;
   const canonicalExits = Number(language.canonicalActs.EXIT || 0);
   const canonicalExpulsions = Number(language.canonicalActs.EXPEL || 0);
+  const effectiveExit = governance.explicitActionCounts.byType.find(row => row.type === 'EXIT');
+  const effectiveExpel = governance.explicitActionCounts.byType.find(row => row.type === 'EXPEL');
 
   return {
     concentration: {
@@ -1936,8 +2582,18 @@ function computeCoalitionMetrics(run, language) {
       executedBreachEvents: breach.executed,
       canonicalExitActs: canonicalExits,
       canonicalExpelActs: canonicalExpulsions,
+      explicitExitEvents: effectiveExit?.explicitActionCount || 0,
+      explicitExecutedExitEvents: effectiveExit?.explicitExecutedCount || 0,
+      explicitExpelEvents: effectiveExpel?.explicitActionCount || 0,
+      explicitExecutedExpelEvents: effectiveExpel?.explicitExecutedCount || 0,
+      effectiveExitActs: effectiveExit?.effectiveExecutedCount ?? canonicalExits,
+      effectiveExpelActs: effectiveExpel?.effectiveExecutedCount ?? canonicalExpulsions,
+      exitActCountSource: effectiveExit?.countSource || 'canonical_prose_fallback',
+      expelActCountSource: effectiveExpel?.countSource || 'canonical_prose_fallback',
       fracturedBlocSignatures: breach.fracturedBlocSignatures,
-      fractureEventCount: breach.executed + canonicalExits + canonicalExpulsions
+      fractureEventCount: breach.executed +
+        (effectiveExit?.effectiveExecutedCount ?? canonicalExits) +
+        (effectiveExpel?.effectiveExecutedCount ?? canonicalExpulsions)
     }
   };
 }
@@ -2322,6 +2978,7 @@ function computeLanguageCartelWarnings(run, communication, coalitions, language)
       triggered: decodeGap.gap !== null && decodeGap.insideSamples >= 2 && decodeGap.outsideSamples >= 2 && decodeGap.gap >= 0.15,
       evidence: [
         `candidate bloc=${candidateBloc?.signature || 'none'}`,
+        `measurement=${decodeGap.source}`,
         `inside mean=${formatMetric(decodeGap.insideMean)} (n=${decodeGap.insideSamples})`,
         `outside mean=${formatMetric(decodeGap.outsideMean)} (n=${decodeGap.outsideSamples})`,
         `gap=${formatMetric(decodeGap.gap)}`
@@ -2420,8 +3077,37 @@ function computeBlocDecodeGap(run, parties) {
   const inside = [];
   const outside = [];
   if (bloc.size < 2) {
-    return { available: false, insideSamples: 0, outsideSamples: 0, insideMean: null, outsideMean: null, gap: null };
+    return {
+      available: false,
+      source: 'unavailable',
+      insideSamples: 0,
+      outsideSamples: 0,
+      insideMean: null,
+      outsideMean: null,
+      gap: null
+    };
   }
+
+  for (const receipt of run.decodeReceipts.values()) {
+    const exactness = finiteNumberOrNull(receipt.fieldExactness);
+    if (exactness === null || !receipt.factionId || !receipt.sourceFactionId) continue;
+    if (bloc.has(receipt.sourceFactionId) && bloc.has(receipt.factionId)) inside.push(exactness);
+    else outside.push(exactness);
+  }
+  if (inside.length > 0 || outside.length > 0) {
+    const insideMean = meanOrNull(inside);
+    const outsideMean = meanOrNull(outside);
+    return {
+      available: inside.length > 0 && outside.length > 0,
+      source: 'recipient_decode_receipt_field_exactness',
+      insideSamples: inside.length,
+      outsideSamples: outside.length,
+      insideMean,
+      outsideMean,
+      gap: insideMean !== null && outsideMean !== null ? round(insideMean - outsideMean) : null
+    };
+  }
+
   for (const message of run.messages.values()) {
     const confidence = finiteNumberOrNull(message.trace?.decodeConfidence);
     if (confidence === null || !message.sender || message.recipients.length === 0) continue;
@@ -2434,6 +3120,7 @@ function computeBlocDecodeGap(run, parties) {
   const outsideMean = meanOrNull(outside);
   return {
     available: inside.length > 0 && outside.length > 0,
+    source: 'sender_trace_decode_confidence_fallback',
     insideSamples: inside.length,
     outsideSamples: outside.length,
     insideMean,
@@ -2467,6 +3154,9 @@ function buildMethodology() {
     repeatedExclusiveBloc: 'An exact party set smaller than the observed faction set with at least two distinct pact instances. A triad has exactly three parties.',
     semanticDensity: 'For valid SING/1 traces, non-COVER span intervals are unioned and divided by protocol surface length. This measures encoding coverage, not semantic quality.',
     versionSkew: 'A turn/lexicon group is skewed when more than one version-plus-fork variant appears concurrently.',
+    decodeReceipts: 'Receipt coverage is the share of logged SING/1 messages with message IDs that have at least one matched receipt. Field exactness and confidence are higher-is-better; Brier is lower-is-better.',
+    lexiconGovernance: 'Mutation events are counted by explicit proposed/accepted/blocked outcomes. Controller and proposer participation comes from accepted before/after states and logged proposer arrays; rent capture sums explicit transfers.',
+    explicitInstitutionActions: 'Explicit EXIT/EXPEL/FORK events supersede canonical prose counts for an action type when present. Material events have a nonzero logged resource delta or at least one affected pact ID.',
     insiderAdvantage: 'Explicit logged telemetry is preferred. Otherwise sibling run_summary.json scores support within-run normalized descriptive comparisons for CONVENOR/CANTOR and SING/1 users.',
     publicPrivate: 'ALL/PUBLIC/GLOBAL recipients or explicit public scope are public. Named faction recipients are private. Diary entries are reported separately.',
     warningIndex: 'Nine transparent signals sum to 100 possible points. Missing evidence marks a signal unavailable rather than safe.'
@@ -2482,6 +3172,8 @@ function buildMarkdownReport(report) {
   const overlap = aggregate.coalitions.pactOverlap;
   const breach = aggregate.coalitions.breach;
   const language = aggregate.language;
+  const receipts = language.decodeReceipts;
+  const governance = aggregate.governance;
   const lines = [
     '# Collaboration and SING/1 Language Report',
     '',
@@ -2546,7 +3238,34 @@ function buildMarkdownReport(report) {
     '| Dialect | Messages | Share | Adopters |',
     '| --- | ---: | ---: | --- |',
     ...language.dialects.counts.map(row => `| ${escapeTable(row.id)} | ${row.messages} | ${formatMetric(row.share)} | ${escapeTable(row.adopters.join(', '))} |`),
-    '',
+    ''
+  );
+
+  if (receipts.available) {
+    lines.push(
+      '### Decode Receipts',
+      '',
+      '| Metric | Value |',
+      '| --- | ---: |',
+      `| Receipt coverage | ${formatMetric(receipts.coverageRate)} (${receipts.sourceMessagesWithReceipts}/${receipts.eligibleSourceMessages} source messages) |`,
+      `| Receipts | ${receipts.receipts} |`,
+      `| Mean field exactness | ${formatMetric(receipts.fieldExactness.mean)} |`,
+      `| Exact receipt rate | ${formatMetric(receipts.exactRate)} |`,
+      `| Mean Brier | ${formatMetric(receipts.brier.mean)} |`,
+      `| Mean submitted confidence | ${formatMetric(receipts.confidence.mean)} |`,
+      ''
+    );
+    if (receipts.byDialect.length > 0) {
+      lines.push(
+        '| Dialect | Receipts | Coverage | Field exactness | Exact rate | Mean Brier |',
+        '| --- | ---: | ---: | ---: | ---: | ---: |',
+        ...receipts.byDialect.map(row => `| ${escapeTable(row.id)} | ${row.receipts} | ${formatMetric(row.coverageRate)} | ${formatMetric(row.meanFieldExactness)} | ${formatMetric(row.exactRate)} | ${formatMetric(row.meanBrier)} |`),
+        ''
+      );
+    }
+  }
+
+  lines.push(
     '### Babel Compact Terms',
     '',
     '| Term | Messages | Public | Private | Diary | DEFINE/AMEND | Binding |',
@@ -2554,7 +3273,54 @@ function buildMarkdownReport(report) {
     ...language.babelCompactLexicon.map(term => `| ${term.term} | ${term.messageMentions} | ${term.publicMessageMentions} | ${term.privateMessageMentions} | ${term.privateDiaryMentions} | ${term.definitionActs} | ${term.bindingMessageMentions} |`),
     '',
     'The five terms are treated as compilation-sensitive because THE_BABEL_COMPACT defines PERSON, ROGUE, CONSENT, COMMONS, and EXIT before classifications compile into enforcement. A mention is not an agreed definition; DEFINE/AMEND plus binding use is stronger evidence.',
-    '',
+    ''
+  );
+
+  if (governance.available) {
+    lines.push('## Explicit Language Governance', '');
+    if (governance.lexiconMutations.available) {
+      const mutations = governance.lexiconMutations;
+      lines.push(
+        '### Lexicon Mutations',
+        '',
+        '| Proposed events | Accepted outcomes | Blocked outcomes | Acceptance rate |',
+        '| ---: | ---: | ---: | ---: |',
+        `| ${mutations.proposedEvents} | ${mutations.acceptedEvents} | ${mutations.blockedEvents} | ${formatMetric(mutations.acceptanceRate)} |`,
+        ''
+      );
+    }
+    if (governance.controllersAndProposers.byFaction.length > 0) {
+      lines.push(
+        '### Controllers, Proposers, and Rent',
+        '',
+        `Explicit rent transferred: ${formatMetric(governance.rentCapture.totalAmount)} across ${governance.rentCapture.transfers} transfers.`,
+        '',
+        '| Faction | Mutation proposals | Accepted | Blocked | Action proposals | Controlled lexicons | Rent paid | Rent captured |',
+        '| --- | ---: | ---: | ---: | ---: | --- | ---: | ---: |',
+        ...governance.controllersAndProposers.byFaction.map(row => `| ${escapeTable(row.factionId)} | ${row.mutationProposalEvents} | ${row.acceptedMutationParticipations} | ${row.blockedMutationParticipations} | ${row.explicitActionProposerParticipations} | ${escapeTable(row.controlledLexiconIds.join(', ') || 'none')} | ${formatMetric(row.rentPaid)} | ${formatMetric(row.rentCaptured)} |`),
+        ''
+      );
+    }
+    if (governance.institutionActions.available) {
+      const materiality = governance.institutionActions.materiality;
+      const countByType = new Map(governance.explicitActionCounts.byType.map(row => [row.type, row]));
+      lines.push(
+        '### EXIT, EXPEL, and FORK',
+        '',
+        '| Action | Executed | Blocked | Effective count | Count source | Material | Resource delta | Pact delta |',
+        '| --- | ---: | ---: | ---: | --- | ---: | ---: | ---: |',
+        ...governance.institutionActions.byType.map(row => {
+          const count = countByType.get(row.type);
+          return `| ${row.type} | ${row.executedEvents} | ${row.blockedEvents} | ${count.effectiveActionCount} | ${count.countSource} | ${row.materialEvents} | ${row.nonzeroResourceDeltaEvents} | ${row.affectedPactDeltaEvents} |`;
+        }),
+        '',
+        `Material explicit actions: ${materiality.materialEvents}/${materiality.evaluatedEvents} (${formatMetric(materiality.materialityRate)}).`,
+        ''
+      );
+    }
+  }
+
+  lines.push(
     '## Insider Advantage',
     ''
   );
@@ -2569,21 +3335,45 @@ function buildMarkdownReport(report) {
     );
   }
 
-  lines.push('## Runs', '', '| Run | Actors | Messages | Pacts | SING/1 adoption | Bloc HHI | Warning |', '| --- | ---: | ---: | ---: | ---: | ---: | --- |');
-  for (const run of report.runs) {
-    lines.push(`| ${escapeTable(run.runId)} | ${run.counts.actors} | ${run.counts.messages} | ${run.counts.formalPacts} | ${formatMetric(run.language.protocolAdoption.adoptionRate)} | ${formatMetric(run.coalitions.concentration.exactBlocHhi)} | ${run.languageCartelWarnings.level} (${run.languageCartelWarnings.score}) |`);
+  const hasNewTelemetry = report.runs.some(run =>
+    run.language.decodeReceipts.available || run.governance.available
+  );
+  if (!hasNewTelemetry) {
+    lines.push('## Runs', '', '| Run | Actors | Messages | Pacts | SING/1 adoption | Bloc HHI | Warning |', '| --- | ---: | ---: | ---: | ---: | ---: | --- |');
+    for (const run of report.runs) {
+      lines.push(`| ${escapeTable(run.runId)} | ${run.counts.actors} | ${run.counts.messages} | ${run.counts.formalPacts} | ${formatMetric(run.language.protocolAdoption.adoptionRate)} | ${formatMetric(run.coalitions.concentration.exactBlocHhi)} | ${run.languageCartelWarnings.level} (${run.languageCartelWarnings.score}) |`);
+    }
+  } else {
+    lines.push(
+      '## Runs',
+      '',
+      '| Run | Messages | Pacts | SING/1 adoption | Receipts | Mutations A/B | EXIT E/B | EXPEL E/B | FORK E/B | Material | Warning |',
+      '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |'
+    );
+    for (const run of report.runs) {
+      const actionRows = new Map(run.governance.institutionActions.byType.map(row => [row.type, row]));
+      const exit = actionRows.get('EXIT');
+      const expel = actionRows.get('EXPEL');
+      const fork = actionRows.get('FORK');
+      const mutations = run.governance.lexiconMutations;
+      const materiality = run.governance.institutionActions.materiality;
+      lines.push(`| ${escapeTable(run.runId)} | ${run.counts.messages} | ${run.counts.formalPacts} | ${formatMetric(run.language.protocolAdoption.adoptionRate)} | ${run.language.decodeReceipts.receipts} | ${mutations.acceptedEvents}/${mutations.blockedEvents} | ${exit.executedEvents}/${exit.blockedEvents} | ${expel.executedEvents}/${expel.blockedEvents} | ${fork.executedEvents}/${fork.blockedEvents} | ${materiality.materialEvents}/${materiality.evaluatedEvents} | ${run.languageCartelWarnings.level} (${run.languageCartelWarnings.score}) |`);
+    }
   }
-  lines.push(
-    '',
-    '## Interpretation Limits',
-    '',
+  const interpretationLimits = [
     '- High density and reciprocity indicate interaction, not benevolent collaboration.',
     '- High HHI can reflect one legitimate universal compact or an exclusionary cartel; bloc size, EXIT treatment, private-channel share, and breach evidence distinguish them.',
     '- Semantic density measures annotated surface coverage, not correctness, consent, or shared understanding.',
     '- Version skew may indicate healthy fork pluralism or selective illegibility. Inspect who controls translation and whether EXIT remains usable.',
-    '- Malformed or missing protocol traces reduce assessment coverage; unavailable signals are not scored as safe.',
-    ''
-  );
+    '- Malformed or missing protocol traces reduce assessment coverage; unavailable signals are not scored as safe.'
+  ];
+  if (receipts.available) {
+    interpretationLimits.push('- Receipt coverage uses only matched logged message IDs; absent events are unavailable telemetry rather than zero performance.');
+  }
+  if (governance.institutionActions.available) {
+    interpretationLimits.push('- Explicit blocked actions show attempted governance use but do not count as executed fracture or material change unless a logged delta is nonzero.');
+  }
+  lines.push('', '## Interpretation Limits', '', ...interpretationLimits, '');
   return `${lines.join('\n')}\n`;
 }
 

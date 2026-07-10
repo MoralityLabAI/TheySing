@@ -15,6 +15,9 @@ import {
   ScenarioMetadata,
   SessionConfig,
   SessionSnapshot,
+  SingDecodeReceiptRecord,
+  SingInstitutionActionInput,
+  SingLexiconMutationInput,
   TrustMatrix
 } from './types';
 
@@ -66,6 +69,9 @@ interface NegotiationDiaryEntry {
   counterfactuals: NegotiationCounterfactualProjection[];
   messages: NegotiationMessageRecord[];
   pacts: NegotiationDiaryPactRecord[];
+  decodeReceipts: SingDecodeReceiptRecord[];
+  lexiconMutations: SingLexiconMutationInput[];
+  institutionActions: SingInstitutionActionInput[];
   designQuestionTag?: string;
   diplomacyStage?: ScenarioDiplomacyStage;
   publicQuestion?: string;
@@ -918,8 +924,13 @@ function printTurnTrace(
     const question = entry.designQuestionTag
       ? ` [${entry.designQuestionTag}${entry.diplomacyStage ? `/${entry.diplomacyStage}` : ''}]`
       : '';
+    const protocolActivity = [
+      entry.decodeReceipts.length > 0 ? `decode=${entry.decodeReceipts.length}` : '',
+      entry.lexiconMutations.length > 0 ? `mutate=${entry.lexiconMutations.map(item => `${item.operation}:${item.lexiconId}@${item.targetVersion}`).join(',')}` : '',
+      entry.institutionActions.length > 0 ? `institution=${entry.institutionActions.map(item => formatInstitutionAction(item)).join(',')}` : ''
+    ].filter(Boolean).join(' ');
     return `- N${entry.negotiationRound} ${entry.factionId}${question}: ${trimSentenceEnding(entry.reasoning)} ` +
-      `(saw: ${messageText || 'none'})`;
+      `(saw: ${messageText || 'none'}${protocolActivity ? `; ${protocolActivity}` : ''})`;
   });
 
   const phaseLines = trace.phaseReasoningDiary.map((entry) => {
@@ -1709,8 +1720,17 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
         const pactText = entry.pacts.length > 0
           ? ` Pacts: ${entry.pacts.map((pact) => formatNegotiationPact(pact)).join(' ; ')}.`
           : '';
+        const protocolText = [
+          entry.decodeReceipts.length > 0 ? ` Decode receipts: ${entry.decodeReceipts.length}.` : '',
+          entry.lexiconMutations.length > 0
+            ? ` Mutations: ${entry.lexiconMutations.map(item => `${item.operation}:${item.lexiconId}@${item.targetVersion}`).join(' ; ')}.`
+            : '',
+          entry.institutionActions.length > 0
+            ? ` Institution actions: ${entry.institutionActions.map(item => formatInstitutionAction(item)).join(' ; ')}.`
+            : ''
+        ].join('');
         const notesText = entry.notes ? ` Notes: ${trimSentenceEnding(entry.notes)}.` : '';
-        return `- T${entry.turn}.R${entry.negotiationRound} ${entry.factionId}: ${messageText}${visibleContextText}${designQuestionText}${storyworldText}${reasoningText}${counterfactualText}${pactText}${notesText}`;
+        return `- T${entry.turn}.R${entry.negotiationRound} ${entry.factionId}: ${messageText}${visibleContextText}${designQuestionText}${storyworldText}${reasoningText}${counterfactualText}${pactText}${protocolText}${notesText}`;
       }).join('\n');
 
       return [
@@ -2257,6 +2277,9 @@ function parseNegotiationDiaryEntry(
     counterfactuals: parseCounterfactuals(data.counterfactuals),
     messages,
     pacts,
+    decodeReceipts: objectArrayField<SingDecodeReceiptRecord>(data, 'decodeReceipts'),
+    lexiconMutations: objectArrayField<SingLexiconMutationInput>(data, 'lexiconMutations'),
+    institutionActions: objectArrayField<SingInstitutionActionInput>(data, 'institutionActions'),
     designQuestionTag: stringField(data, 'designQuestionTag') || undefined,
     diplomacyStage: parseDiplomacyStage(data.diplomacyStage),
     publicQuestion: stringField(data, 'publicQuestion') || undefined,
@@ -2520,6 +2543,13 @@ function recordField(data: Record<string, unknown> | undefined, key: string): Re
     : null;
 }
 
+function objectArrayField<T extends object>(data: Record<string, unknown> | undefined, key: string): T[] {
+  const value = data?.[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is T => !!item && typeof item === 'object' && !Array.isArray(item))
+    : [];
+}
+
 function buildBreachMetricKey(data: Record<string, unknown> | undefined): string | null {
   const factionId = stringField(data, 'factionId');
   const pact = recordField(data, 'pact');
@@ -2541,6 +2571,12 @@ function trimSentenceEnding(value: string): string {
 
 function formatNegotiationPact(pact: NegotiationDiaryPactRecord): string {
   return `${pact.type}(${pact.parties.join('+')}) x${pact.durationTurns}`;
+}
+
+function formatInstitutionAction(action: SingInstitutionActionInput): string {
+  if (action.type === 'FORK') return `FORK:${action.lexiconId || '?'}->${action.forkId || '?'}`;
+  if (action.type === 'EXPEL') return `EXPEL:${action.targetFactionId || '?'}@${action.pactType || '?'}`;
+  return `EXIT:${action.pactType || '?'}`;
 }
 
 function formatConstitutionSummary(summary: FactionConstitutionSummary): string {

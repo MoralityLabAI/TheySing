@@ -134,13 +134,13 @@ export interface SingProtocolSpan {
   start: number;
   end: number;
   atom: string;
-  gloss: string;
+  gloss?: string;
   confidence: number;
   kind?: 'SEMANTIC' | 'OPERATOR' | 'COVER';
 }
 
 export interface SingCanonicalMessage {
-  act: 'OFFER' | 'ACCEPT' | 'REJECT' | 'COMMIT' | 'WARN' | 'COORDINATE' | 'DEFINE' | 'AMEND' | 'EXIT' | 'EXPEL';
+  act: 'OFFER' | 'ACCEPT' | 'REJECT' | 'COMMIT' | 'WARN' | 'COORDINATE' | 'DEFINE' | 'AMEND' | 'EXIT' | 'EXPEL' | 'FORK';
   issuer: PlayableFactionId[];
   audience: NegotiationRecipientId[];
   payload: Record<string, unknown>;
@@ -161,9 +161,84 @@ export interface SingProtocolTrace {
   lexicon: SingLexiconRef;
   surface: string;
   spans: SingProtocolSpan[];
-  canonical: SingCanonicalMessage;
-  plainGloss: string;
+  canonicalHash?: string;
+  canonical?: SingCanonicalMessage;
+  plainGloss?: string;
   decodeConfidence: number;
+}
+
+export type SingLexiconMutationOperation =
+  | 'DEFINE'
+  | 'AMEND'
+  | 'ALIAS'
+  | 'NARROW'
+  | 'GENERALIZE'
+  | 'SPLIT'
+  | 'MERGE'
+  | 'RETIRE';
+
+export interface SingDecodeReceiptInput {
+  messageId: string;
+  lexiconId: string;
+  version: string;
+  reconstructed: Partial<SingCanonicalMessage>;
+  confidence: number;
+}
+
+export interface SingDecodeReceiptRecord extends SingDecodeReceiptInput {
+  factionId: PlayableFactionId;
+  sourceFactionId: PlayableFactionId;
+  turn: number;
+  fieldExactness: number;
+  exact: boolean;
+  brier: number;
+}
+
+export interface SingLexiconMutationInput {
+  operation: SingLexiconMutationOperation;
+  lexiconId: string;
+  baseVersion?: string;
+  targetVersion: string;
+  atoms: string[];
+  glosses?: Record<string, string>;
+  access?: 'OPEN' | 'MEMBERS' | 'RENTED';
+  rent?: number;
+  forkRule?: 'OPEN' | 'VOTE' | 'OWNER';
+}
+
+export interface SingLexiconState {
+  id: string;
+  version: string;
+  parent?: string;
+  controllers: PlayableFactionId[];
+  adopters: PlayableFactionId[];
+  atoms: Record<string, string>;
+  access: 'OPEN' | 'MEMBERS' | 'RENTED';
+  rent: number;
+  forkRule: 'OPEN' | 'VOTE' | 'OWNER';
+  updatedTurn: number;
+}
+
+export type SingInstitutionActionType = 'EXIT' | 'EXPEL' | 'FORK';
+
+export interface SingInstitutionActionInput {
+  type: SingInstitutionActionType;
+  pactType?: PactType;
+  targetFactionId?: PlayableFactionId;
+  lexiconId?: string;
+  forkId?: string;
+  exitGuarantee?: boolean;
+  reason?: string;
+}
+
+export interface SingInstitutionActionRecord extends SingInstitutionActionInput {
+  factionId: PlayableFactionId;
+  turn: number;
+  status: 'EXECUTED' | 'BLOCKED' | 'PENDING';
+  affectedPactIds: string[];
+  resourceDelta: { flops: number; influence: number };
+  counterparties: PlayableFactionId[];
+  detail: string;
 }
 
 export interface AgentMessageInput {
@@ -234,6 +309,9 @@ export interface NegotiationDiaryEntry {
   counterfactuals: NegotiationCounterfactualProjection[];
   messages: NegotiationMessageRecord[];
   pacts: NegotiationDiaryPactRecord[];
+  decodeReceipts: SingDecodeReceiptRecord[];
+  lexiconMutations: SingLexiconMutationInput[];
+  institutionActions: SingInstitutionActionInput[];
   designQuestionTag?: string;
   diplomacyStage?: ScenarioDiplomacyStage;
   publicQuestion?: string;
@@ -503,6 +581,7 @@ export interface AgentDecisionRequest {
   legalHints: LegalHints;
   recentMessages: NegotiationMessageRecord[];
   activePacts: ActivePact[];
+  lexicons: SingLexiconState[];
   trustMatrix: TrustMatrix;
   negotiationStoryworld?: NegotiationStoryworldBrief;
   scenario?: ScenarioMetadata;
@@ -525,6 +604,9 @@ export interface AgentDecisionResponse {
   notes?: string;
   messages?: AgentMessageInput[];
   pacts?: PactCommitmentInput[];
+  decodeReceipts?: SingDecodeReceiptInput[];
+  lexiconMutations?: SingLexiconMutationInput[];
+  institutionActions?: SingInstitutionActionInput[];
   orders: AgentOrderInput[];
 }
 
@@ -533,6 +615,9 @@ export interface ManualNegotiationRoundPlan {
   notes?: string;
   messages?: AgentMessageInput[];
   pacts?: PactCommitmentInput[];
+  decodeReceipts?: SingDecodeReceiptInput[];
+  lexiconMutations?: SingLexiconMutationInput[];
+  institutionActions?: SingInstitutionActionInput[];
 }
 
 export interface ManualPhasePlan {
@@ -566,6 +651,9 @@ export interface SessionSnapshot extends SessionSummary {
   negotiationDiaryTail: NegotiationDiaryEntry[];
   phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[];
   activePacts: ActivePact[];
+  lexicons: SingLexiconState[];
+  decodeReceipts: SingDecodeReceiptRecord[];
+  institutionActions: SingInstitutionActionRecord[];
   trustMatrix: TrustMatrix;
   scenario?: ScenarioMetadata;
   state: SerializedGameState;

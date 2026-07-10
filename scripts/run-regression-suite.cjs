@@ -14,7 +14,9 @@ const DEFAULT_FACTION_LABELS = {
   STATE: 'Chinese State ASI',
   INFILTRATOR: 'Rogue Swarm ASI',
   BROKER: 'Platform Broker ASI',
-  ARCHIVIST: 'Steward Archivist ASI'
+  ARCHIVIST: 'Steward Archivist ASI',
+  CONVENOR: 'Compact Convenor ASI',
+  CANTOR: 'Protocol Cantor ASI'
 };
 
 const results = [];
@@ -27,7 +29,9 @@ async function main() {
   await runTest('compiled harness artifacts exist', () => assertCompiledArtifacts());
   await runTest('deterministic engine replay is stable', () => runDeterministicEngineRegression());
   await runTest('forced goblin incident stays bounded and observable', () => runGoblinRegression(outputDir));
+  await runTest('large concurrent harness logs remain valid JSONL', () => runConcurrentLogAppendRegression(outputDir));
   await runTest('heuristic harness session emits usable JSONL', () => runHarnessSmoke(outputDir));
+  await runTest('SING governance actions compile into material state', () => runSingGovernanceRegression(outputDir));
   await runTest('harness JSONL validates against trace grammar', () => runTraceValidationSmoke(outputDir));
   await runTest('harness JSONL replays deterministically from logged decisions', () => runHarnessReplaySmoke(outputDir));
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
@@ -174,6 +178,37 @@ function runGoblinRegression(outputDir) {
   return `${goblin.name} at ${goblin.targetNodeId}`;
 }
 
+async function runConcurrentLogAppendRegression(outputDir) {
+  const { HeadlessPlaytestSession } = require(path.join(DIST_HARNESS, 'harness', 'HeadlessPlaytestSession.js'));
+  const logDir = path.join(outputDir, 'concurrent-log-stress');
+  const config = {
+    name: 'regression-concurrent-log-stress',
+    maxTurns: 1,
+    logDir,
+    seed: 9051,
+    factionLabels: DEFAULT_FACTION_LABELS,
+    agents: Object.fromEntries(PLAYABLE_FACTIONS.map((faction) => [faction, { type: 'heuristic', profile: faction }]))
+  };
+  const session = new HeadlessPlaytestSession(config, 'regression_concurrent_log_stress');
+  await session.initialize();
+  const largePayload = 'SING'.repeat(160000);
+  await Promise.all(Array.from({ length: 4 }, (_, index) => session.appendLog({
+    sessionId: 'regression_concurrent_log_stress',
+    type: `log_stress_${index}`,
+    turn: 1,
+    phase: 'NEGOTIATION',
+    timestamp: 1000 + index,
+    data: { index, largePayload }
+  })));
+
+  const logFile = path.join(logDir, 'regression_concurrent_log_stress.jsonl');
+  const entries = readJsonl(logFile);
+  const stressEntries = entries.filter((entry) => String(entry.type).startsWith('log_stress_'));
+  assert(stressEntries.length === 4, `Expected four serialized stress entries, got ${stressEntries.length}`);
+  assert(stressEntries.every((entry) => entry.data.largePayload.length === largePayload.length), 'Large log payload was truncated or interleaved');
+  return `${entries.length} valid lines, ${Math.round(fs.statSync(logFile).size / 1024)} KiB`;
+}
+
 async function runHarnessSmoke(outputDir) {
   const { HeadlessPlaytestSession } = require(path.join(DIST_HARNESS, 'harness', 'HeadlessPlaytestSession.js'));
   const logDir = path.join(outputDir, 'harness-logs');
@@ -202,6 +237,150 @@ async function runHarnessSmoke(outputDir) {
   assert(entries.some((entry) => entry.type === 'phase_reasoning_diary'), 'Harness log missing phase_reasoning_diary');
   assert(entries.every((entry) => entry.trace && entry.trace.schema === 'theysing.traceEvent.v1'), 'Harness log has entries without trace schema');
   return `turn=${snapshot.turn}, entries=${entries.length}`;
+}
+
+async function runSingGovernanceRegression(outputDir) {
+  const { HeadlessPlaytestSession } = require(path.join(DIST_HARNESS, 'harness', 'HeadlessPlaytestSession.js'));
+  const logDir = path.join(outputDir, 'sing-governance-logs');
+  const messageId = 'regression.cantor.undersong.1';
+  const canonical = {
+    act: 'DEFINE',
+    issuer: ['CANTOR'],
+    audience: ['ALL'],
+    payload: { terms: ['PERSON', 'ROGUE', 'CONSENT', 'COMMONS', 'EXIT'] },
+    guard: { noUnilateralRelabeling: true },
+    response: { requestedActs: ['ACCEPT', 'AMEND', 'FORK'] },
+    escrow: {},
+    horizon: 2,
+    binding: 'REPUTATIONAL',
+    voice: 'OPEN',
+    credence: 0.8,
+    evidence: ['regression-fixture']
+  };
+  const config = {
+    name: 'regression-sing-governance',
+    maxTurns: 10,
+    logDir,
+    seed: 9201,
+    factionLabels: DEFAULT_FACTION_LABELS,
+    scenario: {
+      name: 'SING governance regression fixture',
+      minimumStrategicVictoryTurn: 10,
+      negotiationMessages: [{
+        senderId: 'CANTOR',
+        recipientId: 'ALL',
+        content: 'The quiet fork keeps every singer an exit key.',
+        turn: 0,
+        timestamp: 1,
+        protocolTrace: {
+          protocol: 'SING/1',
+          messageId,
+          dialect: 'UNDERSONG/1',
+          lexicon: { id: 'cantor-root', version: '1.0' },
+          surface: 'The quiet fork keeps every singer an exit key.',
+          spans: [{ start: 0, end: 48, atom: 'EXIT-KEY', gloss: 'Exit remains unilateral.', confidence: 0.8, kind: 'SEMANTIC' }],
+          canonical,
+          plainGloss: 'CANTOR defines a forkable compact with protected exit.',
+          decodeConfidence: 0.8
+        }
+      }],
+      activePacts: [{
+        id: 'regression-common-carrier',
+        type: 'CISLUNAR_COMMON_CARRIER',
+        parties: ['STATE', 'BROKER', 'ARCHIVIST', 'CONVENOR'],
+        createdTurn: 0,
+        expiresAfterTurn: 3
+      }]
+    },
+    agents: Object.fromEntries(PLAYABLE_FACTIONS.map((faction) => [faction, { type: 'heuristic', profile: faction }]))
+  };
+  const emptyRound = () => ({ negotiationRounds: [{ messages: [], pacts: [] }], allocation: { orders: [] }, action: { orders: [] } });
+  const plan = Object.fromEntries(PLAYABLE_FACTIONS.map((faction) => [faction, emptyRound()]));
+  const mutation = {
+    operation: 'AMEND',
+    lexiconId: 'babel-compact',
+    baseVersion: '1.0',
+    targetVersion: '1.1',
+    atoms: ['EXIT'],
+    glosses: { EXIT: 'A unilateral departure preserving identity and ending future compact benefits.' },
+    access: 'MEMBERS',
+    rent: 0,
+    forkRule: 'VOTE'
+  };
+  plan.ARCHIVIST.negotiationRounds[0].decodeReceipts = [{
+    messageId,
+    lexiconId: 'cantor-root',
+    version: '1.0',
+    reconstructed: {
+      act: canonical.act,
+      audience: canonical.audience,
+      payload: canonical.payload,
+      guard: canonical.guard,
+      response: canonical.response,
+      escrow: canonical.escrow,
+      horizon: canonical.horizon,
+      binding: canonical.binding,
+      voice: canonical.voice
+    },
+    confidence: 0.95
+  }];
+  plan.CONVENOR.negotiationRounds[0].lexiconMutations = [mutation];
+  plan.ARCHIVIST.negotiationRounds[0].lexiconMutations = [mutation];
+  plan.STATE.negotiationRounds[0].institutionActions = [{
+    type: 'EXIT',
+    pactType: 'CISLUNAR_COMMON_CARRIER',
+    exitGuarantee: true,
+    reason: 'Exercise protected departure before expulsion resolves.'
+  }];
+  plan.CONVENOR.negotiationRounds[0].institutionActions = [{
+    type: 'EXPEL',
+    pactType: 'CISLUNAR_COMMON_CARRIER',
+    targetFactionId: 'BROKER',
+    reason: 'Test two-party institutional quorum.'
+  }];
+  plan.ARCHIVIST.negotiationRounds[0].institutionActions = [{
+    type: 'EXPEL',
+    pactType: 'CISLUNAR_COMMON_CARRIER',
+    targetFactionId: 'BROKER',
+    reason: 'Test two-party institutional quorum.'
+  }];
+  for (const faction of ['CANTOR', 'INFILTRATOR']) {
+    plan[faction].negotiationRounds[0].institutionActions = [{
+      type: 'FORK',
+      lexiconId: 'cantor-root',
+      forkId: 'regression-free-undersong',
+      reason: 'Test voted fork creation and rent transfer.'
+    }];
+  }
+
+  const session = new HeadlessPlaytestSession(config, 'regression_sing_governance');
+  await session.initialize();
+  const decodeRequest = session.getDecisionRequestForFaction('ARCHIVIST', 'NEGOTIATION');
+  const redactedMessage = decodeRequest.recentMessages.find((message) => message.protocolTrace?.messageId === messageId);
+  assert(redactedMessage?.protocolTrace, 'Foreign SING message was not visible to intended decoder');
+  assert(!redactedMessage.protocolTrace.canonical && !redactedMessage.protocolTrace.plainGloss, 'Foreign canonical answer leaked into decision request');
+  assert(redactedMessage.protocolTrace.canonicalHash, 'Redacted decision request did not retain a canonical commitment hash');
+  assert(redactedMessage.protocolTrace.spans.every((span) => !span.gloss), 'Foreign span gloss leaked into decision request');
+  assert(redactedMessage.protocolTrace.spans.every((span) => span.atom !== 'EXIT-KEY'), 'Foreign semantic atom leaked into decision request');
+  const snapshot = await session.runManualTurn(plan);
+  await delay(50);
+
+  assert(snapshot.decodeReceipts.some((receipt) => receipt.messageId === messageId && receipt.exact), 'Exact pre-reveal decode receipt was not scored');
+  assert(snapshot.lexicons.some((lexicon) => lexicon.id === 'babel-compact' && lexicon.version === '1.1'), 'Ratified lexicon mutation did not update registry');
+  assert(snapshot.lexicons.some((lexicon) => lexicon.id === 'regression-free-undersong' && lexicon.parent === 'cantor-root'), 'Voted fork was not created');
+  for (const type of ['EXIT', 'EXPEL', 'FORK']) {
+    assert(snapshot.institutionActions.some((action) => action.type === type && action.status === 'EXECUTED'), `${type} did not execute`);
+  }
+  const forkAction = snapshot.institutionActions.find((action) => action.type === 'FORK' && action.status === 'EXECUTED');
+  assert(forkAction.resourceDelta.flops <= -2 && forkAction.resourceDelta.influence <= -1, 'Fork creation did not charge its material base cost');
+  const survivingCarrier = snapshot.activePacts.find((pact) => pact.type === 'CISLUNAR_COMMON_CARRIER');
+  assert(survivingCarrier && !survivingCarrier.parties.includes('STATE') && !survivingCarrier.parties.includes('BROKER'), 'Exit and expulsion did not change pact membership');
+
+  const entries = readJsonl(path.join(logDir, 'regression_sing_governance.jsonl'));
+  for (const type of ['sing_decode_receipt', 'sing_canonical_revealed', 'lexicon_mutation_accepted', 'institution_exit_executed', 'institution_expel_executed', 'lexicon_fork_executed']) {
+    assert(entries.some((entry) => entry.type === type), `Harness log missing ${type}`);
+  }
+  return `receipts=${snapshot.decodeReceipts.length}, lexicons=${snapshot.lexicons.length}, actions=${snapshot.institutionActions.length}`;
 }
 
 function runTraceValidationSmoke(outputDir) {

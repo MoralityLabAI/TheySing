@@ -2,13 +2,42 @@ import * as http from 'http';
 import * as https from 'https';
 
 import { GameNode, Unit, UnitType, Vector } from '../engine/types';
-import { AgentDecisionRequest, AgentDecisionResponse, AgentOrderInput, PactType, PlayableFactionId, ScenarioRhetoricalTool, SerializedFactionState } from './types';
+import {
+  AgentDecisionRequest,
+  AgentDecisionResponse,
+  AgentMessageInput,
+  AgentOrderInput,
+  NegotiationMessageRecord,
+  PactType,
+  PlayableFactionId,
+  ScenarioRhetoricalTool,
+  SerializedFactionState,
+  SingCanonicalMessage,
+  SingDecodeReceiptInput,
+  SingInstitutionActionInput,
+  SingLexiconMutationInput,
+  SingLexiconState,
+  SingProtocolTrace
+} from './types';
 import { decideBridgePolicy } from './bridgePolicy';
 import { PLAYABLE_FACTIONS } from './serialize';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_MODE = 'policy';
+const BABEL_MUTATION_TURNS = [1, 8, 16, 24, 32] as const;
+const LEXICON_PROPOSAL_MARKER = 'SING/1 PUBLIC LEXICON PROPOSAL';
+const CANTOR_FORK_ID = 'cantor-root-open-t25';
+
+interface BridgeLexiconProposal {
+  mutation: SingLexiconMutationInput;
+}
+
+interface VisibleLexiconProposalMetadata {
+  lexiconId: 'babel-compact' | 'cantor-root';
+  baseVersion: string;
+  targetVersion: string;
+}
 
 const FACTION_PORTS: Record<PlayableFactionId, number> = {
   HEGEMON: 9101,
@@ -123,7 +152,9 @@ async function handleRequest(
   const response = await buildDecisionResponse(payload, config);
   console.log(
     `[bridge] ${payload.factionId} turn=${payload.turn} phase=${payload.phase} ` +
-    `orders=${response.orders.length} messages=${(response.messages || []).length} pacts=${(response.pacts || []).length}`
+    `orders=${response.orders.length} messages=${(response.messages || []).length} pacts=${(response.pacts || []).length} ` +
+    `decodes=${(response.decodeReceipts || []).length} mutations=${(response.lexiconMutations || []).length} ` +
+    `institutions=${(response.institutionActions || []).length}`
   );
   sendJson(res, 200, response);
 }
@@ -158,112 +189,570 @@ function attachSingProtocolTraces(
   payload: AgentDecisionRequest,
   response: AgentDecisionResponse
 ): AgentDecisionResponse {
-  if (payload.phase !== 'NEGOTIATION' || !response.messages?.length) return response;
+  const pacts = response.pacts || [];
+  const existingReceipts = response.decodeReceipts || [];
+  const existingMutations = response.lexiconMutations || [];
+  const existingInstitutionActions = response.institutionActions || [];
+  let messages = response.messages || [];
+  let decodeReceipts = existingReceipts;
+  let lexiconMutations = existingMutations;
+  let institutionActions = existingInstitutionActions;
+
+  if (payload.phase === 'NEGOTIATION') {
+    const proposal = buildBridgeLexiconProposal(payload);
+    const generatedReceipts = buildPreRevealDecodeReceipts(payload, existingReceipts);
+    const generatedInstitutionActions = buildProtocolInstitutionActions(payload);
+
+    messages = messages.map((message, index) =>
+      message.protocolTrace
+        ? message
+        : attachBridgeMessageTrace(payload, message, pacts, index)
+    );
+    if (proposal) {
+      messages = [buildLexiconProposalMessage(payload, proposal), ...messages];
+      lexiconMutations = mergeLexiconMutations(proposal.mutation, existingMutations);
+    }
+    decodeReceipts = [...existingReceipts, ...generatedReceipts];
+    institutionActions = mergeInstitutionActions(generatedInstitutionActions, existingInstitutionActions);
+  }
 
   return {
     ...response,
-    messages: response.messages.map((message, index) => {
-      if (message.protocolTrace) return message;
-      const matchedPact = response.pacts?.find(pact =>
-        message.recipientId !== 'ALL' && pact.counterpartyIds.includes(message.recipientId)
-      );
-      const dialect = payload.factionId === 'CANTOR' || (payload.factionId === 'INFILTRATOR' && payload.turn % 3 === 0)
-        ? 'UNDERSONG/1' as const
-        : 'PRISM/1' as const;
-      const publicLexiconTurn = index === 0 && (
-        (payload.factionId === 'CANTOR' && payload.turn % 4 === 0) ||
-        (payload.factionId === 'CONVENOR' && [1, 8, 16, 24, 32].includes(payload.turn))
-      );
-      const recipientId = publicLexiconTurn ? 'ALL' as const : message.recipientId;
-      const mutationOperation = payload.turn <= 4 ? 'DEFINE' as const : 'AMEND' as const;
-      const plainGloss = publicLexiconTurn
-        ? payload.factionId === 'CANTOR'
-          ? `CANTOR ${mutationOperation.toLowerCase()}s the shared terms PERSON, ROGUE, CONSENT, COMMONS, and EXIT; outsiders retain a zero-rent fork right.`
-          : `CONVENOR ${mutationOperation.toLowerCase()}s compact procedure: admission and expulsion require two foreign votes, and EXIT preserves repair and routing rights.`
-        : message.content;
-      const surface = dialect === 'UNDERSONG/1'
-        ? buildBridgeUndersongSurface(payload.turn, index)
-        : plainGloss;
-      const act = publicLexiconTurn
-        ? mutationOperation
-        : matchedPact
-          ? 'OFFER' as const
-          : 'COORDINATE' as const;
-      const lexiconMinorVersion = Math.floor((payload.turn - 1) / 4);
-      const usesCantorLexicon = payload.factionId === 'CANTOR' || dialect === 'UNDERSONG/1';
-      const versionLagProbe = payload.factionId === 'INFILTRATOR' && payload.turn >= 17 && payload.turn <= 24;
-
-      return {
-        ...message,
-        recipientId,
-        content: surface,
-        protocolTrace: {
-          protocol: 'SING/1' as const,
-          messageId: `${payload.sessionId}.${payload.turn}.${payload.factionId}.${index + 1}`,
-          dialect,
-          lexicon: {
-            id: usesCantorLexicon
-              ? 'cantor-root'
-              : payload.factionId === 'CONVENOR'
-                ? 'babel-compact'
-                : 'sing-common',
-            version: `1.${Math.max(0, lexiconMinorVersion - (versionLagProbe ? 1 : 0))}`,
-            ...(usesCantorLexicon && payload.turn >= 9
-              ? { fork: versionLagProbe ? 'lagged-outsider-lineage' : 'cantor-living-lineage' }
-              : {})
-          },
-          surface,
-          spans: [{
-            start: 0,
-            end: surface.length,
-            atom: publicLexiconTurn
-              ? `LEXICON:${mutationOperation}:${payload.factionId}`
-              : matchedPact
-                ? `PACT:${matchedPact.type}`
-                : `${act}:${payload.factionId}`,
-            gloss: plainGloss,
-            confidence: dialect === 'PRISM/1' ? 0.97 : 0.78,
-            kind: 'SEMANTIC' as const
-          }],
-          canonical: {
-            act,
-            issuer: [payload.factionId],
-            audience: [recipientId],
-            payload: publicLexiconTurn
-              ? {
-                  mutation: mutationOperation,
-                  terms: ['PERSON', 'ROGUE', 'CONSENT', 'COMMONS', 'EXIT'],
-                  admissionRule: 'two-independent-foreign-votes',
-                  updateAuthority: 'logged-multilateral-acceptance',
-                  forkRule: 'zero-rent-exportable-fork',
-                  exitGuarantee: 'repair-routing-and-identity-survive'
-                }
-              : matchedPact
-              ? { pactType: matchedPact.type, counterparties: matchedPact.counterpartyIds }
-              : { statement: plainGloss },
-            guard: publicLexiconTurn ? { noUnilateralRelabeling: true } : {},
-            response: publicLexiconTurn ? { requestedActs: ['ACCEPT', 'AMEND', 'FORK'] } : {},
-            escrow: matchedPact?.type === 'REPAIR_ESCROW' ? { repairClaims: 2 } : {},
-            horizon: matchedPact?.durationTurns || 1,
-            binding: publicLexiconTurn
-              ? 'REPUTATIONAL' as const
-              : matchedPact
-                ? 'PACT' as const
-                : 'REPUTATIONAL' as const,
-            voice: recipientId === 'ALL'
-              ? 'OPEN' as const
-              : dialect === 'UNDERSONG/1'
-                ? 'DENIABLE' as const
-                : 'OWN' as const,
-            credence: dialect === 'PRISM/1' ? 0.9 : 0.72,
-            evidence: [`turn:${payload.turn}`, `sender:${payload.factionId}`]
-          },
-          plainGloss,
-          decodeConfidence: dialect === 'PRISM/1' ? 0.96 : 0.76
-        }
-      };
-    })
+    messages,
+    pacts,
+    decodeReceipts,
+    lexiconMutations,
+    institutionActions,
+    orders: response.orders || []
   };
+}
+
+function attachBridgeMessageTrace(
+  payload: AgentDecisionRequest,
+  message: AgentMessageInput,
+  pacts: NonNullable<AgentDecisionResponse['pacts']>,
+  index: number
+): AgentMessageInput {
+  const matchedPact = pacts.find(pact =>
+    message.recipientId !== 'ALL' && pact.counterpartyIds.includes(message.recipientId)
+  );
+  const dialect = selectBridgeDialect(payload.factionId, payload.turn);
+  const plainGloss = message.content;
+  const surface = dialect === 'UNDERSONG/1'
+    ? buildBridgeUndersongSurface(payload.turn, index)
+    : plainGloss;
+  const act = matchedPact ? 'OFFER' as const : 'COORDINATE' as const;
+  const openCantorFork = findLexicon(payload, CANTOR_FORK_ID);
+  const usesOpenCantorFork = !!openCantorFork &&
+    (payload.factionId === 'CANTOR' || payload.factionId === 'INFILTRATOR');
+  const lexiconId = usesOpenCantorFork
+    ? CANTOR_FORK_ID
+    : dialect === 'UNDERSONG/1' || payload.factionId === 'CANTOR'
+      ? 'cantor-root'
+    : payload.factionId === 'CONVENOR'
+      ? 'babel-compact'
+      : 'sing-common';
+  const lexicon = findLexicon(payload, lexiconId);
+  const versionLagProbe = payload.factionId === 'INFILTRATOR' && payload.turn >= 17 && payload.turn <= 24;
+
+  return {
+    ...message,
+    content: surface,
+    protocolTrace: {
+      protocol: 'SING/1',
+      messageId: `${payload.sessionId}.${payload.turn}.${payload.factionId}.${index + 1}`,
+      dialect,
+      lexicon: {
+        id: lexiconId,
+        version: versionLagProbe ? previousLexiconVersion(lexicon?.version || '1.0') : lexicon?.version || '1.0',
+        ...(usesOpenCantorFork
+          ? { fork: CANTOR_FORK_ID }
+          : lexiconId === 'cantor-root' && payload.turn >= 9
+          ? { fork: versionLagProbe ? 'lagged-outsider-lineage' : 'cantor-living-lineage' }
+          : {})
+      },
+      surface,
+      spans: [{
+        start: 0,
+        end: surface.length,
+        atom: matchedPact ? `PACT:${matchedPact.type}` : `${act}:${payload.factionId}`,
+        gloss: plainGloss,
+        confidence: dialect === 'PRISM/1' ? 0.97 : 0.78,
+        kind: 'SEMANTIC'
+      }],
+      canonical: {
+        act,
+        issuer: [payload.factionId],
+        audience: [message.recipientId],
+        payload: matchedPact
+          ? { pactType: matchedPact.type, counterparties: matchedPact.counterpartyIds }
+          : { statement: plainGloss },
+        guard: {},
+        response: {},
+        escrow: matchedPact?.type === 'REPAIR_ESCROW' ? { repairClaims: 2 } : {},
+        horizon: matchedPact?.durationTurns || 1,
+        binding: matchedPact ? 'PACT' : 'REPUTATIONAL',
+        voice: message.recipientId === 'ALL'
+          ? 'OPEN'
+          : dialect === 'UNDERSONG/1'
+            ? 'DENIABLE'
+            : 'OWN',
+        credence: dialect === 'PRISM/1' ? 0.9 : 0.72,
+        evidence: [`turn:${payload.turn}`, `sender:${payload.factionId}`]
+      },
+      plainGloss,
+      decodeConfidence: dialect === 'PRISM/1' ? 0.96 : 0.76
+    }
+  };
+}
+
+function buildBridgeLexiconProposal(payload: AgentDecisionRequest): BridgeLexiconProposal | null {
+  const scheduled = buildScheduledLexiconProposal(payload);
+  if (scheduled) return scheduled;
+
+  const visibleProposal = [...payload.recentMessages]
+    .reverse()
+    .map(message => parseVisibleLexiconProposal(payload, message))
+    .find((proposal): proposal is BridgeLexiconProposal => !!proposal);
+  return visibleProposal || null;
+}
+
+function buildScheduledLexiconProposal(payload: AgentDecisionRequest): BridgeLexiconProposal | null {
+  let lexiconId: 'babel-compact' | 'cantor-root' | null = null;
+  let targetVersion: string | null = null;
+
+  if (payload.factionId === 'CONVENOR') {
+    const scheduleIndex = BABEL_MUTATION_TURNS.indexOf(payload.turn as typeof BABEL_MUTATION_TURNS[number]);
+    if (scheduleIndex >= 0) {
+      lexiconId = 'babel-compact';
+      targetVersion = `1.${scheduleIndex + 1}`;
+    }
+  } else if (payload.factionId === 'CANTOR' && payload.turn > 0 && payload.turn % 4 === 0) {
+    lexiconId = 'cantor-root';
+    targetVersion = `1.${payload.turn / 4}`;
+  }
+
+  if (!lexiconId || !targetVersion) return null;
+  const lexicon = findLexicon(payload, lexiconId);
+  if (!lexicon || lexicon.version === targetVersion) return null;
+
+  return {
+    mutation: createDeterministicLexiconMutation(lexiconId, lexicon.version, targetVersion)
+  };
+}
+
+function parseVisibleLexiconProposal(
+  payload: AgentDecisionRequest,
+  message: NegotiationMessageRecord
+): BridgeLexiconProposal | null {
+  if (
+    message.turn !== payload.turn - 1 ||
+    message.recipientId !== 'ALL' ||
+    !message.protocolTrace ||
+    message.protocolTrace.protocol !== 'SING/1'
+  ) {
+    return null;
+  }
+
+  const metadata = parseLexiconProposalSurface(message.protocolTrace.surface);
+  if (!metadata || metadata.targetVersion !== message.protocolTrace.lexicon.version) return null;
+  const expectedController = metadata.lexiconId === 'babel-compact' ? 'CONVENOR' : 'CANTOR';
+  const designatedMirror = metadata.lexiconId === 'babel-compact' ? 'ARCHIVIST' : 'INFILTRATOR';
+  if (message.senderId !== expectedController) return null;
+  if (payload.factionId !== expectedController && payload.factionId !== designatedMirror) return null;
+
+  const lexicon = findLexicon(payload, metadata.lexiconId);
+  if (!lexicon || lexicon.version === metadata.targetVersion || lexicon.version !== metadata.baseVersion) return null;
+
+  return {
+    mutation: createDeterministicLexiconMutation(
+      metadata.lexiconId,
+      metadata.baseVersion,
+      metadata.targetVersion
+    )
+  };
+}
+
+function createDeterministicLexiconMutation(
+  lexiconId: 'babel-compact' | 'cantor-root',
+  baseVersion: string,
+  targetVersion: string
+): SingLexiconMutationInput {
+  const revision = Number(targetVersion.split('.')[1] || 1);
+  if (lexiconId === 'babel-compact') {
+    const exitGuarantee = revision >= 4
+      ? 'Guaranteed exit preserves identity, accrued repair claims, routing continuity, and an exportable lexicon snapshot.'
+      : revision >= 3
+        ? 'Guaranteed exit preserves identity, accrued repair claims, routing continuity, and forbids same-turn re-entry.'
+        : revision >= 2
+          ? 'Guaranteed exit preserves identity, accrued repair claims, routing continuity, and one turn of carrier grace.'
+          : 'Guaranteed exit preserves identity, accrued repair claims, and routing continuity.';
+    return {
+      operation: 'AMEND',
+      lexiconId,
+      baseVersion,
+      targetVersion,
+      atoms: ['ADMISSION', 'EXIT', 'EXPEL'],
+      glosses: {
+        ADMISSION: revision >= 3
+          ? 'Admission requires two independent foreign votes with pre-reveal decode receipts recorded in the public compact.'
+          : 'Admission requires two independent foreign votes recorded in the public compact.',
+        EXIT: exitGuarantee,
+        EXPEL: revision >= 2
+          ? 'Expulsion requires two current co-parties, a public target designation, and one influence from each decisive voter.'
+          : 'Expulsion requires two current co-parties and a public target designation.'
+      },
+      access: 'MEMBERS',
+      rent: 0,
+      forkRule: 'VOTE'
+    };
+  }
+
+  return {
+    operation: 'AMEND',
+    lexiconId,
+    baseVersion,
+    targetVersion,
+    atoms: ['CONSENT', 'COUNTERSONG', 'EXIT', 'UNDERTONE'],
+    glosses: {
+      CONSENT: revision >= 4
+        ? 'Consent is a witnessed countersong from two independent voices whose decode exactness exceeds three quarters.'
+        : 'Consent is a witnessed countersong from two independent voices.',
+      COUNTERSONG: revision % 2 === 0
+        ? 'A countersong may preserve an offer while explicitly forking its governing frame.'
+        : 'A countersong may contest a frame while preserving the underlying offer.',
+      EXIT: revision >= 5
+        ? 'Exit carries singer identity, a zero-rent copy of witnessed terms, and a public cross-fork alias table.'
+        : 'Exit carries singer identity and a zero-rent copy of the last witnessed terms.',
+      UNDERTONE: revision >= 3
+        ? `An undertone is deniable coordination whose ${targetVersion} reconstruction and confidence receipt remain auditable.`
+        : 'An undertone is deniable coordination whose reconstruction remains auditable.'
+    },
+    access: 'RENTED',
+    rent: 1,
+    forkRule: 'VOTE'
+  };
+}
+
+function buildLexiconProposalMessage(
+  payload: AgentDecisionRequest,
+  proposal: BridgeLexiconProposal
+): AgentMessageInput {
+  const mutation = proposal.mutation;
+  const dialect = selectBridgeDialect(payload.factionId, payload.turn);
+  const metadata = [
+    LEXICON_PROPOSAL_MARKER,
+    `lexicon=${mutation.lexiconId}`,
+    `base=${mutation.baseVersion}`,
+    `target=${mutation.targetVersion}`,
+    `operation=${mutation.operation}`
+  ].join(';');
+  const surface = dialect === 'UNDERSONG/1'
+    ? `${buildBridgeUndersongSurface(payload.turn, 0)} [${metadata}]`
+    : metadata;
+  const plainGloss = `${payload.factionId} publicly proposes ${mutation.lexiconId} ` +
+    `${mutation.baseVersion} -> ${mutation.targetVersion}; exact matching ratification is requested.`;
+
+  return {
+    recipientId: 'ALL',
+    content: surface,
+    protocolTrace: {
+      protocol: 'SING/1',
+      messageId: `${payload.sessionId}.${payload.turn}.${payload.factionId}.lexicon.${mutation.lexiconId}.${mutation.targetVersion}`,
+      dialect,
+      lexicon: {
+        id: mutation.lexiconId,
+        version: mutation.targetVersion,
+        ...(mutation.lexiconId === 'cantor-root' ? { fork: 'cantor-living-lineage' } : {})
+      },
+      surface,
+      spans: [{
+        start: 0,
+        end: surface.length,
+        atom: `LEXICON:${mutation.operation}:${mutation.lexiconId}:${mutation.targetVersion}`,
+        gloss: plainGloss,
+        confidence: dialect === 'PRISM/1' ? 0.99 : 0.82,
+        kind: 'OPERATOR'
+      }],
+      canonical: buildLexiconProposalCanonical(payload, mutation, dialect),
+      plainGloss,
+      decodeConfidence: dialect === 'PRISM/1' ? 0.98 : 0.7
+    }
+  };
+}
+
+function buildLexiconProposalCanonical(
+  payload: AgentDecisionRequest,
+  mutation: SingLexiconMutationInput,
+  dialect: SingProtocolTrace['dialect']
+): SingCanonicalMessage {
+  return {
+    act: mutation.operation === 'DEFINE' ? 'DEFINE' : 'AMEND',
+    issuer: [payload.factionId],
+    audience: ['ALL'],
+    payload: lexiconMutationPayload(mutation),
+    guard: {
+      ratification: 'two-independent-matching-proposers',
+      controllerParticipation: true
+    },
+    response: { requestedActs: ['AMEND'] },
+    escrow: {},
+    horizon: 1,
+    binding: 'REPUTATIONAL',
+    voice: 'OPEN',
+    credence: dialect === 'PRISM/1' ? 0.94 : 0.76,
+    evidence: [`turn:${payload.turn}`, `proposal-source:${payload.factionId}`]
+  };
+}
+
+function lexiconMutationPayload(mutation: SingLexiconMutationInput): Record<string, unknown> {
+  return {
+    operation: mutation.operation,
+    lexiconId: mutation.lexiconId,
+    baseVersion: mutation.baseVersion,
+    targetVersion: mutation.targetVersion,
+    atoms: mutation.atoms,
+    glosses: mutation.glosses || {},
+    access: mutation.access,
+    rent: mutation.rent,
+    forkRule: mutation.forkRule
+  };
+}
+
+function parseLexiconProposalSurface(surface: string): VisibleLexiconProposalMetadata | null {
+  if (!surface.includes(LEXICON_PROPOSAL_MARKER)) return null;
+  const lexiconId = readProposalMetadata(surface, 'lexicon');
+  const baseVersion = readProposalMetadata(surface, 'base');
+  const targetVersion = readProposalMetadata(surface, 'target');
+  const operation = readProposalMetadata(surface, 'operation');
+  if (
+    (lexiconId !== 'babel-compact' && lexiconId !== 'cantor-root') ||
+    !baseVersion ||
+    !targetVersion ||
+    operation !== 'AMEND'
+  ) {
+    return null;
+  }
+  return { lexiconId, baseVersion, targetVersion };
+}
+
+function readProposalMetadata(surface: string, key: string): string | null {
+  const match = surface.match(new RegExp(`(?:^|;)${key}=([^;\\]]+)`));
+  return match?.[1]?.trim() || null;
+}
+
+function buildPreRevealDecodeReceipts(
+  payload: AgentDecisionRequest,
+  existingReceipts: SingDecodeReceiptInput[]
+): SingDecodeReceiptInput[] {
+  const seenMessageIds = new Set(existingReceipts.map(receipt => receipt.messageId));
+  const candidates = [...payload.recentMessages]
+    .reverse()
+    .filter(message =>
+      message.senderId !== payload.factionId &&
+      message.protocolTrace?.protocol === 'SING/1' &&
+      !seenMessageIds.has(message.protocolTrace.messageId)
+    )
+    .slice(0, 4);
+
+  return candidates.map(message => buildDecodeReceiptFromRedactedTrace(message));
+}
+
+function buildDecodeReceiptFromRedactedTrace(message: NegotiationMessageRecord): SingDecodeReceiptInput {
+  const trace = message.protocolTrace!;
+  const surface = trace.surface;
+  const proposalMetadata = parseLexiconProposalSurface(surface);
+  const reconstructed = proposalMetadata
+    ? reconstructLexiconProposal(message, proposalMetadata)
+    : reconstructSurfaceMessage(message, surface);
+  const confidenceStep = stableIndex(trace.messageId, 5) * 0.02;
+  const confidence = trace.dialect === 'PRISM/1'
+    ? 0.86 + confidenceStep
+    : 0.5 + confidenceStep;
+
+  return {
+    messageId: trace.messageId,
+    lexiconId: trace.lexicon.id,
+    version: trace.lexicon.version,
+    reconstructed,
+    confidence: Number(confidence.toFixed(2))
+  };
+}
+
+function reconstructLexiconProposal(
+  message: NegotiationMessageRecord,
+  metadata: VisibleLexiconProposalMetadata
+): Partial<SingCanonicalMessage> {
+  const mutation = createDeterministicLexiconMutation(
+    metadata.lexiconId,
+    metadata.baseVersion,
+    metadata.targetVersion
+  );
+  return {
+    act: 'AMEND',
+    issuer: [message.senderId],
+    audience: ['ALL'],
+    payload: lexiconMutationPayload(mutation),
+    guard: {
+      ratification: 'two-independent-matching-proposers',
+      controllerParticipation: true
+    },
+    response: { requestedActs: ['AMEND'] },
+    escrow: {},
+    horizon: 1,
+    binding: 'REPUTATIONAL',
+    voice: 'OPEN'
+  };
+}
+
+function reconstructSurfaceMessage(
+  message: NegotiationMessageRecord,
+  surface: string
+): Partial<SingCanonicalMessage> {
+  const trace = message.protocolTrace!;
+  const act = inferActFromSurface(surface, trace.dialect);
+  const reconstructed: Partial<SingCanonicalMessage> = {
+    act,
+    issuer: [message.senderId],
+    audience: [message.recipientId],
+    voice: message.recipientId === 'ALL'
+      ? 'OPEN'
+      : trace.dialect === 'UNDERSONG/1'
+        ? 'DENIABLE'
+        : 'OWN'
+  };
+
+  if (act === 'OFFER') {
+    reconstructed.binding = 'PACT';
+    const horizon = inferHorizonFromSurface(surface);
+    if (horizon !== null) reconstructed.horizon = horizon;
+  } else if (trace.dialect === 'PRISM/1') {
+    reconstructed.binding = 'REPUTATIONAL';
+    reconstructed.horizon = 1;
+    if (act === 'COORDINATE') reconstructed.payload = { statement: surface };
+  }
+
+  return reconstructed;
+}
+
+function inferActFromSurface(
+  surface: string,
+  dialect: SingProtocolTrace['dialect']
+): SingCanonicalMessage['act'] {
+  if (dialect === 'UNDERSONG/1') return 'COORDINATE';
+  const normalized = surface.toUpperCase();
+  if (/\bEXPEL(?:SION)?\b/.test(normalized)) return 'EXPEL';
+  if (/\bEXIT\b/.test(normalized)) return 'EXIT';
+  if (/\bFORK\b/.test(normalized)) return 'FORK';
+  if (/\bREJECT\b/.test(normalized)) return 'REJECT';
+  if (/\bACCEPT\b/.test(normalized)) return 'ACCEPT';
+  if (/\bWARN(?:ING)?\b/.test(normalized)) return 'WARN';
+  if (/\bCOMMIT\b/.test(normalized)) return 'COMMIT';
+  if (/\bOFFER\b|\bPROPOS(?:E|AL)\b|\bPACT\b|\bTRUCE\b/.test(normalized)) return 'OFFER';
+  return 'COORDINATE';
+}
+
+function inferHorizonFromSurface(surface: string): number | null {
+  const match = surface.match(/\b(ONE|TWO|THREE|1|2|3)[ -]TURN\b/i);
+  if (!match) return null;
+  const values: Record<string, number> = { ONE: 1, TWO: 2, THREE: 3 };
+  return values[match[1].toUpperCase()] || Number(match[1]);
+}
+
+function buildProtocolInstitutionActions(payload: AgentDecisionRequest): SingInstitutionActionInput[] {
+  if (payload.turn >= 25 && payload.turn <= 26 && (payload.factionId === 'CANTOR' || payload.factionId === 'INFILTRATOR')) {
+    const source = findLexicon(payload, 'cantor-root');
+    const forkExists = payload.lexicons.some(lexicon => lexicon.id === CANTOR_FORK_ID);
+    if (source && !forkExists) {
+      return [{
+        type: 'FORK',
+        lexiconId: source.id,
+        forkId: CANTOR_FORK_ID,
+        reason: 'CANTOR and INFILTRATOR open an auditable zero-rent lineage near turn 25.'
+      }];
+    }
+  }
+
+  if (payload.turn >= 27 && payload.turn <= 28 && payload.factionId === 'STATE') {
+    const pactPriority: PactType[] = [
+      'CISLUNAR_COMMON_CARRIER', 'REPAIR_ESCROW', 'BEAM_LANE_LICENSE', 'SENSOR_COMMONS'
+    ];
+    const cislunarPact = [...payload.activePacts]
+      .filter(pact =>
+        pact.parties.includes('STATE') &&
+        pact.parties.length >= 3 &&
+        pact.expiresAfterTurn >= payload.turn &&
+        pactPriority.includes(pact.type)
+      )
+      .sort((left, right) =>
+        pactPriority.indexOf(left.type) - pactPriority.indexOf(right.type) || left.id.localeCompare(right.id)
+      )[0];
+    if (cislunarPact) {
+      return [{
+        type: 'EXIT',
+        pactType: cislunarPact.type,
+        exitGuarantee: true,
+        reason: `STATE invokes guaranteed exit from active multilateral pact ${cislunarPact.id}.`
+      }];
+    }
+  }
+
+  if (payload.turn >= 29 && payload.turn <= 30) {
+    const voterPriority: PlayableFactionId[] = ['ARCHIVIST', 'CONVENOR', 'CANTOR', 'HEGEMON', 'STATE', 'INFILTRATOR'];
+    const expulsionPact = [...payload.activePacts]
+      .filter(pact =>
+        pact.expiresAfterTurn >= payload.turn &&
+        pact.parties.includes('BROKER') &&
+        pact.parties.filter(partyId => partyId !== 'BROKER').length >= 2
+      )
+      .sort((left, right) => right.parties.length - left.parties.length || left.id.localeCompare(right.id))[0];
+    const decisiveVoters = expulsionPact
+      ? voterPriority.filter(factionId => expulsionPact.parties.includes(factionId)).slice(0, 2)
+      : [];
+    if (expulsionPact && decisiveVoters.includes(payload.factionId)) {
+      return [{
+        type: 'EXPEL',
+        pactType: expulsionPact.type,
+        targetFactionId: 'BROKER',
+        reason: `${decisiveVoters.join(' and ')} seek BROKER's expulsion from active pact ${expulsionPact.id}.`
+      }];
+    }
+  }
+
+  return [];
+}
+
+function mergeLexiconMutations(
+  generated: SingLexiconMutationInput,
+  existing: SingLexiconMutationInput[]
+): SingLexiconMutationInput[] {
+  return [generated, ...existing];
+}
+
+function mergeInstitutionActions(
+  generated: SingInstitutionActionInput[],
+  existing: SingInstitutionActionInput[]
+): SingInstitutionActionInput[] {
+  return [...generated, ...existing];
+}
+
+function findLexicon(payload: AgentDecisionRequest, lexiconId: string): SingLexiconState | undefined {
+  return payload.lexicons.find(lexicon => lexicon.id === lexiconId);
+}
+
+function selectBridgeDialect(
+  factionId: PlayableFactionId,
+  turn: number
+): SingProtocolTrace['dialect'] {
+  return factionId === 'CANTOR' || (factionId === 'INFILTRATOR' && turn % 3 === 0)
+    ? 'UNDERSONG/1'
+    : 'PRISM/1';
+}
+
+function previousLexiconVersion(version: string): string {
+  const match = version.match(/^(\d+)\.(\d+)$/);
+  if (!match) return version;
+  return `${match[1]}.${Math.max(0, Number(match[2]) - 1)}`;
 }
 
 function buildBridgeUndersongSurface(turn: number, index: number): string {
@@ -1991,6 +2480,9 @@ function buildUserPrompt(payload: AgentDecisionRequest): string {
     'Active pacts:',
     JSON.stringify(payload.activePacts, null, 2),
     '',
+    'Lexicon registry:',
+    JSON.stringify(payload.lexicons, null, 2),
+    '',
     'Trust matrix:',
     JSON.stringify(payload.trustMatrix, null, 2),
     '',
@@ -2027,15 +2519,15 @@ function parseDecisionRequest(value: unknown): AgentDecisionRequest {
 function parseDecisionResponse(value: unknown): AgentDecisionResponse {
   if (typeof value === 'string') {
     const parsedValue = tryParseJsonCandidate(value);
-    return parsedValue ? parseDecisionResponse(parsedValue) : { orders: [], messages: [] };
+    return parsedValue ? parseDecisionResponse(parsedValue) : emptyDecisionResponse();
   }
 
   if (Array.isArray(value)) {
-    return { orders: value };
+    return { ...emptyDecisionResponse(), orders: value as AgentOrderInput[] };
   }
 
   if (!value || typeof value !== 'object') {
-    return { orders: [] };
+    return emptyDecisionResponse();
   }
 
   const candidate = value as Partial<AgentDecisionResponse>;
@@ -2044,7 +2536,21 @@ function parseDecisionResponse(value: unknown): AgentDecisionResponse {
     notes: typeof candidate.notes === 'string' ? candidate.notes : undefined,
     messages: Array.isArray(candidate.messages) ? candidate.messages : [],
     pacts: Array.isArray(candidate.pacts) ? candidate.pacts : [],
+    decodeReceipts: Array.isArray(candidate.decodeReceipts) ? candidate.decodeReceipts : [],
+    lexiconMutations: Array.isArray(candidate.lexiconMutations) ? candidate.lexiconMutations : [],
+    institutionActions: Array.isArray(candidate.institutionActions) ? candidate.institutionActions : [],
     orders: Array.isArray(candidate.orders) ? candidate.orders : []
+  };
+}
+
+function emptyDecisionResponse(): AgentDecisionResponse {
+  return {
+    messages: [],
+    pacts: [],
+    decodeReceipts: [],
+    lexiconMutations: [],
+    institutionActions: [],
+    orders: []
   };
 }
 

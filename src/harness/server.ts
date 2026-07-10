@@ -174,8 +174,9 @@ function buildWebhookContract(): Record<string, unknown> {
       state: 'serialized match state',
       legalHints: 'action and build hints',
       scenario: 'optional scenario metadata and briefing',
-      recentMessages: 'visible negotiation transcript',
+      recentMessages: 'visible negotiation transcript; foreign SING/1 canonical and gloss fields are redacted before decode receipt submission',
       activePacts: 'currently active negotiated pacts',
+      lexicons: 'current lexicon versions, controllers, adopters, access, rent, and fork rules',
       trustMatrix: 'current bilateral trust scores',
       negotiationStoryworld: 'for NEGOTIATION, a short frame plus counterfactual alliance enter/break projections',
       instructions: 'JSON-only response contract'
@@ -196,6 +197,32 @@ function buildWebhookContract(): Record<string, unknown> {
           durationTurns: 'optional 1-3'
         }
       ],
+      decodeReceipts: [{
+        messageId: 'foreign SING/1 message id',
+        lexiconId: 'claimed lexicon id',
+        version: 'claimed version',
+        reconstructed: 'partial canonical message reconstructed before reveal',
+        confidence: '0-1'
+      }],
+      lexiconMutations: [{
+        operation: 'DEFINE | AMEND | ALIAS | NARROW | GENERALIZE | SPLIT | MERGE | RETIRE',
+        lexiconId: 'string',
+        baseVersion: 'optional string',
+        targetVersion: 'string',
+        atoms: ['string'],
+        access: 'optional OPEN | MEMBERS | RENTED',
+        rent: 'optional 0-10',
+        forkRule: 'optional OPEN | VOTE | OWNER'
+      }],
+      institutionActions: [{
+        type: 'EXIT | EXPEL | FORK',
+        pactType: 'required for EXIT/EXPEL',
+        targetFactionId: 'required for EXPEL',
+        lexiconId: 'required for FORK',
+        forkId: 'required for FORK',
+        exitGuarantee: 'optional boolean',
+        reason: 'optional string'
+      }],
       orders: [
         {
           type: 'MOVE | HOLD | SUPPORT | ATTACK | FILTER | SABOTAGE | ANTI_SAT | CHALLENGE_MANDATE | LICENSED_BEAM_USE | REPAIR_ESCROW_CLAIM | CONVERT | AUDIT | RECRUITMENT_PULSE | BROKER_LEVERAGE | BUILD | RESEARCH',
@@ -257,7 +284,8 @@ function buildSessionConfigContract(): Record<string, unknown> {
     notes: [
       'If baseUrl points at a local OpenAI-compatible server, the Authorization header is omitted when no apiKey is configured.',
       'Use /contract/agent-webhook for the webhook request/response shape.',
-      'Negotiated pacts activate only when every named party returns the same pact commitment during the NEGOTIATION phase.'
+      'Negotiated pacts activate only when every named party returns the same pact commitment during the NEGOTIATION phase.',
+      'Foreign protocol traces must be decoded from their surface before reveal; executable exit, expulsion, mutation, and fork attempts are logged with material deltas.'
     ]
   };
 }
