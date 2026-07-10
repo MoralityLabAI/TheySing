@@ -1,5 +1,7 @@
 # Seven-Agent Babel Compact: Executable Governance Findings V2
 
+> Superseded for cartel interpretation by `SEVEN_AGENT_BABEL_ROBUSTNESS_FINDINGS_V3.md`. The V2 analyzer selected an authority-containing bloc before the dominant repeated bloc, so its cartel headline is retained only as experiment history.
+
 Date: 2026-07-10
 
 ## Scope

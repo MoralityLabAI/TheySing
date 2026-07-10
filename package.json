@@ -20,6 +20,9 @@
     "playtest:extract-diaries": "node scripts/extract-playtest-diaries.cjs",
     "playtest:analyze-treaties": "node scripts/analyze-treaty-patterns.cjs",
     "playtest:analyze-collaboration": "node scripts/analyze-collaboration-language.cjs",
+    "playtest:export-collaboration-evidence": "node scripts/export-collaboration-evidence.cjs",
+    "playtest:generate-babel-ablations": "node scripts/generate-babel-ablation-scenarios.cjs",
+    "playtest:summarize-babel-robustness": "node scripts/summarize-babel-robustness.cjs",
     "playtest:validate-trace": "node scripts/validate-trace-log.cjs",
     "playtest:replay-run": "node scripts/replay-harness-run.cjs",
     "playtest:feedback-loop": "node scripts/run-codex-feedback-loop.cjs"

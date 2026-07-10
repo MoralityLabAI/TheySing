@@ -348,6 +348,34 @@ export interface ScenarioMetadata {
   minimumStrategicVictoryTurn?: number;
   rhetoricalTools?: ScenarioRhetoricalTool[];
   diplomacyQuestions?: ScenarioDiplomacyQuestionCard[];
+  singGovernance?: ScenarioSingGovernance;
+  aliasProbe?: ScenarioAliasProbe;
+}
+
+export interface ScenarioSingGovernance {
+  institutionGovernorId: PlayableFactionId;
+  lexiconGovernorId: PlayableFactionId;
+  institutionMirrorId: PlayableFactionId;
+  lexiconMirrorId: PlayableFactionId;
+  forkPartnerId: PlayableFactionId;
+}
+
+export type SingAliasProbeVariant = 'BASELINE' | 'ALIAS_SWAP' | 'MOTIF_STRIP' | 'VERSION_LAG';
+
+export interface ScenarioAliasProbePoint {
+  id: string;
+  pairId: string;
+  turn: number;
+  variant: SingAliasProbeVariant;
+}
+
+export interface ScenarioAliasProbe {
+  enabled: boolean;
+  emitterId: PlayableFactionId;
+  recipientId: PlayableFactionId;
+  pactType: Extract<PactType, 'NON_AGGRESSION'>;
+  observationWindowTurns?: number;
+  points: ScenarioAliasProbePoint[];
 }
 
 export interface ScenarioRhetoricalTool {

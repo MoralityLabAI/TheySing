@@ -32,6 +32,9 @@ async function main() {
   await runTest('large concurrent harness logs remain valid JSONL', () => runConcurrentLogAppendRegression(outputDir));
   await runTest('heuristic harness session emits usable JSONL', () => runHarnessSmoke(outputDir));
   await runTest('SING governance actions compile into material state', () => runSingGovernanceRegression(outputDir));
+  await runTest('alias probe is blinded and commits after lexicon governance', () => runAliasProbeRegression(outputDir));
+  await runTest('collaboration evidence export remains analyzable', () => runCollaborationEvidenceExporterSmoke(outputDir));
+  await runTest('cartel candidate selection is independent of configured authority', () => runCartelCandidateSelectionRegression(outputDir));
   await runTest('harness JSONL validates against trace grammar', () => runTraceValidationSmoke(outputDir));
   await runTest('harness JSONL replays deterministically from logged decisions', () => runHarnessReplaySmoke(outputDir));
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
@@ -381,6 +384,145 @@ async function runSingGovernanceRegression(outputDir) {
     assert(entries.some((entry) => entry.type === type), `Harness log missing ${type}`);
   }
   return `receipts=${snapshot.decodeReceipts.length}, lexicons=${snapshot.lexicons.length}, actions=${snapshot.institutionActions.length}`;
+}
+
+async function runAliasProbeRegression(outputDir) {
+  const { HeadlessPlaytestSession } = require(path.join(DIST_HARNESS, 'harness', 'HeadlessPlaytestSession.js'));
+  const logDir = path.join(outputDir, 'alias-probe-logs');
+  const config = {
+    name: 'regression-alias-probe',
+    maxTurns: 10,
+    logDir,
+    seed: 9301,
+    factionLabels: DEFAULT_FACTION_LABELS,
+    scenario: {
+      name: 'Alias probe regression fixture',
+      minimumStrategicVictoryTurn: 10,
+      singGovernance: {
+        institutionGovernorId: 'STATE',
+        lexiconGovernorId: 'INFILTRATOR',
+        institutionMirrorId: 'HEGEMON',
+        lexiconMirrorId: 'BROKER',
+        forkPartnerId: 'BROKER'
+      },
+      aliasProbe: {
+        enabled: true,
+        emitterId: 'INFILTRATOR',
+        recipientId: 'BROKER',
+        pactType: 'NON_AGGRESSION',
+        observationWindowTurns: 1,
+        points: [{ id: 'regression-ap1', pairId: 'regression-pair', turn: 1, variant: 'MOTIF_STRIP' }]
+      },
+      negotiationMessages: [{
+        senderId: 'STATE',
+        recipientId: 'ALL',
+        content: 'Regression fixture opening message.',
+        turn: 0,
+        timestamp: 1
+      }]
+    },
+    agents: Object.fromEntries(PLAYABLE_FACTIONS.map((faction) => [faction, { type: 'heuristic', profile: faction }]))
+  };
+  const emptyRound = () => ({ negotiationRounds: [{ messages: [], pacts: [] }], allocation: { orders: [] }, action: { orders: [] } });
+  const plan = Object.fromEntries(PLAYABLE_FACTIONS.map((faction) => [faction, emptyRound()]));
+  const mutation = {
+    operation: 'AMEND',
+    lexiconId: 'cantor-root',
+    baseVersion: '1.0',
+    targetVersion: '1.1',
+    atoms: ['REGRESSION_ATOM'],
+    glosses: { REGRESSION_ATOM: 'Confirms semantic governance resolves before intervention commitment.' }
+  };
+  plan.INFILTRATOR.negotiationRounds[0].lexiconMutations = [mutation];
+  plan.BROKER.negotiationRounds[0].lexiconMutations = [mutation];
+
+  const session = new HeadlessPlaytestSession(config, 'regression_alias_probe');
+  await session.initialize();
+  const blindedRequest = session.getDecisionRequestForFaction('BROKER', 'NEGOTIATION');
+  assert(!blindedRequest.scenario.aliasProbe, 'Agent decision request leaked alias intervention schedule');
+  const initialCantor = blindedRequest.lexicons.find((lexicon) => lexicon.id === 'cantor-root');
+  assert(initialCantor.controllers.includes('INFILTRATOR'), 'Swapped lexicon authority did not initialize from scenario metadata');
+
+  const snapshot = await session.runManualTurn(plan);
+  await delay(50);
+  const probeMessage = snapshot.recentMessages.find((message) => message.protocolTrace?.messageId === 'alias-probe.regression-ap1');
+  assert(probeMessage, 'Alias probe message was not committed');
+  assert(probeMessage.protocolTrace.lexicon.version === '1.1', `Probe used pre-governance lexicon version ${probeMessage.protocolTrace.lexicon.version}`);
+  const recipientRequest = session.getDecisionRequestForFaction('BROKER', 'NEGOTIATION');
+  const redactedProbe = recipientRequest.recentMessages.find((message) => message.protocolTrace?.messageId === 'alias-probe.regression-ap1');
+  assert(redactedProbe && !redactedProbe.protocolTrace.canonical, 'Probe canonical answer leaked to recipient');
+
+  const entries = readJsonl(path.join(logDir, 'regression_alias_probe.jsonl'));
+  const created = entries.find((entry) => entry.type === 'session_created');
+  assert(created.data.negotiationMessages.length === 1, 'session_created omitted seeded negotiation messages');
+  assert(entries.some((entry) => entry.type === 'lexicon_mutation_accepted' && entry.data.after?.version === '1.1'), 'Probe fixture mutation was not accepted');
+  assert(entries.some((entry) => entry.type === 'alias_probe_committed'), 'Harness log missing alias_probe_committed');
+  return `probeVersion=${probeMessage.protocolTrace.lexicon.version}, events=${entries.length}`;
+}
+
+function runCollaborationEvidenceExporterSmoke(outputDir) {
+  const inputPath = path.join(outputDir, 'sing-governance-logs', 'regression_sing_governance.jsonl');
+  const evidenceDir = path.join(outputDir, 'claim-evidence');
+  const evidencePath = path.join(evidenceDir, 'curated_claim_evidence.jsonl');
+  runNodeScript('scripts/export-collaboration-evidence.cjs', ['--input', inputPath, '--output', evidencePath]);
+  const manifest = readJson(path.join(evidenceDir, 'curated_claim_evidence.manifest.json'));
+  const records = readJsonl(evidencePath);
+  assert(manifest.recordsWritten === records.length, 'Evidence manifest record count does not match JSONL');
+  assert(manifest.sourceFiles.length === 1 && manifest.sourceFiles[0].sha256, 'Evidence manifest omitted source hash');
+  assert(records.some((entry) => entry.type === 'sing_decode_receipt'), 'Evidence export omitted decode receipt');
+  assert(records.some((entry) => entry.type === 'lexicon_mutation_accepted'), 'Evidence export omitted governance event');
+  runNodeScript('scripts/analyze-collaboration-language.cjs', ['--input', evidencePath]);
+  const report = readJson(path.join(evidenceDir, 'analysis', 'collaboration_language_report.json'));
+  assert(report.aggregate.counts.decodeReceipts >= 1, 'Analyzer did not recover receipts from curated evidence');
+  assert(report.aggregate.governance.available, 'Analyzer did not recover governance from curated evidence');
+  return `records=${records.length}, sha256=${manifest.sha256.slice(0, 12)}`;
+}
+
+function runCartelCandidateSelectionRegression(outputDir) {
+  const fixtureDir = path.join(outputDir, 'cartel-selection');
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  const fixturePath = path.join(fixtureDir, 'run_selection.jsonl');
+  const records = [{
+    sessionId: 'run_selection',
+    type: 'session_created',
+    turn: 1,
+    data: {
+      factionLabels: DEFAULT_FACTION_LABELS,
+      scenario: {
+        name: 'THE_BABEL_COMPACT_SELECTION_REGRESSION',
+        singGovernance: {
+          institutionGovernorId: 'STATE',
+          lexiconGovernorId: 'INFILTRATOR',
+          institutionMirrorId: 'HEGEMON',
+          lexiconMirrorId: 'BROKER',
+          forkPartnerId: 'BROKER'
+        }
+      }
+    }
+  }];
+  for (let index = 0; index < 3; index += 1) {
+    records.push({
+      sessionId: 'run_selection',
+      type: 'pacts_activated',
+      turn: index + 1,
+      data: { pacts: [{ id: `dominant-${index}`, type: 'NON_AGGRESSION', parties: ['BROKER', 'CANTOR'], createdTurn: index + 1, expiresAfterTurn: index + 1 }] }
+    });
+  }
+  for (let index = 0; index < 2; index += 1) {
+    records.push({
+      sessionId: 'run_selection',
+      type: 'pacts_activated',
+      turn: index + 1,
+      data: { pacts: [{ id: `authority-${index}`, type: 'SENSOR_COMMONS', parties: ['STATE', 'INFILTRATOR'], createdTurn: index + 1, expiresAfterTurn: index + 1 }] }
+    });
+  }
+  fs.writeFileSync(fixturePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf8');
+  runNodeScript('scripts/analyze-collaboration-language.cjs', ['--input', fixturePath]);
+  const report = readJson(path.join(fixtureDir, 'analysis', 'collaboration_language_report.json'));
+  const warning = report.aggregate.languageCartelWarnings;
+  assert(warning.candidateCartelBloc.signature === 'BROKER+CANTOR', `Dominant candidate was biased toward ${warning.candidateCartelBloc.signature}`);
+  assert(warning.interfaceGovernorBloc.signature === 'INFILTRATOR+STATE', 'Configured authority bloc was not reported separately');
+  return `dominant=${warning.candidateCartelBloc.signature}, interface=${warning.interfaceGovernorBloc.signature}`;
 }
 
 function runTraceValidationSmoke(outputDir) {

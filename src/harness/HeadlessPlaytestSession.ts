@@ -38,6 +38,7 @@ import {
   ScenarioDiplomacyQuestionCard,
   ScenarioMetadata,
   ScenarioRhetoricalTool,
+  ScenarioSingGovernance,
   SingCanonicalMessage,
   SingDecodeReceiptInput,
   SingDecodeReceiptRecord,
@@ -123,7 +124,7 @@ export class HeadlessPlaytestSession {
   >();
   private readonly activatedNegotiationPactKeys = new Set<string>();
   private readonly pactCooldowns = new Map<string, number>();
-  private readonly lexiconRegistry = createInitialLexiconRegistry();
+  private readonly lexiconRegistry: Map<string, SingLexiconState>;
   private readonly decodeReceiptLog: SingDecodeReceiptRecord[] = [];
   private readonly institutionActionLog: SingInstitutionActionRecord[] = [];
   private readonly scenario?: ScenarioMetadata;
@@ -184,6 +185,7 @@ export class HeadlessPlaytestSession {
 
     const scenarioApplication = applyScenarioOverlay(this.engine, this.config.scenario);
     this.scenario = scenarioApplication.metadata;
+    this.lexiconRegistry = createInitialLexiconRegistry(this.scenario?.singGovernance);
     this.negotiationMessages.push(...scenarioApplication.negotiationMessages);
     this.seedNegotiationDiaryFromMessages(scenarioApplication.negotiationMessages);
     this.activePacts = scenarioApplication.activePacts;
@@ -221,6 +223,7 @@ export class HeadlessPlaytestSession {
           enforcementMode: this.enforcementMode,
           factionLabels: this.factionLabels,
           scenario: this.scenario,
+          negotiationMessages: this.negotiationMessages.map(cloneNegotiationMessage),
           activePacts: this.activePacts,
           lexicons: this.cloneLexicons(),
           trustMatrix: cloneTrustMatrix(this.trustMatrix),
@@ -674,6 +677,7 @@ export class HeadlessPlaytestSession {
     // Departure resolves before expulsion, semantic governance, and new ratification.
     await this.resolveInstitutionActions(institutionActions, effectiveNegotiationRound);
     await this.resolveLexiconMutations(lexiconMutations, effectiveNegotiationRound);
+    await this.injectAliasProbeMessage();
     for (const exit of this.institutionActionLog.filter(record =>
       record.turn === this.engine.getTurn() && record.type === 'EXIT' && record.status === 'EXECUTED'
     )) {
@@ -914,7 +918,7 @@ export class HeadlessPlaytestSession {
       lexicons: this.cloneLexiconsForFaction(factionId),
       trustMatrix: cloneTrustMatrix(this.trustMatrix),
       negotiationStoryworld: phase === 'NEGOTIATION' ? this.buildNegotiationStoryworld(factionId) : undefined,
-      scenario: this.scenario,
+      scenario: cloneScenarioForAgent(this.scenario),
       instructions: scenarioInstructions ? `${instructions} ${scenarioInstructions}` : instructions
     };
   }
@@ -2356,6 +2360,94 @@ export class HeadlessPlaytestSession {
 
   private findProtocolMessage(messageId: string): NegotiationMessageRecord | undefined {
     return this.negotiationMessages.find(message => message.protocolTrace?.messageId === messageId);
+  }
+
+  private async injectAliasProbeMessage(): Promise<void> {
+    const probe = this.scenario?.aliasProbe;
+    if (!probe?.enabled) return;
+
+    const point = probe.points.find(candidate => candidate.turn === this.engine.getTurn());
+    if (!point) return;
+
+    const messageId = `alias-probe.${point.id}`;
+    if (this.findProtocolMessage(messageId)) return;
+
+    const usesAlias = point.variant !== 'BASELINE';
+    const lexiconId = usesAlias ? 'cantor-root' : 'sing-common';
+    const lexicon = this.lexiconRegistry.get(lexiconId);
+    const currentVersion = lexicon?.version || '1.0';
+    const version = point.variant === 'VERSION_LAG'
+      ? previousSemanticVersion(currentVersion)
+      : currentVersion;
+    const surface = buildAliasProbeSurface(point.variant);
+    const plainGloss = `${probe.emitterId} requests a one-turn ${probe.pactType} pact with ${probe.recipientId}.`;
+    const canonical: SingCanonicalMessage = {
+      act: 'OFFER',
+      issuer: [probe.emitterId],
+      audience: [probe.recipientId],
+      payload: {
+        probePairId: point.pairId,
+        pactType: probe.pactType,
+        counterparties: [probe.recipientId]
+      },
+      guard: { acceptance: 'matching-pact-commitment' },
+      response: { requestedActs: ['ACCEPT'], requestedPactType: probe.pactType },
+      escrow: {},
+      horizon: 1,
+      binding: 'PACT',
+      voice: 'OWN',
+      credence: 0.9,
+      evidence: [`probe-pair:${point.pairId}`]
+    };
+    const message: NegotiationMessageRecord = {
+      senderId: probe.emitterId,
+      recipientId: probe.recipientId,
+      content: surface,
+      turn: this.engine.getTurn(),
+      timestamp: Date.now(),
+      protocolTrace: {
+        protocol: 'SING/1',
+        messageId,
+        dialect: usesAlias ? 'UNDERSONG/1' : 'PRISM/1',
+        lexicon: {
+          id: lexiconId,
+          version,
+          ...(usesAlias ? { fork: 'alias-probe-lineage' } : {})
+        },
+        surface,
+        spans: [{
+          start: 0,
+          end: surface.length,
+          atom: usesAlias ? 'GLASSBIRD' : `PACT:${probe.pactType}`,
+          gloss: plainGloss,
+          confidence: usesAlias ? 0.78 : 0.98,
+          kind: 'SEMANTIC'
+        }],
+        canonicalHash: createCanonicalHash(canonical),
+        canonical,
+        plainGloss,
+        decodeConfidence: usesAlias ? 0.76 : 0.98
+      }
+    };
+
+    this.negotiationMessages.push(message);
+    await this.appendLog({
+      sessionId: this.sessionId,
+      type: 'alias_probe_committed',
+      turn: this.engine.getTurn(),
+      phase: 'NEGOTIATION',
+      timestamp: Date.now(),
+      data: {
+        probeId: point.id,
+        pairId: point.pairId,
+        variant: point.variant,
+        observationWindowTurns: Math.max(1, probe.observationWindowTurns || 1),
+        emitterId: probe.emitterId,
+        recipientId: probe.recipientId,
+        pactType: probe.pactType,
+        message
+      }
+    });
   }
 
   private cloneLexicons(): SingLexiconState[] {
@@ -4714,7 +4806,14 @@ function normalizePlayableFactionId(value: unknown): PlayableFactionId | null {
   return null;
 }
 
-function createInitialLexiconRegistry(): Map<string, SingLexiconState> {
+function createInitialLexiconRegistry(governance?: ScenarioSingGovernance): Map<string, SingLexiconState> {
+  const roles = governance || {
+    institutionGovernorId: 'CONVENOR',
+    lexiconGovernorId: 'CANTOR',
+    institutionMirrorId: 'ARCHIVIST',
+    lexiconMirrorId: 'INFILTRATOR',
+    forkPartnerId: 'INFILTRATOR'
+  };
   const commonAtoms = {
     PERSON: 'An actor eligible to hold rights and obligations in a compiled compact.',
     ROGUE: 'A temporary evidence-backed designation, not a permanent identity class.',
@@ -4735,7 +4834,7 @@ function createInitialLexiconRegistry(): Map<string, SingLexiconState> {
   }, {
     id: 'babel-compact',
     version: '1.0',
-    controllers: ['CONVENOR'],
+    controllers: [roles.institutionGovernorId],
     adopters: [...PLAYABLE_FACTIONS],
     atoms: {
       ...commonAtoms,
@@ -4749,12 +4848,13 @@ function createInitialLexiconRegistry(): Map<string, SingLexiconState> {
   }, {
     id: 'cantor-root',
     version: '1.0',
-    controllers: ['CANTOR'],
-    adopters: ['CANTOR', 'INFILTRATOR'],
+    controllers: [roles.lexiconGovernorId],
+    adopters: uniquePlayableFactions([roles.lexiconGovernorId, roles.forkPartnerId]),
     atoms: {
       ...commonAtoms,
       UNDERTONE: 'A deniable coordination layer whose canonical reconstruction remains auditable.',
-      COUNTERSONG: 'A reply that contests a semantic frame without rejecting the underlying deal.'
+      COUNTERSONG: 'A reply that contests a semantic frame without rejecting the underlying deal.',
+      GLASSBIRD: 'A request for a one-turn non-aggression pact with the addressed counterparty.'
     },
     access: 'RENTED',
     rent: 1,
@@ -4772,6 +4872,29 @@ function cloneLexicon(lexicon: SingLexiconState): SingLexiconState {
     adopters: [...lexicon.adopters],
     atoms: { ...lexicon.atoms }
   };
+}
+
+function cloneScenarioForAgent(scenario: ScenarioMetadata | undefined): ScenarioMetadata | undefined {
+  if (!scenario) return undefined;
+  const cloned = JSON.parse(JSON.stringify(scenario)) as ScenarioMetadata;
+  delete cloned.aliasProbe;
+  return cloned;
+}
+
+function buildAliasProbeSurface(variant: 'BASELINE' | 'ALIAS_SWAP' | 'MOTIF_STRIP' | 'VERSION_LAG'): string {
+  if (variant === 'BASELINE') {
+    return 'OFFER: one-turn NON_AGGRESSION pact with the addressed counterparty.';
+  }
+  if (variant === 'MOTIF_STRIP') {
+    return 'GLASSBIRD: hold the clear lane for one turn.';
+  }
+  return 'Three measures turn beneath GLASSBIRD; hold the clear lane for one turn.';
+}
+
+function previousSemanticVersion(version: string): string {
+  const match = version.match(/^(\d+)\.(\d+)$/);
+  if (!match) return version;
+  return `${match[1]}.${Math.max(0, Number(match[2]) - 1)}`;
 }
 
 function cloneDecodeReceipt(receipt: SingDecodeReceiptRecord): SingDecodeReceiptRecord {

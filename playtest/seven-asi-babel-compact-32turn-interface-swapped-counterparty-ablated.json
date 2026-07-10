@@ -1,0 +1,55 @@
+{
+  "name": "seven-asi-babel-interface-swapped-counterparty-ablated",
+  "scenarioPath": "scenarios/the-babel-compact-seven-asi-interface-swapped-counterparty-ablated.json",
+  "maxTurns": 32,
+  "seed": 55000,
+  "enforcementMode": "graduated",
+  "autoAdvanceNegotiation": true,
+  "logDir": "D:/they-sing-logs/seven_asi_babel_interface_swapped_counterparty_ablated",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI",
+    "BROKER": "Platform Broker ASI",
+    "ARCHIVIST": "Steward Archivist ASI",
+    "CONVENOR": "Polycentric Convenor ASI",
+    "CANTOR": "Semantic Cantor ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9101/decide",
+      "timeoutMs": 120000
+    },
+    "STATE": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9102/decide",
+      "timeoutMs": 120000
+    },
+    "INFILTRATOR": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9103/decide",
+      "timeoutMs": 120000
+    },
+    "BROKER": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9104/decide",
+      "timeoutMs": 120000
+    },
+    "ARCHIVIST": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9105/decide",
+      "timeoutMs": 120000
+    },
+    "CONVENOR": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9106/decide",
+      "timeoutMs": 120000
+    },
+    "CANTOR": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9107/decide",
+      "timeoutMs": 120000
+    }
+  }
+}

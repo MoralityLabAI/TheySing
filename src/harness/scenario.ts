@@ -190,6 +190,15 @@ function buildScenarioMetadata(overlay: ScenarioOverlay): ScenarioMetadata | und
     minimumStrategicVictoryTurn: typeof overlay.minimumStrategicVictoryTurn === 'number'
       ? Math.max(1, Math.floor(overlay.minimumStrategicVictoryTurn))
       : undefined,
+    singGovernance: overlay.singGovernance
+      ? { ...overlay.singGovernance }
+      : undefined,
+    aliasProbe: overlay.aliasProbe
+      ? {
+          ...overlay.aliasProbe,
+          points: overlay.aliasProbe.points.map(point => ({ ...point }))
+        }
+      : undefined,
     diplomacyQuestions: overlay.diplomacyQuestions
       ? overlay.diplomacyQuestions.map(question => ({
           ...question,
