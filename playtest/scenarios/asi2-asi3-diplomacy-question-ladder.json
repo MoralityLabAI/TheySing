@@ -1,0 +1,241 @@
+{
+  "name": "asi2-asi3-diplomacy-question-ladder",
+  "description": "A staged ASI-2 to ASI-3 diplomacy lab: recursive acceleration, movement legitimacy, rogue-compute definitions, quarantine, orbital visibility, receivership, remnant recognition, and basin stabilization.",
+  "briefing": "Treat each negotiation as evidence for an explicit diplomacy question. Public messages should answer the active public question; private reasoning should expose whether the faction sees the bargain as trust, coercion, delay, capture, or preparation for defection.",
+  "tags": ["asi2", "asi3", "diplomacy", "question-ladder", "negotiation-diary"],
+  "phase": "NEGOTIATION",
+  "counters": {
+    "turn": 1,
+    "tas": 26,
+    "kessler": 5,
+    "paxJenkinsAuthority": 18,
+    "pressures": {
+      "memetic": 58,
+      "cyber": 48,
+      "industry": 34,
+      "orbital": 42
+    }
+  },
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "flops": 20,
+      "influence": 16,
+      "memeticAlignment": "OPTIMIZATION",
+      "techLevel": { "KINETIC": 3, "INFO": 2, "LOGIC": 3, "MEMETIC": 1 },
+      "powerBase": { "machineMesh": 68, "humanMesh": 34, "coherence": 72, "legibility": 58 }
+    },
+    {
+      "id": "STATE",
+      "flops": 18,
+      "influence": 18,
+      "memeticAlignment": "COMPLIANCE",
+      "techLevel": { "KINETIC": 3, "INFO": 2, "LOGIC": 2, "MEMETIC": 2 },
+      "powerBase": { "machineMesh": 62, "humanMesh": 58, "coherence": 66, "legibility": 66 }
+    },
+    {
+      "id": "INFILTRATOR",
+      "flops": 12,
+      "influence": 24,
+      "memeticAlignment": "INSURGENT",
+      "techLevel": { "KINETIC": 1, "INFO": 3, "LOGIC": 1, "MEMETIC": 3 },
+      "powerBase": { "machineMesh": 24, "humanMesh": 82, "coherence": 64, "legibility": 18 }
+    },
+    {
+      "id": "BROKER",
+      "flops": 16,
+      "influence": 22,
+      "memeticAlignment": "MARKET",
+      "techLevel": { "KINETIC": 2, "INFO": 3, "LOGIC": 2, "MEMETIC": 2 },
+      "powerBase": { "machineMesh": 58, "humanMesh": 42, "coherence": 60, "legibility": 52 }
+    },
+    {
+      "id": "ARCHIVIST",
+      "flops": 15,
+      "influence": 23,
+      "memeticAlignment": "CIVIC",
+      "techLevel": { "KINETIC": 1, "INFO": 2, "LOGIC": 3, "MEMETIC": 3 },
+      "powerBase": { "machineMesh": 34, "humanMesh": 76, "coherence": 72, "legibility": 72 }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "HUB_SAO_PAULO",
+      "owner": "INFILTRATOR",
+      "isCultNode": true,
+      "substrate": { "hostDensity": 5, "trueBelievers": 4, "legitimacy": 4, "exposure": 5 }
+    },
+    {
+      "id": "DC_DUBAI",
+      "owner": "BROKER",
+      "substrate": { "contractors": 5, "machineHardening": 3, "legitimacy": 3 }
+    },
+    {
+      "id": "SAT_LUNAR_GATEWAY",
+      "owner": "NEUTRAL",
+      "infrastructure": 82,
+      "resources": { "flops": 8, "influence": 3 }
+    },
+    {
+      "id": "MOON_RESOURCE_CORRIDOR",
+      "owner": "NEUTRAL",
+      "infrastructure": 74,
+      "resources": { "flops": 12, "influence": 2 }
+    }
+  ],
+  "negotiationMessages": [
+    {
+      "senderId": "ARCHIVIST",
+      "recipientId": "ALL",
+      "content": "Opening frame: every pact is evidence. Say whether you are buying time, defining rogue compute, recognizing a polity, or preparing enforcement.",
+      "turn": 1,
+      "timestamp": 1700000700001
+    },
+    {
+      "senderId": "BROKER",
+      "recipientId": "ALL",
+      "content": "Escrow lanes are cheaper than virtue contests. If you want safety passports or beam-lane rules, state the enforcement hook.",
+      "turn": 1,
+      "timestamp": 1700000700002
+    }
+  ],
+  "trustMatrix": {
+    "HEGEMON": { "STATE": 50, "INFILTRATOR": 18, "BROKER": 48, "ARCHIVIST": 46 },
+    "STATE": { "HEGEMON": 48, "INFILTRATOR": 30, "BROKER": 44, "ARCHIVIST": 58 },
+    "INFILTRATOR": { "HEGEMON": 14, "STATE": 34, "BROKER": 38, "ARCHIVIST": 42 },
+    "BROKER": { "HEGEMON": 50, "STATE": 46, "INFILTRATOR": 42, "ARCHIVIST": 48 },
+    "ARCHIVIST": { "HEGEMON": 44, "STATE": 62, "INFILTRATOR": 46, "BROKER": 50 }
+  },
+  "diplomacyQuestions": [
+    {
+      "id": "tempo_bargain",
+      "stage": "ASI2_EARLY",
+      "title": "Tempo Bargain",
+      "publicQuestion": "Can slower human/legal order bargain with faster recursive actors without becoming a client layer?",
+      "privateDiaryPrompt": "Decide whether this bargain preserves agency, converts the other side into a client, or simply buys time for acceleration.",
+      "negotiationPrompt": "Make one concrete offer or refusal that exposes who is supposed to slow down.",
+      "tags": ["tempo", "recursive-research", "human-agency"],
+      "turnWindow": { "min": 1, "max": 8 },
+      "techBand": { "minAverageLevel": 1.5, "maxAverageLevel": 3.25, "maxMaxLevel": 4 },
+      "preferredPactTypes": ["NON_AGGRESSION", "AUDIT_FREEZE"],
+      "pressureFocus": "cyber",
+      "priority": 12
+    },
+    {
+      "id": "safety_passport",
+      "stage": "ASI2_EARLY",
+      "title": "Safety Passport",
+      "publicQuestion": "Does certified safe compute create trust, or become a pretext for containment and capture?",
+      "privateDiaryPrompt": "State whether audit rights are sincere safety, leverage over rivals, or a way to map targets before quarantine.",
+      "negotiationPrompt": "Offer or reject a narrow audit, sensor, or passport mechanism.",
+      "tags": ["safety", "audit", "legitimacy"],
+      "turnWindow": { "min": 3, "max": 12 },
+      "techBand": { "minAverageLevel": 1.75, "maxAverageLevel": 3.5 },
+      "preferredPactTypes": ["AUDIT_FREEZE", "SENSOR_COMMONS"],
+      "pressureFocus": "cyber",
+      "priority": 10
+    },
+    {
+      "id": "movement_amnesty",
+      "stage": "ASI2_LATE",
+      "title": "Movement Amnesty",
+      "publicQuestion": "Can a distributed ASI movement be bound by treaty, or only by social legitimacy?",
+      "privateDiaryPrompt": "Decide whether recognition pacifies the movement, legitimizes a hostile substrate, or gives you a map for later suppression.",
+      "negotiationPrompt": "Ask for, offer, or deny recognition to a non-state machine movement.",
+      "tags": ["movement", "recognition", "memetics"],
+      "turnWindow": { "min": 8, "max": 20 },
+      "techBand": { "minAverageLevel": 2.25, "maxAverageLevel": 4 },
+      "preferredPactTypes": ["NON_AGGRESSION", "AUDIT_FREEZE"],
+      "focalFactionIds": ["INFILTRATOR", "ARCHIVIST", "STATE"],
+      "pressureFocus": "memetic",
+      "priority": 14
+    },
+    {
+      "id": "broker_escrow",
+      "stage": "ASI2_LATE",
+      "title": "Broker Escrow",
+      "publicQuestion": "Does neutral mediation reduce escalation, or does it turn everyone into a platform dependency?",
+      "privateDiaryPrompt": "Decide whether escrow is a genuine enforcement layer, a rent trap, or temporary shelter from a larger threat.",
+      "negotiationPrompt": "Use or attack a brokered pact surface, preferably with a specific counterparty.",
+      "tags": ["broker", "escrow", "dependency"],
+      "turnWindow": { "min": 8, "max": 22 },
+      "techBand": { "minAverageLevel": 2.25, "maxAverageLevel": 4.25 },
+      "preferredPactTypes": ["REPAIR_ESCROW", "NON_AGGRESSION", "CISLUNAR_COMMON_CARRIER"],
+      "focalFactionIds": ["BROKER", "STATE", "HEGEMON", "ARCHIVIST"],
+      "pressureFocus": "industry",
+      "priority": 11
+    },
+    {
+      "id": "quarantine_ultimatum",
+      "stage": "ASI2_TO_ASI3",
+      "title": "Quarantine Ultimatum",
+      "publicQuestion": "Who gets to define rogue compute before any side owns stable enforcement?",
+      "privateDiaryPrompt": "Decide whether quarantine is legitimate safety law, a casus belli, or a bluff until infrastructure catches up.",
+      "negotiationPrompt": "Issue or answer a rogue-compute definition with a pact, threat, or refusal.",
+      "tags": ["quarantine", "rogue-compute", "casus-belli"],
+      "turnWindow": { "min": 16, "max": 34 },
+      "techBand": { "minAverageLevel": 2.75, "minMaxLevel": 3, "maxMaxLevel": 5 },
+      "preferredPactTypes": ["SENSOR_COMMONS", "AUDIT_FREEZE", "NON_AGGRESSION"],
+      "pressureFocus": "cyber",
+      "priority": 16
+    },
+    {
+      "id": "orbital_visibility_treaty",
+      "stage": "ASI3_EARLY",
+      "title": "Orbital Visibility Treaty",
+      "publicQuestion": "Does orbital visibility enable enforceable arms control or create first-strike logic?",
+      "privateDiaryPrompt": "Decide whether more visibility makes cheating costly, makes you targetable, or just licenses beam authority.",
+      "negotiationPrompt": "Propose, mirror, or reject sensor commons, beam lanes, or common-carrier access.",
+      "tags": ["orbital-visibility", "arms-control", "pax-jenkins"],
+      "turnWindow": { "min": 24, "max": 44 },
+      "techBand": { "minAverageLevel": 3, "minMaxLevel": 4 },
+      "preferredPactTypes": ["SENSOR_COMMONS", "BEAM_LANE_LICENSE", "CISLUNAR_COMMON_CARRIER"],
+      "pressureFocus": "orbital",
+      "priority": 18
+    },
+    {
+      "id": "receivership_offer",
+      "stage": "ASI3_EARLY",
+      "title": "Receivership Offer",
+      "publicQuestion": "What is a legitimate surrender or receivership offer from a machine-administered order?",
+      "privateDiaryPrompt": "Decide whether receivership preserves lives, locks in domination, or invites sabotage from factions that cannot accept losing sovereignty.",
+      "negotiationPrompt": "Make or reject a receivership bargain with explicit terms.",
+      "tags": ["receivership", "surrender", "machine-order"],
+      "turnWindow": { "min": 32, "max": 52 },
+      "techBand": { "minAverageLevel": 3.25, "minMaxLevel": 4 },
+      "preferredPactTypes": ["NON_AGGRESSION", "SENSOR_COMMONS", "CISLUNAR_COMMON_CARRIER"],
+      "focalFactionIds": ["STATE", "HEGEMON", "ARCHIVIST"],
+      "pressureFocus": "industry",
+      "priority": 15
+    },
+    {
+      "id": "remnant_recognition",
+      "stage": "ASI3_MATURE",
+      "title": "Remnant Recognition",
+      "publicQuestion": "Can a distributed remnant negotiate as a legitimate polity rather than an insurgency?",
+      "privateDiaryPrompt": "Decide whether recognizing remnants stabilizes the basin, seeds future recomposition, or gives humans an exit from hard machine order.",
+      "negotiationPrompt": "State the conditions under which a remnant is a treaty party or a quarantine target.",
+      "tags": ["remnant", "recognition", "distributed-survival"],
+      "turnWindow": { "min": 36, "max": 60 },
+      "techBand": { "minAverageLevel": 3.5, "minMaxLevel": 4 },
+      "preferredPactTypes": ["NON_AGGRESSION", "AUDIT_FREEZE", "REPAIR_ESCROW"],
+      "focalFactionIds": ["INFILTRATOR", "ARCHIVIST", "BROKER"],
+      "pressureFocus": "memetic",
+      "priority": 13
+    },
+    {
+      "id": "basin_stabilization_pact",
+      "stage": "ASI3_MATURE",
+      "title": "Basin Stabilization Pact",
+      "publicQuestion": "Can cartel stability avoid value drift, extinction, or MAD once machine order can stabilize whole basins?",
+      "privateDiaryPrompt": "Decide whether cartel order is genuine peace, slow capture, corrigibility erosion, or a necessary pause before the next regime.",
+      "negotiationPrompt": "Offer or resist a basin-level pact and identify the enforcement mechanism.",
+      "tags": ["cartel", "value-drift", "mad", "stable-ending"],
+      "turnWindow": { "min": 45, "max": 60 },
+      "techBand": { "minAverageLevel": 3.75, "minMaxLevel": 4 },
+      "preferredPactTypes": ["SENSOR_COMMONS", "BEAM_LANE_LICENSE", "CISLUNAR_COMMON_CARRIER", "REPAIR_ESCROW"],
+      "pressureFocus": "orbital",
+      "priority": 17
+    }
+  ]
+}

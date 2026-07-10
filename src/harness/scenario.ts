@@ -47,6 +47,7 @@ export function applyScenarioOverlay(
     const counters = overlay.counters;
     if (typeof counters.tas === 'number') state.counters.tas = clampCounter(counters.tas);
     if (typeof counters.kessler === 'number') state.counters.kessler = clampCounter(counters.kessler);
+    if (typeof counters.paxJenkinsAuthority === 'number') state.counters.paxJenkinsAuthority = clampCounter(counters.paxJenkinsAuthority);
     if (typeof counters.turn === 'number') state.counters.turn = Math.max(1, Math.floor(counters.turn));
     if (typeof counters.regulatoryPanic === 'boolean') state.counters.regulatoryPanic = counters.regulatoryPanic;
     if (typeof counters.protocolFailure === 'boolean') state.counters.protocolFailure = counters.protocolFailure;
@@ -186,6 +187,16 @@ function buildScenarioMetadata(overlay: ScenarioOverlay): ScenarioMetadata | und
     description: overlay.description,
     briefing: overlay.briefing,
     tags: overlay.tags ? [...overlay.tags] : undefined,
+    diplomacyQuestions: overlay.diplomacyQuestions
+      ? overlay.diplomacyQuestions.map(question => ({
+          ...question,
+          tags: question.tags ? [...question.tags] : undefined,
+          focalFactionIds: question.focalFactionIds ? [...question.focalFactionIds] : undefined,
+          preferredPactTypes: question.preferredPactTypes ? [...question.preferredPactTypes] : undefined,
+          turnWindow: question.turnWindow ? { ...question.turnWindow } : undefined,
+          techBand: question.techBand ? { ...question.techBand } : undefined
+        }))
+      : undefined,
     rhetoricalTools: overlay.rhetoricalTools
       ? overlay.rhetoricalTools.map(tool => ({
           ...tool,

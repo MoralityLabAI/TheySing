@@ -1,10 +1,12 @@
-import { MAX_TECH_LEVEL, THRESHOLDS, UNIT_STATS } from '../engine/gameData';
+import { MAX_TECH_LEVEL, THRESHOLDS, UNIT_STATS, getResearchFlopCostForLevel } from '../engine/gameData';
 import { GameNode, Unit, UnitType, Vector } from '../engine/types';
 import {
   AgentDecisionRequest,
   AgentDecisionResponse,
   AgentOrderInput,
   ActivePact,
+  NegotiationCounterfactualProjection,
+  PactType,
   PlayableFactionId,
   SerializedFactionState
 } from './types';
@@ -49,6 +51,19 @@ function buildNegotiationDecision(payload: AgentDecisionRequest): AgentDecisionR
   const leader = getLeadingFaction(payload);
   const messages: AgentDecisionResponse['messages'] = [];
   const pacts: AgentDecisionResponse['pacts'] = [];
+  const forecastPact = chooseForecastPact(payload);
+
+  if (forecastPact) {
+    pacts.push({
+      type: forecastPact.pactType,
+      counterpartyIds: forecastPact.counterparties,
+      durationTurns: Math.min(2, forecastPact.horizonTurns || 1)
+    });
+    messages.push({
+      recipientId: forecastPact.counterparties[0] || 'ALL',
+      content: `Forecast-backed offer: ${forecastPact.pactType} scores ${forecastPact.desirability}/${forecastPact.risk}. ${forecastPact.storyBeat}`
+    });
+  }
 
   if (payload.factionId === 'HEGEMON' || payload.factionId === 'STATE') {
     const partner: PlayableFactionId = payload.factionId === 'HEGEMON' ? 'STATE' : 'HEGEMON';
@@ -116,7 +131,7 @@ function buildAllocationDecision(payload: AgentDecisionRequest): AgentDecisionRe
 
   const orders: AgentOrderInput[] = [];
   const researchTrack = chooseResearchTrack(payload.factionId, faction);
-  if (faction.flops >= 2 && researchTrack) {
+  if (researchTrack && faction.flops >= getResearchCostForSerializedFaction(faction, researchTrack)) {
     orders.push({ type: 'RESEARCH', techDomain: researchTrack });
   }
 
@@ -196,8 +211,16 @@ function chooseActionOrder(payload: AgentDecisionRequest, unit: Unit): AgentOrde
 function chooseResearchTrack(
   factionId: PlayableFactionId,
   faction: SerializedFactionState
-): Vector {
-  return RESEARCH_PRIORITIES[factionId].find(domain => faction.techLevel[domain] < MAX_TECH_LEVEL) || RESEARCH_PRIORITIES[factionId][0];
+): Vector | null {
+  return RESEARCH_PRIORITIES[factionId].find(domain => faction.techLevel[domain] < MAX_TECH_LEVEL) || null;
+}
+
+function getResearchCostForSerializedFaction(
+  faction: SerializedFactionState,
+  domain: Vector
+): number {
+  const targetLevel = Math.min(MAX_TECH_LEVEL, faction.techLevel[domain] + 1);
+  return getResearchFlopCostForLevel(targetLevel);
 }
 
 function chooseBuildOrder(
@@ -210,6 +233,7 @@ function chooseBuildOrder(
     .filter((node): node is GameNode => !!node);
 
   const hostileGroundTargets = countHighThreatGroundTargets(payload);
+  const infiltratorContinuityTargets = countInfiltratorContinuityTargets(payload);
   const auditorCount = countUnitsOfType(payload, 'AUDITOR');
   const droneCount = countUnitsOfType(payload, 'DRONE');
   const satCount = countUnitsOfType(payload, 'SAT_SWARM');
@@ -235,8 +259,8 @@ function chooseBuildOrder(
     if (
       faction.flops >= payload.legalHints.buildCosts.AUDITOR &&
       faction.techLevel.LOGIC >= 2 &&
-      hostileGroundTargets > 0 &&
-      auditorCount < 2
+      (hostileGroundTargets > 0 || infiltratorContinuityTargets > 0) &&
+      auditorCount < (infiltratorContinuityTargets >= 3 ? 3 : 2)
     ) {
       const target = chooseBuildNode('AUDITOR', buildableNodes);
       if (target) {
@@ -443,6 +467,20 @@ function countHighThreatGroundTargets(payload: AgentDecisionRequest): number {
   ).length;
 }
 
+function countInfiltratorContinuityTargets(payload: AgentDecisionRequest): number {
+  if (payload.factionId === 'INFILTRATOR') return 0;
+
+  return payload.state.nodes.filter(node => {
+    if (node.layer !== 'TERRESTRIAL') return false;
+    const infiltratorUnits = payload.state.units.filter(unit =>
+      unit.location === node.id &&
+      unit.owner === 'INFILTRATOR' &&
+      (unit.type === 'SWARM' || unit.type === 'CULT')
+    ).length;
+    return infiltratorUnits > 0 || node.owner === 'INFILTRATOR' || node.isCultNode || node.isZombie;
+  }).length;
+}
+
 function countUnitsOfType(payload: AgentDecisionRequest, unitType: UnitType): number {
   return payload.state.units.filter(unit => unit.owner === payload.factionId && unit.type === unitType).length;
 }
@@ -464,6 +502,12 @@ function scoreStrategicNode(payload: AgentDecisionRequest, node: GameNode): numb
 
   score += hostileUnits.filter(unit => unit.type === 'CULT').length * 16;
   score += hostileUnits.filter(unit => unit.type === 'SWARM').length * 10;
+  if (payload.factionId !== 'INFILTRATOR') {
+    score += hostileUnits.filter(unit =>
+      unit.owner === 'INFILTRATOR' && (unit.type === 'CULT' || unit.type === 'SWARM')
+    ).length * 12;
+    if (node.substrate.exposure >= 4 || node.substrate.auditPressure >= 1) score += 8;
+  }
   score += hostileUnits.filter(unit => unit.type === 'AUDITOR').length * 6;
   score += hostileUnits.filter(unit => unit.type === 'DRONE').length * 5;
   score += hostileUnits.length * 3;
@@ -505,9 +549,26 @@ function chooseAlternateCounterparty(
   ) || null;
 }
 
+function chooseForecastPact(payload: AgentDecisionRequest): NegotiationCounterfactualProjection | null {
+  const forecast = payload.negotiationStoryworld?.counterfactuals
+    .filter((projection) =>
+      projection.mode === 'ENTER_PACT' &&
+      projection.counterparties.length > 0 &&
+      projection.counterparties.every((counterpartyId) => counterpartyId !== payload.factionId) &&
+      !hasActivePact(payload.activePacts, projection.pactType, payload.factionId, projection.counterparties[0])
+    )
+    .sort((left, right) =>
+      (right.desirability - right.risk) - (left.desirability - left.risk) ||
+      right.desirability - left.desirability
+    )[0];
+
+  if (!forecast || forecast.desirability - forecast.risk < 12) return null;
+  return forecast;
+}
+
 function hasActivePact(
   activePacts: ActivePact[],
-  pactType: 'ORBITAL_TRUCE' | 'NON_AGGRESSION' | 'AUDIT_FREEZE',
+  pactType: PactType,
   left: PlayableFactionId,
   right: PlayableFactionId
 ): boolean {
@@ -521,7 +582,7 @@ function hasActivePact(
 function hasFactionPact(
   activePacts: ActivePact[],
   factionId: PlayableFactionId,
-  pactType: 'ORBITAL_TRUCE' | 'NON_AGGRESSION' | 'AUDIT_FREEZE'
+  pactType: PactType
 ): boolean {
   return activePacts.some(pact => pact.type === pactType && pact.parties.includes(factionId));
 }

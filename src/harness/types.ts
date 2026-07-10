@@ -20,7 +20,15 @@ import {
 
 export type PlayableFactionId = Exclude<FactionId, 'NEUTRAL'>;
 export type SessionStatus = 'running' | 'completed';
-export type PactType = 'ORBITAL_TRUCE' | 'NON_AGGRESSION' | 'AUDIT_FREEZE';
+export type EnforcementMode = 'hard' | 'soft' | 'graduated';
+export type PactType =
+  | 'ORBITAL_TRUCE'
+  | 'NON_AGGRESSION'
+  | 'AUDIT_FREEZE'
+  | 'SENSOR_COMMONS'
+  | 'BEAM_LANE_LICENSE'
+  | 'REPAIR_ESCROW'
+  | 'CISLUNAR_COMMON_CARRIER';
 
 export interface HeuristicAgentConfig {
   type: 'heuristic';
@@ -50,6 +58,66 @@ export interface OpenAIAgentConfig {
 }
 
 export type AgentConfig = HeuristicAgentConfig | WebhookAgentConfig | OpenAIAgentConfig;
+
+export type TraceChannel =
+  | 'session'
+  | 'public_speech'
+  | 'private_diary'
+  | 'formal_pact'
+  | 'order'
+  | 'engine_resolution'
+  | 'pact_enforcement'
+  | 'analysis';
+
+export type BindingStatus =
+  | 'nonbinding'
+  | 'soft_commitment'
+  | 'formal_soft_pact'
+  | 'hard_enforced_pact'
+  | 'graduated_pact';
+
+export type ExecutionStatus = 'not_applicable' | 'attempted' | 'accepted' | 'executed' | 'blocked' | 'sanctioned';
+
+export interface RegimeCoordinates {
+  active_pact_set_hash: string;
+  doctrine_unlocks: Partial<Record<PlayableFactionId, string[]>>;
+  alignment_state: Partial<Record<PlayableFactionId, MemeticDoctrineFamily | null>>;
+  tas_band: string;
+  kessler_band: string;
+  pax_jenkins_band: string;
+  enforcement_mode: EnforcementMode;
+  victory_route?: string | null;
+}
+
+export interface TraceEvent {
+  schema: 'theysing.traceEvent.v1';
+  event_id: string;
+  turn: number;
+  phase: GamePhase;
+  channel: TraceChannel;
+  binding_status: BindingStatus;
+  execution_status: ExecutionStatus;
+  content_ref?: string;
+  pre_state_hash: string;
+  post_state_hash?: string;
+  attempted?: boolean;
+  accepted?: boolean;
+  executed?: boolean;
+  blocked?: boolean;
+  block_reason?: string;
+  sanction_delta?: Record<string, number>;
+  reputation_delta?: Record<string, number>;
+  resource_delta?: Record<string, number>;
+  active_pacts_before?: string[];
+  active_pacts_after?: string[];
+  regime_coordinates?: RegimeCoordinates;
+}
+
+export interface TraceValidationIssue {
+  index: number;
+  severity: 'error' | 'warning';
+  message: string;
+}
 
 export type NegotiationRecipientId = PlayableFactionId | 'ALL';
 
@@ -104,6 +172,7 @@ export interface NegotiationStoryworldBrief {
   focalFactionId: PlayableFactionId;
   frame: string;
   strategicQuestion: string;
+  diplomacyQuestion?: ScenarioDiplomacyQuestionCard;
   counterfactuals: NegotiationCounterfactualProjection[];
 }
 
@@ -119,6 +188,10 @@ export interface NegotiationDiaryEntry {
   counterfactuals: NegotiationCounterfactualProjection[];
   messages: NegotiationMessageRecord[];
   pacts: NegotiationDiaryPactRecord[];
+  designQuestionTag?: string;
+  diplomacyStage?: ScenarioDiplomacyStage;
+  publicQuestion?: string;
+  privateDiaryPrompt?: string;
 }
 
 export interface PhaseReasoningDiaryEntry {
@@ -140,6 +213,7 @@ export interface HeuristicContext {
   activePacts: ActivePact[];
   trustMatrix: TrustMatrix;
   recentMessages: NegotiationMessageRecord[];
+  negotiationStoryworld?: NegotiationStoryworldBrief;
 }
 
 export interface ScenarioMetadata {
@@ -148,6 +222,7 @@ export interface ScenarioMetadata {
   briefing?: string;
   tags?: string[];
   rhetoricalTools?: ScenarioRhetoricalTool[];
+  diplomacyQuestions?: ScenarioDiplomacyQuestionCard[];
 }
 
 export interface ScenarioRhetoricalTool {
@@ -163,9 +238,41 @@ export interface ScenarioRhetoricalTool {
   pressureFocus?: keyof StrategicPressure;
 }
 
+export type ScenarioDiplomacyStage =
+  | 'ASI2_EARLY'
+  | 'ASI2_LATE'
+  | 'ASI2_TO_ASI3'
+  | 'ASI3_EARLY'
+  | 'ASI3_MATURE';
+
+export interface ScenarioDiplomacyQuestionCard {
+  id: string;
+  stage: ScenarioDiplomacyStage;
+  title: string;
+  publicQuestion: string;
+  privateDiaryPrompt: string;
+  negotiationPrompt?: string;
+  tags?: string[];
+  focalFactionIds?: PlayableFactionId[];
+  pressureFocus?: keyof StrategicPressure;
+  turnWindow?: {
+    min?: number;
+    max?: number;
+  };
+  techBand?: {
+    minAverageLevel?: number;
+    maxAverageLevel?: number;
+    minMaxLevel?: number;
+    maxMaxLevel?: number;
+  };
+  preferredPactTypes?: PactType[];
+  priority?: number;
+}
+
 export interface ScenarioCountersPatch {
   tas?: number;
   kessler?: number;
+  paxJenkinsAuthority?: number;
   turn?: number;
   regulatoryPanic?: boolean;
   protocolFailure?: boolean;
@@ -240,6 +347,7 @@ export interface SessionConfig {
   name?: string;
   maxTurns?: number;
   seed?: number;
+  enforcementMode?: EnforcementMode;
   autoAdvanceNegotiation?: boolean;
   logDir?: string;
   factionLabels?: Partial<Record<PlayableFactionId, string>>;
@@ -255,6 +363,24 @@ export interface SessionSummary {
   phase: GamePhase;
   turn: number;
   maxTurns: number;
+  enforcementMode: EnforcementMode;
+  campaignClock: CampaignClock;
+  solarEscapeLead?: Partial<Record<PlayableFactionId, number>>;
+  solarEscapeDistanceAu?: Partial<Record<PlayableFactionId, number>>;
+  solarEscapeDeepSpaceSafety?: Partial<Record<PlayableFactionId, number>>;
+  winner?: PlayableFactionId | null;
+}
+
+export interface CampaignClock {
+  turn: number;
+  scale: 'MONTHS' | 'WEEKS' | 'DAYS' | 'HOURS';
+  turnDurationHours: number;
+  turnDurationLabel: string;
+  tempoLabel: string;
+  driver: string;
+  maxTechLevel: number;
+  totalFactionFlops: number;
+  orbitalCompute: number;
 }
 
 export interface SerializedFactionState {
@@ -286,6 +412,7 @@ export interface SerializedGameState {
   counters: {
     tas: number;
     kessler: number;
+    paxJenkinsAuthority: number;
     turn: number;
     regulatoryPanic: boolean;
     protocolFailure: boolean;
@@ -324,6 +451,7 @@ export interface AgentDecisionRequest {
   phase: GamePhase;
   turn: number;
   maxTurns: number;
+  enforcementMode: EnforcementMode;
   state: SerializedGameState;
   legalHints: LegalHints;
   recentMessages: NegotiationMessageRecord[];
@@ -381,6 +509,7 @@ export interface HarnessLogEntry {
   phase: GamePhase;
   timestamp: number;
   data: Record<string, unknown>;
+  trace?: TraceEvent;
 }
 
 export interface SessionSnapshot extends SessionSummary {

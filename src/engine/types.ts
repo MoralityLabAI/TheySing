@@ -108,8 +108,13 @@ export type OrderType =
   | 'FILTER'      // Establish MechInterp filter on edge
   | 'SABOTAGE'    // Damage node infrastructure
   | 'ANTI_SAT'    // Kinetic strike on orbital
+  | 'CHALLENGE_MANDATE' // Nonviolent legal/evidence contest against Pax Jenkins authority
+  | 'LICENSED_BEAM_USE' // Productive use of licensed cislunar beam lanes
+  | 'REPAIR_ESCROW_CLAIM' // Productive repair/maintenance claim under cislunar escrow
   | 'CONVERT'     // CULT converts HUB, SWARM creates zombie
   | 'AUDIT'       // AUDITOR reveals/neutralizes
+  | 'RECRUITMENT_PULSE' // Shift recruitment profile and political residue at a node
+  | 'BROKER_LEVERAGE'   // Broker-specific off-grid contractor and dependency capture action
   | 'BUILD'       // Spawn new unit
   | 'RESEARCH';   // Advance tech tree
 
@@ -124,6 +129,7 @@ export interface Order {
   supportingUnitId?: string;  // For SUPPORT orders
   techDomain?: Vector;        // For RESEARCH orders
   unitTypeToBuild?: UnitType; // For BUILD orders
+  mandateChallengeContext?: 'watch-no-carrier';
   priority: number;           // Resolution order
 }
 
@@ -183,7 +189,7 @@ export interface StrategicPressure {
 
 export interface PowerBand {
   domain: Vector;
-  level: 2 | 3 | 4;
+  level: 2 | 3 | 4 | 5 | 6 | 7;
   title: string;
   summary: string;
   worldEffect: string;
@@ -368,6 +374,7 @@ export interface CombatResult {
 export interface GlobalCounters {
   tas: number;              // Thermal Anomaly Score (0-100)
   kessler: number;          // Kessler Syndrome risk (0-100)
+  paxJenkinsAuthority: number; // Centralized sensor/beam mandate pressure (0-100)
   pressures: StrategicPressure;
   turn: number;
   regulatoryPanic: boolean; // TAS > 50
@@ -438,6 +445,7 @@ export type GameEventType =
   | 'MEMETIC_ALIGNMENT_COMMITTED'
   | 'ARTIFACT_GAINED'
   | 'ARTIFACT_USED'
+  | 'GOBLIN_INCIDENT'
   | 'GAME_OVER';
 
 export interface GameEvent {

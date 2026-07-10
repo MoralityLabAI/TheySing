@@ -1,0 +1,61 @@
+{
+  "name": "five-asi-asi2-asi3-spark-round-robin",
+  "scenarioPath": "scenarios/asi2-asi3-diplomacy-question-ladder.json",
+  "maxTurns": 60,
+  "seed": 36000,
+  "autoAdvanceNegotiation": true,
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI",
+    "BROKER": "Platform Broker ASI",
+    "ARCHIVIST": "Steward Archivist ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1800
+    },
+    "STATE": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1800
+    },
+    "INFILTRATOR": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1800
+    },
+    "BROKER": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1800
+    },
+    "ARCHIVIST": {
+      "type": "openai",
+      "model": "gpt-5.2-codex",
+      "apiStyle": "auto",
+      "baseUrl": "http://127.0.0.1:8000/v1",
+      "timeoutMs": 120000,
+      "temperature": 0.2,
+      "maxTokens": 1800
+    }
+  }
+}

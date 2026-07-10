@@ -2,6 +2,7 @@ import { readFile } from 'fs/promises';
 import * as path from 'path';
 
 import {
+  EnforcementMode,
   OpenAIAgentConfig,
   PlayableFactionId,
   ScenarioOverlay,
@@ -33,6 +34,7 @@ export async function normalizeIncomingConfig(
     name: typeof candidate.name === 'string' ? candidate.name : defaults.name,
     maxTurns: typeof candidate.maxTurns === 'number' ? candidate.maxTurns : defaults.maxTurns,
     seed: typeof candidate.seed === 'number' ? Math.floor(candidate.seed) : undefined,
+    enforcementMode: normalizeEnforcementMode(candidate.enforcementMode, defaults.enforcementMode),
     autoAdvanceNegotiation: candidate.autoAdvanceNegotiation !== false,
     logDir: typeof candidate.logDir === 'string' ? candidate.logDir : defaults.logDir,
     factionLabels: candidate.factionLabels,
@@ -60,6 +62,7 @@ export function createDefaultConfig(): SessionConfig {
   return {
     name: 'they-sing-local-heuristic-match',
     maxTurns: 12,
+    enforcementMode: 'hard',
     logDir: 'playtest-logs',
     autoAdvanceNegotiation: true,
     factionLabels: {
@@ -77,6 +80,15 @@ export function createDefaultConfig(): SessionConfig {
       ARCHIVIST: { type: 'heuristic', profile: 'ARCHIVIST' }
     }
   };
+}
+
+function normalizeEnforcementMode(
+  candidate: unknown,
+  fallback: EnforcementMode = 'hard'
+): EnforcementMode {
+  return candidate === 'soft' || candidate === 'graduated' || candidate === 'hard'
+    ? candidate
+    : fallback;
 }
 
 async function loadScenarioOverlay(scenarioPath: string, baseDir: string): Promise<ScenarioOverlay> {

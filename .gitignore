@@ -8,3 +8,6 @@ playtest/codex-bridge.env
 playtest-logs
 results
 codex-chat-sessions
+.vercel
+designdocs/ARIA_*.md
+designdocs/ARIA_*.csv

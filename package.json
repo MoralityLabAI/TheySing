@@ -7,13 +7,20 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "ci": "npm test && npm run build",
+    "test": "npm run test:regression",
+    "test:regression": "npm run build:harness && node scripts/run-regression-suite.cjs",
     "build:harness": "tsc -p tsconfig.harness.json && node scripts/write-harness-package.cjs",
     "playtest:harness": "npm run build:harness && node dist-harness/harness/server.js",
     "playtest:webhook-bridge": "npm run build:harness && node dist-harness/harness/webhookBridge.js",
     "playtest:codex-bridge": "npm run build:harness && node scripts/start-codex-bridge.cjs",
     "playtest:codex-bridge:probe": "node scripts/probe-codex-bridge.cjs",
+    "playtest:export-observatory": "node scripts/export-observatory-replay.cjs",
     "tournament:harness": "npm run build:harness && node dist-harness/harness/tournament.js",
     "playtest:extract-diaries": "node scripts/extract-playtest-diaries.cjs",
+    "playtest:analyze-treaties": "node scripts/analyze-treaty-patterns.cjs",
+    "playtest:validate-trace": "node scripts/validate-trace-log.cjs",
+    "playtest:replay-run": "node scripts/replay-harness-run.cjs",
     "playtest:feedback-loop": "node scripts/run-codex-feedback-loop.cjs"
   },
   "devDependencies": {
@@ -23,5 +30,8 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.3.0",
     "vite": "^5.0.0"
+  },
+  "dependencies": {
+    "codex": "^0.2.3"
   }
 }

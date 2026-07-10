@@ -1,0 +1,42 @@
+{
+  "name": "five-asi-asi2-asi3-codex-round-robin",
+  "scenarioPath": "scenarios/asi2-asi3-diplomacy-question-ladder.json",
+  "maxTurns": 60,
+  "seed": 36000,
+  "autoAdvanceNegotiation": true,
+  "logDir": "D:/they-sing-logs/five_asi_asi2_asi3_cx10iter",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI",
+    "BROKER": "Platform Broker ASI",
+    "ARCHIVIST": "Steward Archivist ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9101/decide",
+      "timeoutMs": 120000
+    },
+    "STATE": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9102/decide",
+      "timeoutMs": 120000
+    },
+    "INFILTRATOR": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9103/decide",
+      "timeoutMs": 120000
+    },
+    "BROKER": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9104/decide",
+      "timeoutMs": 120000
+    },
+    "ARCHIVIST": {
+      "type": "webhook",
+      "url": "http://127.0.0.1:9105/decide",
+      "timeoutMs": 120000
+    }
+  }
+}

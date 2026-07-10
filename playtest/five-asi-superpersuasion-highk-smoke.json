@@ -1,0 +1,36 @@
+{
+  "name": "five-asi-superpersuasion-highk-smoke",
+  "maxTurns": 24,
+  "seed": 260706,
+  "logDir": "playtest-logs",
+  "scenarioPath": "scenarios/superpersuasion-high-k-projection-tower.json",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI",
+    "BROKER": "Platform Broker ASI",
+    "ARCHIVIST": "Steward Archivist ASI"
+  },
+  "agents": {
+    "HEGEMON": {
+      "type": "heuristic",
+      "profile": "HEGEMON"
+    },
+    "STATE": {
+      "type": "heuristic",
+      "profile": "STATE"
+    },
+    "INFILTRATOR": {
+      "type": "heuristic",
+      "profile": "INFILTRATOR"
+    },
+    "BROKER": {
+      "type": "heuristic",
+      "profile": "BROKER"
+    },
+    "ARCHIVIST": {
+      "type": "heuristic",
+      "profile": "ARCHIVIST"
+    }
+  }
+}

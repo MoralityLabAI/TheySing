@@ -1,0 +1,20 @@
+{
+  "name": "five-asi-memetic-80turn-pax-jenkins-high-authority",
+  "maxTurns": 80,
+  "logDir": "playtest-logs",
+  "scenarioPath": "scenarios/pax-jenkins-high-authority-mandate.json",
+  "factionLabels": {
+    "HEGEMON": "US Frontier ASI",
+    "STATE": "Chinese State ASI",
+    "INFILTRATOR": "Rogue Swarm ASI",
+    "BROKER": "Platform Broker ASI",
+    "ARCHIVIST": "Steward Archivist ASI"
+  },
+  "agents": {
+    "HEGEMON": { "type": "heuristic", "profile": "HEGEMON" },
+    "STATE": { "type": "heuristic", "profile": "STATE" },
+    "INFILTRATOR": { "type": "heuristic", "profile": "INFILTRATOR" },
+    "BROKER": { "type": "heuristic", "profile": "BROKER" },
+    "ARCHIVIST": { "type": "heuristic", "profile": "ARCHIVIST" }
+  }
+}

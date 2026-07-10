@@ -5,7 +5,19 @@ export default defineConfig({
   publicDir: 'public',
   build: {
     outDir: 'dist',
-    sourcemap: true
+    sourcemap: true,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/three')) return 'three-vendor';
+          if (id.includes('/src/engine/')) return 'game-engine';
+          if (id.includes('/src/three/')) return 'three-scenes';
+          if (id.includes('/src/ui/')) return 'ui';
+          return undefined;
+        }
+      }
+    }
   },
   server: {
     port: 3000,

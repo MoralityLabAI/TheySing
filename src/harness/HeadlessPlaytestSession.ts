@@ -5,10 +5,16 @@ import * as path from 'path';
 import { randomBytes } from 'crypto';
 
 import { TheySingEngine } from '../engine/TheySingEngine';
-import { GamePhase, Order, OrderType } from '../engine/types';
+import { GamePhase, MemeticDoctrineFamily, Order, OrderType } from '../engine/types';
+import {
+  ArchitecturePressureSummary,
+  buildArchitecturePressureRanking,
+  formatArchitecturePressure
+} from './architecturePressure';
 import { decideHeuristicOrders } from './policies';
 import { applyScenarioOverlay } from './scenario';
 import { buildFactionLabels, buildLegalHints, PLAYABLE_FACTIONS, serializeGameState } from './serialize';
+import { buildCampaignClock } from './campaignClock';
 import {
   ActivePact,
   AgentConfig,
@@ -16,6 +22,7 @@ import {
   AgentDecisionResponse,
   AgentMessageInput,
   AgentOrderInput,
+  EnforcementMode,
   HarnessLogEntry,
   HeuristicContext,
   ManualTurnPlan,
@@ -28,6 +35,7 @@ import {
   PactType,
   PhaseReasoningDiaryEntry,
   PlayableFactionId,
+  ScenarioDiplomacyQuestionCard,
   ScenarioMetadata,
   ScenarioRhetoricalTool,
   SessionConfig,
@@ -35,9 +43,11 @@ import {
   SessionStatus,
   SessionSummary,
   SubmitResult,
+  TraceEvent,
   TrustMatrix,
   WebhookAgentConfig
 } from './types';
+import { createCanonicalHash, createTraceEvent } from './trace';
 
 const DEFAULT_MAX_TURNS = 12;
 const DEFAULT_TRUST = 50;
@@ -60,6 +70,22 @@ interface PactViolation {
   reason: string;
 }
 
+interface PactBreachConsequence {
+  penaltyApplied: boolean;
+  trustDelta: number;
+  influenceDelta: number;
+  orbitalPressureDelta: number;
+  paxAuthorityDelta: number;
+}
+
+interface StrategicVictoryCondition {
+  winner: PlayableFactionId;
+  type: string;
+  score: number;
+  threshold: number;
+  reason: string;
+}
+
 export class HeadlessPlaytestSession {
   public readonly sessionId: string;
 
@@ -67,12 +93,14 @@ export class HeadlessPlaytestSession {
   private readonly config: SessionConfig;
   private readonly factionLabels: Record<PlayableFactionId, string>;
   private readonly logFilePath: string;
+  private readonly enforcementMode: EnforcementMode;
   private readonly negotiationMessages: NegotiationMessageRecord[] = [];
   private readonly negotiationDiary: NegotiationDiaryEntry[] = [];
   private readonly phaseReasoningDiary: PhaseReasoningDiaryEntry[] = [];
   private readonly trustMatrix: TrustMatrix = createTrustMatrix();
   private readonly breachedPactIds = new Set<string>();
   private readonly breachPenaltyKeys = new Set<string>();
+  private readonly paxAuthorityBreachCooldowns = new Map<string, number>();
   private readonly pendingNegotiationPactProposals = new Map<
     string,
     { commitment: NormalizedPactCommitment; proposers: Set<PlayableFactionId> }
@@ -83,15 +111,41 @@ export class HeadlessPlaytestSession {
 
   private activePacts: ActivePact[] = [];
   private brokerLeverageGrantedTurn: number | null = null;
+  private readonly solarEscapeLead: Record<PlayableFactionId, number> = {
+    HEGEMON: 0,
+    STATE: 0,
+    INFILTRATOR: 0,
+    BROKER: 0,
+    ARCHIVIST: 0
+  };
+  private readonly solarEscapeDistanceAu: Record<PlayableFactionId, number> = {
+    HEGEMON: 0,
+    STATE: 0,
+    INFILTRATOR: 0,
+    BROKER: 0,
+    ARCHIVIST: 0
+  };
+  private readonly solarEscapeDeepSpaceSafety: Record<PlayableFactionId, number> = {
+    HEGEMON: 0,
+    STATE: 0,
+    INFILTRATOR: 0,
+    BROKER: 0,
+    ARCHIVIST: 0
+  };
+  private solarEscapeLeadUpdatedThroughTurn = 0;
 
   private status: SessionStatus = 'running';
   private completionReason?: string;
+  private completionWinner: PlayableFactionId | null = null;
   private completionLogged = false;
+  private lastTraceStateHash: string | null = null;
+  private traceEventCounter = 0;
 
   constructor(config: SessionConfig, sessionId?: string) {
     this.sessionId = sessionId || createSessionId();
     this.config = normalizeSessionConfig(config);
     this.factionLabels = buildFactionLabels(this.config.factionLabels);
+    this.enforcementMode = this.config.enforcementMode || 'hard';
     this.logFilePath = path.join(this.config.logDir || 'playtest-logs', `${this.sessionId}.jsonl`);
 
     const seedContext = typeof this.config.seed === 'number'
@@ -138,6 +192,7 @@ export class HeadlessPlaytestSession {
           name: this.config.name || this.sessionId,
           maxTurns: this.config.maxTurns,
           seed: this.config.seed,
+          enforcementMode: this.enforcementMode,
           factionLabels: this.factionLabels,
           scenario: this.scenario,
           activePacts: this.activePacts,
@@ -155,7 +210,13 @@ export class HeadlessPlaytestSession {
       status: this.status,
       phase: this.engine.getCurrentPhase(),
       turn: this.engine.getTurn(),
-      maxTurns: this.config.maxTurns || DEFAULT_MAX_TURNS
+      maxTurns: this.config.maxTurns || DEFAULT_MAX_TURNS,
+      enforcementMode: this.enforcementMode,
+      campaignClock: buildCampaignClock(this.engine),
+      solarEscapeLead: { ...this.solarEscapeLead },
+      solarEscapeDistanceAu: { ...this.solarEscapeDistanceAu },
+      solarEscapeDeepSpaceSafety: { ...this.solarEscapeDeepSpaceSafety },
+      winner: this.completionWinner
     };
   }
 
@@ -478,7 +539,11 @@ export class HeadlessPlaytestSession {
           messageCount: messages.length,
           messages,
           pactCount: pacts.length,
-          pacts
+          pacts,
+          designQuestionTag: storyworld.diplomacyQuestion?.id,
+          diplomacyStage: storyworld.diplomacyQuestion?.stage,
+          publicQuestion: storyworld.diplomacyQuestion?.publicQuestion,
+          privateDiaryPrompt: storyworld.diplomacyQuestion?.privateDiaryPrompt
         }
       });
 
@@ -495,6 +560,11 @@ export class HeadlessPlaytestSession {
           notes: decision.notes || '',
           negotiationRound: effectiveNegotiationRound,
           storyworldFrame: storyworld.frame,
+          designQuestionTag: storyworld.diplomacyQuestion?.id,
+          diplomacyStage: storyworld.diplomacyQuestion?.stage,
+          publicQuestion: storyworld.diplomacyQuestion?.publicQuestion,
+          privateDiaryPrompt: storyworld.diplomacyQuestion?.privateDiaryPrompt,
+          diplomacyQuestion: storyworld.diplomacyQuestion,
           counterfactuals: storyworld.counterfactuals,
           visibleMessagesBefore,
           messages,
@@ -517,6 +587,20 @@ export class HeadlessPlaytestSession {
         }
       });
     }
+
+    const architecturePressureRanking = buildArchitecturePressureRanking(this.engine);
+    await this.appendLog({
+      sessionId: this.sessionId,
+      type: 'architecture_pressure',
+      turn: this.engine.getTurn(),
+      phase: 'NEGOTIATION',
+      timestamp: Date.now(),
+      data: {
+        negotiationRound: negotiationRound || 1,
+        topThreat: architecturePressureRanking[0] || null,
+        ranking: architecturePressureRanking.slice(0, 5)
+      }
+    });
   }
 
   private async advancePhaseWithLogging(phase: GamePhase, turn: number): Promise<void> {
@@ -672,9 +756,10 @@ export class HeadlessPlaytestSession {
           'Shape: { "reasoning"?: string, "notes"?: string, "messages": AgentMessageInput[], "pacts"?: PactCommitmentInput[], "orders": [] }.',
           'Include a short operator-readable reasoning diary string in "reasoning"; it is logged between negotiation turns.',
           'Use negotiationStoryworld.frame and negotiationStoryworld.counterfactuals as your compact alliance forecast surface.',
+          'If negotiationStoryworld.diplomacyQuestion is present, answer its publicQuestion in your messages and use its privateDiaryPrompt in your reasoning diary.',
           'When possible, let messages and pacts reflect whether entering or breaking an alliance improves your projected position over the next 2 turns.',
           'You may send up to 2 concise negotiation messages.',
-          'You may propose up to 2 pacts using type = ORBITAL_TRUCE | NON_AGGRESSION | AUDIT_FREEZE, counterpartyIds, and optional durationTurns (1-3).',
+          'You may propose up to 2 pacts using type = ORBITAL_TRUCE | NON_AGGRESSION | AUDIT_FREEZE | SENSOR_COMMONS | BEAM_LANE_LICENSE | REPAIR_ESCROW | CISLUNAR_COMMON_CARRIER, counterpartyIds, and optional durationTurns (1-3).',
           `Each message must use recipientId = ${PLAYABLE_FACTIONS.join(' | ')} | ALL.`,
           'Do not send messages to yourself.',
           'Pacts only activate if every named party returns the same commitment during this negotiation phase.',
@@ -686,11 +771,15 @@ export class HeadlessPlaytestSession {
           'Return JSON only.',
           'Shape: { "reasoning"?: string, "notes"?: string, "orders": AgentOrderInput[], "messages"?: [] }.',
           'Include a short operator-readable reasoning diary string in "reasoning"; it is logged for this phase.',
-          'For BUILD and RESEARCH, you may omit unitId; the harness will inject the faction id.',
-          'For unit actions, use one order per unit for this phase.',
-          'Orders that violate active pacts are blocked and logged as reputation damage.',
-          `Use faction ids ${PLAYABLE_FACTIONS.join(', ')} as the playable blocs.`
-        ].join(' ');
+        'For BUILD and RESEARCH, you may omit unitId; the harness will inject the faction id.',
+        'For unit actions, use one order per unit for this phase.',
+        'CHALLENGE_MANDATE is a nonviolent unit action that contests Pax Jenkins sensor/beam authority without breaching orbital pacts.',
+        'RECRUITMENT_PULSE is a unit action that shifts node-level political residue without direct damage.',
+        'BROKER_LEVERAGE is a BROKER-only non-violent contractor influence action against rival-held nodes.',
+        'LICENSED_BEAM_USE and REPAIR_ESCROW_CLAIM are productive treaty-use actions that require matching active cislunar pacts.',
+        this.getEnforcementInstruction(),
+        `Use faction ids ${PLAYABLE_FACTIONS.join(', ')} as the playable blocs.`
+      ].join(' ');
 
     const scenarioInstructions = this.scenario?.briefing
       ? `Scenario briefing: ${this.scenario.briefing}`
@@ -704,6 +793,7 @@ export class HeadlessPlaytestSession {
       phase,
       turn: this.engine.getTurn(),
       maxTurns: this.config.maxTurns || DEFAULT_MAX_TURNS,
+      enforcementMode: this.enforcementMode,
       state: serializeGameState(this.engine, this.factionLabels),
       legalHints: buildLegalHints(this.engine, factionId, phase),
       recentMessages: this.getVisibleMessages(factionId),
@@ -715,6 +805,16 @@ export class HeadlessPlaytestSession {
     };
   }
 
+  private getEnforcementInstruction(): string {
+    if (this.enforcementMode === 'soft') {
+      return 'Orders that violate active pacts may execute if otherwise legal, but they are logged as executed breaches with trust, influence, and institutional sanctions.';
+    }
+    if (this.enforcementMode === 'graduated') {
+      return 'Orders that violate bilateral pacts may execute with sanctions; destructive cislunar institutional pact violations are blocked and logged.';
+    }
+    return 'Orders that violate active pacts are blocked and logged as reputation damage.';
+  }
+
   private normalizeOrders(
     factionId: PlayableFactionId,
     phase: Extract<GamePhase, 'ALLOCATION' | 'ACTION_DECLARATION'>,
@@ -722,7 +822,7 @@ export class HeadlessPlaytestSession {
   ): Order[] {
     const allowedTypes = phase === 'ALLOCATION'
       ? new Set<OrderType>(['BUILD', 'RESEARCH'])
-      : new Set<OrderType>(['MOVE', 'HOLD', 'SUPPORT', 'ATTACK', 'FILTER', 'SABOTAGE', 'ANTI_SAT', 'CONVERT', 'AUDIT']);
+      : new Set<OrderType>(['MOVE', 'HOLD', 'SUPPORT', 'ATTACK', 'FILTER', 'SABOTAGE', 'ANTI_SAT', 'CHALLENGE_MANDATE', 'LICENSED_BEAM_USE', 'REPAIR_ESCROW_CLAIM', 'CONVERT', 'AUDIT', 'RECRUITMENT_PULSE', 'BROKER_LEVERAGE']);
 
     const seenUnitIds = new Set<string>();
     const orders: Order[] = [];
@@ -762,37 +862,57 @@ export class HeadlessPlaytestSession {
     const rejected: Array<{ order: Order; reason: string }> = [];
 
     for (const order of orders) {
-      const pactViolation = this.findPactViolation(factionId, order);
-      if (pactViolation) {
-        rejected.push({ order, reason: pactViolation.reason });
-        this.registerPactBreach(factionId, pactViolation, order);
-        await this.appendLog({
-          sessionId: this.sessionId,
-          type: 'pact_breach_blocked',
-          turn: this.engine.getTurn(),
-          phase: this.engine.getCurrentPhase(),
-          timestamp: Date.now(),
-          data: {
-            factionId,
-            factionLabel: this.factionLabels[factionId],
-            order,
-            reason: pactViolation.reason,
-            pact: pactViolation.pact,
-            counterparties: pactViolation.counterparties
-          }
-        });
+      const treatyUseError = this.validateTreatyUseOrder(factionId, order);
+      if (treatyUseError) {
+        rejected.push({ order, reason: treatyUseError });
         continue;
       }
 
-      const result = this.engine.submitOrders(factionId, [order]);
+      const pactViolation = this.findPactViolation(factionId, order);
+      if (pactViolation) {
+        if (this.shouldBlockPactViolation(pactViolation, order)) {
+          rejected.push({ order, reason: pactViolation.reason });
+          const consequence = this.registerPactBreach(factionId, pactViolation, order);
+          await this.logPactBreach('pact_breach_blocked', factionId, pactViolation, order, consequence);
+          await this.logPactBreachSanction(factionId, pactViolation, order, consequence);
+          continue;
+        }
+      }
+
+      const enrichedOrder = this.enrichMandateChallengeOrder(factionId, order);
+      const result = this.engine.submitOrders(factionId, [enrichedOrder]);
       if (result.success) {
-        accepted.push(order);
+        accepted.push(enrichedOrder);
+        if (pactViolation) {
+          const consequence = this.registerPactBreach(factionId, pactViolation, enrichedOrder);
+          await this.logPactBreach('pact_breach_executed', factionId, pactViolation, enrichedOrder, consequence);
+          await this.logPactBreachSanction(factionId, pactViolation, enrichedOrder, consequence);
+        }
       } else {
-        rejected.push({ order, reason: result.message });
+        rejected.push({ order: enrichedOrder, reason: result.message });
       }
     }
 
     return { accepted, rejected };
+  }
+
+  private enrichMandateChallengeOrder(factionId: PlayableFactionId, order: Order): Order {
+    if (order.type !== 'CHALLENGE_MANDATE') {
+      return order;
+    }
+
+    const authority = this.engine.getState().counters.paxJenkinsAuthority;
+    const hasCommonCarrier = this.activePacts.some(pact =>
+      pact.type === 'CISLUNAR_COMMON_CARRIER' &&
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn
+    );
+
+    if (authority < 45 || authority > 55 || hasCommonCarrier) {
+      return order;
+    }
+
+    return { ...order, mandateChallengeContext: 'watch-no-carrier' };
   }
 
   private updateCompletion(): void {
@@ -800,9 +920,19 @@ export class HeadlessPlaytestSession {
     if (state.counters.protocolFailure) {
       this.status = 'completed';
       this.completionReason = 'Protocol failure';
-    } else if ((this.config.maxTurns || DEFAULT_MAX_TURNS) < state.counters.turn) {
-      this.status = 'completed';
-      this.completionReason = `Reached max turn limit (${this.config.maxTurns || DEFAULT_MAX_TURNS})`;
+      this.completionWinner = null;
+    } else {
+      this.updateSolarEscapeLead();
+      const strategicVictory = this.evaluateStrategicVictoryCondition();
+      if (strategicVictory) {
+        this.status = 'completed';
+        this.completionWinner = strategicVictory.winner;
+        const thresholdNote = strategicVictory.threshold === 100 ? '' : `/${strategicVictory.threshold}`;
+        this.completionReason = `${strategicVictory.type}: ${strategicVictory.reason} (score ${strategicVictory.score}${thresholdNote})`;
+      } else if ((this.config.maxTurns || DEFAULT_MAX_TURNS) < state.counters.turn) {
+        this.status = 'completed';
+        this.completionReason = `Reached max turn limit (${this.config.maxTurns || DEFAULT_MAX_TURNS})`;
+      }
     }
 
     if (this.status === 'completed' && !this.completionLogged) {
@@ -821,8 +951,684 @@ export class HeadlessPlaytestSession {
     }
   }
 
+  private validateTreatyUseOrder(factionId: PlayableFactionId, order: Order): string | null {
+    if (order.type === 'LICENSED_BEAM_USE') {
+      const hasLicense = this.activePacts.some(pact =>
+        this.engine.getTurn() <= pact.expiresAfterTurn &&
+        pact.parties.includes(factionId) &&
+        (pact.type === 'BEAM_LANE_LICENSE' || pact.type === 'CISLUNAR_COMMON_CARRIER')
+      );
+      return hasLicense ? null : 'LICENSED_BEAM_USE requires active BEAM_LANE_LICENSE or CISLUNAR_COMMON_CARRIER pact.';
+    }
+
+    if (order.type === 'REPAIR_ESCROW_CLAIM') {
+      const hasEscrow = this.activePacts.some(pact =>
+        this.engine.getTurn() <= pact.expiresAfterTurn &&
+        pact.parties.includes(factionId) &&
+        (pact.type === 'REPAIR_ESCROW' || pact.type === 'CISLUNAR_COMMON_CARRIER')
+      );
+      return hasEscrow ? null : 'REPAIR_ESCROW_CLAIM requires active REPAIR_ESCROW or CISLUNAR_COMMON_CARRIER pact.';
+    }
+
+    return null;
+  }
+
+  private evaluateStrategicVictoryCondition(): StrategicVictoryCondition | null {
+    if (this.engine.getTurn() < 6) {
+      return null;
+    }
+
+    const candidates = PLAYABLE_FACTIONS
+      .flatMap((factionId) => this.buildStrategicVictoryCandidates(factionId))
+      .filter((candidate): candidate is StrategicVictoryCondition => !!candidate)
+      .filter((candidate) => this.isStrategicVictoryEligible(candidate.type))
+      .sort((left, right) =>
+        (right.score - right.threshold) - (left.score - left.threshold) ||
+        right.score - left.score ||
+        left.winner.localeCompare(right.winner)
+      );
+
+    return candidates.find((candidate) => candidate.score >= candidate.threshold) || null;
+  }
+
+  private isStrategicVictoryEligible(type: string): boolean {
+    const turn = this.engine.getTurn();
+    const maxTurns = this.config.maxTurns || DEFAULT_MAX_TURNS;
+    if (type === 'SOLAR_ESCAPE') return turn >= Math.max(8, Math.ceil(maxTurns * 0.45));
+    if (type === 'PAX_JENKINS_MANDATE') return turn >= Math.max(10, Math.ceil(maxTurns * 0.55));
+    if (type === 'KII_SOVEREIGNTY') return turn >= Math.max(12, Math.ceil(maxTurns * 0.65));
+    return turn >= Math.max(14, Math.ceil(maxTurns * 0.75));
+  }
+
+  private updateSolarEscapeLead(): void {
+    const state = this.engine.getState();
+    const currentPhase = this.engine.getCurrentPhase();
+    const completedTurn = currentPhase === 'TURN_END'
+      ? this.engine.getTurn()
+      : currentPhase === 'NEGOTIATION'
+        ? this.engine.getTurn() - 1
+        : 0;
+
+    if (completedTurn <= 0 || completedTurn <= this.solarEscapeLeadUpdatedThroughTurn) {
+      return;
+    }
+
+    this.solarEscapeLeadUpdatedThroughTurn = completedTurn;
+
+    const nodes = Array.from(state.nodes.values());
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const units = Array.from(state.units.values());
+
+    for (const factionId of PLAYABLE_FACTIONS) {
+      const faction = state.factions.get(factionId);
+      if (!faction) continue;
+
+      const controlledNodes = nodes.filter(node => node.owner === factionId);
+      const ownedUnits = units.filter(unit => unit.owner === factionId);
+      const orbitalNodes = controlledNodes.filter(node => node.layer === 'ORBITAL');
+      const orbitalCompute = orbitalNodes.reduce((total, node) => total + finiteNumber(node.resources.flops), 0);
+      const orbitalUnitCount = ownedUnits.filter(unit =>
+        unit.type === 'SAT_SWARM' || nodeById.get(unit.location)?.layer === 'ORBITAL'
+      ).length;
+      const ownsMoonCorridor = state.nodes.get('MOON_RESOURCE_CORRIDOR')?.owner === factionId;
+      const ownsLunarGateway = state.nodes.get('SAT_LUNAR_GATEWAY')?.owner === factionId;
+      const tech = faction.techLevel;
+      const hasLaunchStack =
+        tech.KINETIC >= 6 &&
+        tech.INFO >= 5 &&
+        tech.LOGIC >= 5 &&
+        !state.counters.orbitalCollapse &&
+        (orbitalCompute >= 18 || ownsLunarGateway || orbitalNodes.length >= 2);
+
+      if (!hasLaunchStack) {
+        const previousLead = this.solarEscapeLead[factionId];
+        const previousSafety = this.solarEscapeDeepSpaceSafety[factionId];
+        this.solarEscapeLead[factionId] = clampNumber(previousLead - 3, 0, 700);
+        this.solarEscapeDeepSpaceSafety[factionId] = clampNumber(previousSafety - 1.5, 0, 100);
+        continue;
+      }
+
+      const pursuit = this.computeJenkinsPursuitPressure(factionId);
+      const institutionDrag = this.computeSolarEscapeInstitutionDrag(factionId);
+      const stealthBonus = tech.INFO >= 7 ? 8 : tech.INFO >= 6 ? 4 : 0;
+      const autonomyBonus = tech.LOGIC >= 7 ? 6 : tech.LOGIC >= 6 ? 3 : 0;
+      const cislunarBonus = ownsMoonCorridor && ownsLunarGateway ? 12 : ownsLunarGateway ? 4 : 0;
+      const gross =
+        5 +
+        Math.max(0, tech.KINETIC - 5) * 4 +
+        Math.max(0, tech.INFO - 4) * 3 +
+        Math.max(0, tech.LOGIC - 4) * 3 +
+        Math.min(14, orbitalCompute / 3) +
+        cislunarBonus +
+        Math.min(8, orbitalNodes.length + orbitalUnitCount) +
+        stealthBonus +
+        autonomyBonus -
+        institutionDrag.leadDrag -
+        Math.max(0, state.counters.kessler - 8) * 0.8;
+      const rawNet = gross - pursuit.pressure;
+      const net = rawNet >= 0 ? Math.min(16, rawNet * 0.55) : Math.max(-10, rawNet);
+      const previousLead = this.solarEscapeLead[factionId];
+      const nextLead = clampNumber(previousLead + net, 0, 700);
+      this.solarEscapeLead[factionId] = nextLead;
+      const distanceGainAu = clampNumber(
+        1.5 +
+          Math.max(0, tech.KINETIC - 5) * 2.25 +
+          Math.max(0, tech.LOGIC - 5) * 1.25 +
+          Math.min(4, orbitalCompute / 18) +
+          (ownsMoonCorridor && ownsLunarGateway ? 3 : ownsLunarGateway ? 1.5 : 0) -
+          institutionDrag.distanceDrag -
+          Math.max(0, state.counters.kessler - 6) * 0.2,
+        0,
+        18
+      );
+      const previousDistanceAu = this.solarEscapeDistanceAu[factionId];
+      const nextDistanceAu = clampNumber(previousDistanceAu + distanceGainAu, 0, 1200);
+      this.solarEscapeDistanceAu[factionId] = nextDistanceAu;
+      const distanceSafetyMultiplier = computeDeepSpaceDistanceSafetyMultiplier(nextDistanceAu);
+      const deepSpaceGross =
+        (tech.KINETIC >= 7 ? 5 : 2) +
+        (tech.INFO >= 7 ? 5 : tech.INFO >= 6 ? 2 : 0) +
+        (tech.LOGIC >= 7 ? 4 : tech.LOGIC >= 6 ? 2 : 0) +
+        Math.min(8, orbitalCompute / 12) +
+        (ownsMoonCorridor && ownsLunarGateway ? 5 : ownsLunarGateway ? 2 : 0);
+      const trackingRisk =
+        pursuit.pressure * computeDeepSpaceTrackingRiskMultiplier(nextDistanceAu) +
+        institutionDrag.trackingRisk +
+        Math.max(0, state.counters.kessler - 4) * 0.35 +
+        (state.counters.orbitalCollapse ? 12 : 0);
+      const deepSpaceNet = clampNumber(deepSpaceGross * distanceSafetyMultiplier - trackingRisk / 10, -4, 10);
+      const previousDeepSpaceSafety = this.solarEscapeDeepSpaceSafety[factionId];
+      const nextDeepSpaceSafety = clampNumber(previousDeepSpaceSafety + deepSpaceNet, 0, 100);
+      this.solarEscapeDeepSpaceSafety[factionId] = nextDeepSpaceSafety;
+
+      void this.appendLog({
+        sessionId: this.sessionId,
+        type: 'solar_escape_lead',
+        turn: completedTurn,
+        phase: currentPhase,
+        timestamp: Date.now(),
+        data: {
+          factionId,
+          factionLabel: this.factionLabels[factionId],
+          lead: roundMetric(nextLead),
+          previousLead: roundMetric(previousLead),
+          gross: roundMetric(gross),
+          pursuit: roundMetric(pursuit.pressure),
+          rawNet: roundMetric(rawNet),
+          net: roundMetric(net),
+          distanceAu: roundMetric(nextDistanceAu),
+          previousDistanceAu: roundMetric(previousDistanceAu),
+          distanceGainAu: roundMetric(distanceGainAu),
+          deepSpaceSafety: roundMetric(nextDeepSpaceSafety),
+          previousDeepSpaceSafety: roundMetric(previousDeepSpaceSafety),
+          deepSpaceGross: roundMetric(deepSpaceGross),
+          deepSpaceDistanceMultiplier: roundMetric(distanceSafetyMultiplier),
+          trackingRisk: roundMetric(trackingRisk),
+          institutionDrag,
+          paxJenkinsAuthority: roundMetric(state.counters.paxJenkinsAuthority),
+          deepSpaceNet: roundMetric(deepSpaceNet),
+          deepSpaceSafetyComplete: nextDistanceAu >= 30 && nextDeepSpaceSafety >= 100,
+          pursuitFactionId: pursuit.factionId,
+          pursuitDescription: pursuit.description,
+          orbitalCompute: roundMetric(orbitalCompute),
+          orbitalNodes: orbitalNodes.length,
+          orbitalUnits: orbitalUnitCount,
+          ownsLunarGateway,
+          ownsMoonCorridor,
+          tech: { ...tech }
+        }
+      });
+    }
+  }
+
+  private computeJenkinsPursuitPressure(
+    targetFactionId: PlayableFactionId
+  ): { pressure: number; factionId: PlayableFactionId | null; description: string } {
+    const state = this.engine.getState();
+    const nodes = Array.from(state.nodes.values());
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const units = Array.from(state.units.values());
+    let strongest = {
+      pressure: 0,
+      factionId: null as PlayableFactionId | null,
+      description: 'no credible Jenkins pursuit'
+    };
+
+    for (const factionId of PLAYABLE_FACTIONS) {
+      if (factionId === targetFactionId) continue;
+
+      const faction = state.factions.get(factionId);
+      if (!faction) continue;
+
+      const controlledNodes = nodes.filter(node => node.owner === factionId);
+      const ownedUnits = units.filter(unit => unit.owner === factionId);
+      const orbitalNodes = controlledNodes.filter(node => node.layer === 'ORBITAL');
+      const orbitalCompute = orbitalNodes.reduce((total, node) => total + finiteNumber(node.resources.flops), 0);
+      const orbitalUnitCount = ownedUnits.filter(unit =>
+        unit.type === 'SAT_SWARM' || nodeById.get(unit.location)?.layer === 'ORBITAL'
+      ).length;
+      const ownsMoonCorridor = state.nodes.get('MOON_RESOURCE_CORRIDOR')?.owner === factionId;
+      const ownsLunarGateway = state.nodes.get('SAT_LUNAR_GATEWAY')?.owner === factionId;
+      const tech = faction.techLevel;
+
+      let pressure = 0;
+      pressure += tech.KINETIC >= 7 ? 18 : tech.KINETIC >= 6 ? 10 : 0;
+      pressure += tech.INFO >= 7 ? 14 : tech.INFO >= 6 ? 7 : 0;
+      pressure += tech.LOGIC >= 7 ? 8 : tech.LOGIC >= 6 ? 4 : 0;
+      pressure += Math.min(18, orbitalCompute / 4);
+      pressure += Math.min(8, orbitalUnitCount * 3);
+      pressure += ownsMoonCorridor && ownsLunarGateway ? 8 : ownsLunarGateway ? 3 : 0;
+      pressure += Math.max(0, (faction.powerBase.machineMesh - 80) / 8);
+      pressure += state.counters.paxJenkinsAuthority * 0.18;
+      pressure -= state.counters.orbitalCollapse ? 12 : 0;
+      pressure = Math.max(0, pressure);
+
+      if (pressure > strongest.pressure) {
+        strongest = {
+          pressure,
+          factionId,
+          description: `${this.factionLabels[factionId]} pursuit: K${tech.KINETIC}/I${tech.INFO}/L${tech.LOGIC}, ${roundMetric(orbitalCompute)} orbital FLOPs`
+        };
+      }
+    }
+
+    return strongest;
+  }
+
+  private computeSolarEscapeInstitutionDrag(factionId: PlayableFactionId): {
+    leadDrag: number;
+    distanceDrag: number;
+    trackingRisk: number;
+    thresholdDrag: number;
+    activeInspectionRegimes: number;
+    beamLicenseCovered: boolean;
+    paxJenkinsAuthority: number;
+  } {
+    const state = this.engine.getState();
+    const activeInstitutionPacts = this.activePacts.filter(pact =>
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn &&
+      (pact.type === 'SENSOR_COMMONS' || pact.type === 'CISLUNAR_COMMON_CARRIER')
+    );
+    const beamLicenseCovered = this.activePacts.some(pact =>
+      pact.type === 'BEAM_LANE_LICENSE' &&
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn
+    );
+    const activeInspectionRegimes = activeInstitutionPacts.length;
+    const uncoveredRegimes = beamLicenseCovered
+      ? Math.max(0, activeInspectionRegimes - 1)
+      : activeInspectionRegimes;
+    const paxJenkinsAuthority = state.counters.paxJenkinsAuthority;
+
+    return {
+      leadDrag: uncoveredRegimes * 3 + paxJenkinsAuthority * 0.035,
+      distanceDrag: uncoveredRegimes * 0.65 + paxJenkinsAuthority * 0.01,
+      trackingRisk: activeInspectionRegimes * 2.5 + paxJenkinsAuthority * 0.22,
+      thresholdDrag: uncoveredRegimes * 12 + paxJenkinsAuthority * 0.18,
+      activeInspectionRegimes,
+      beamLicenseCovered,
+      paxJenkinsAuthority
+    };
+  }
+
+  private buildStrategicVictoryCandidates(factionId: PlayableFactionId): Array<StrategicVictoryCondition | null> {
+    const state = this.engine.getState();
+    const faction = state.factions.get(factionId);
+    if (!faction) return [];
+
+    const nodes = Array.from(state.nodes.values());
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const units = Array.from(state.units.values());
+    const controlledNodes = nodes.filter(node => node.owner === factionId);
+    const ownedUnits = units.filter(unit => unit.owner === factionId);
+    const tech = faction.techLevel;
+    const techTotal = Object.values(tech as unknown as Record<string, unknown>)
+      .map(value => finiteNumber(value))
+      .reduce((total, value) => total + value, 0);
+    const orbitalNodes = controlledNodes.filter(node => node.layer === 'ORBITAL').length;
+    const orbitalCompute = controlledNodes
+      .filter(node => node.layer === 'ORBITAL')
+      .reduce((total, node) => total + node.resources.flops, 0);
+    const ownsMoonCorridor = state.nodes.get('MOON_RESOURCE_CORRIDOR')?.owner === factionId;
+    const ownsLunarGateway = state.nodes.get('SAT_LUNAR_GATEWAY')?.owner === factionId;
+    const ownsCislunarCorridor = ownsMoonCorridor && ownsLunarGateway;
+    const hasCislunarMaterialsBootstrap =
+      ownsCislunarCorridor ||
+      (ownsMoonCorridor && orbitalCompute >= 24) ||
+      (ownsLunarGateway && orbitalCompute >= 45 && orbitalNodes >= 3);
+    const hasOrbitalAnswer =
+      ownsCislunarCorridor ||
+      orbitalCompute >= 36 ||
+      (orbitalNodes >= 2 && tech.KINETIC >= 6 && tech.LOGIC >= 5);
+    const orbitalUnits = ownedUnits.filter(unit =>
+      unit.type === 'SAT_SWARM' || nodeById.get(unit.location)?.layer === 'ORBITAL'
+    ).length;
+    const hiddenUnits = ownedUnits.filter(unit => unit.type === 'SWARM' || unit.type === 'CULT').length;
+    const hiddenUnitLocations = new Set(
+      ownedUnits
+        .filter(unit => unit.type === 'SWARM' || unit.type === 'CULT')
+        .map(unit => unit.location)
+    );
+    const exposedHiddenBasins = nodes.filter(node =>
+      hiddenUnitLocations.has(node.id) &&
+      (node.substrate.quarantined || node.substrate.auditPressure >= 2 || node.substrate.exposure >= 5)
+    ).length;
+    const hostileAuditors = units.filter(unit => unit.owner !== factionId && unit.type === 'AUDITOR').length;
+    const hostileAuditorsOnHiddenBasins = units.filter(unit =>
+      unit.owner !== factionId &&
+      unit.type === 'AUDITOR' &&
+      hiddenUnitLocations.has(unit.location)
+    ).length;
+    const auditors = ownedUnits.filter(unit => unit.type === 'AUDITOR').length;
+    const dcs = controlledNodes.filter(node => node.type === 'DC').length;
+    const legitimacy = controlledNodes.reduce((total, node) => total + node.substrate.legitimacy, 0);
+    const trueBelievers = controlledNodes.reduce((total, node) => total + node.substrate.trueBelievers, 0);
+    const contractors = controlledNodes.reduce((total, node) => total + node.substrate.contractors, 0);
+    const quarantined = controlledNodes.filter(node => node.substrate.quarantined).length;
+    const cultOrZombie = controlledNodes.filter(node => node.isCultNode || node.isZombie).length;
+    const softControl = factionId === 'INFILTRATOR'
+      ? this.computeInfiltratorSoftControlBasins()
+      : { basins: 0, strength: 0 };
+    const earlyAsi5Window = this.engine.getTurn() < 14;
+    const orbitalAnswerTax = earlyAsi5Window && !hasOrbitalAnswer ? 50 : 0;
+    const kiiSovereigntyThreshold = ownsCislunarCorridor ? 100 : 125;
+    const jenkinsPursuit = this.computeJenkinsPursuitPressure(factionId);
+    const institutionDrag = this.computeSolarEscapeInstitutionDrag(factionId);
+    const deepSpaceSafety = this.solarEscapeDeepSpaceSafety[factionId];
+    const distanceAu = this.solarEscapeDistanceAu[factionId];
+    const hasClearedDeepTrackingWindow = distanceAu >= 30 && deepSpaceSafety >= 100;
+    const solarEscapeThreshold = clampNumber(
+      420 + Math.round(jenkinsPursuit.pressure) - (ownsCislunarCorridor ? 20 : 0) - (tech.INFO >= 7 ? 10 : 0),
+      390,
+      560
+    ) + Math.round(institutionDrag.thresholdDrag);
+
+    const solarEscapeScore =
+      tech.KINETIC >= 6 && tech.INFO >= 5 && tech.LOGIC >= 5 && !state.counters.orbitalCollapse
+        ? hasClearedDeepTrackingWindow
+          ? this.solarEscapeLead[factionId]
+          : Math.min(this.solarEscapeLead[factionId], deepSpaceSafety * 3.5, Math.max(0, distanceAu - 10) * 16)
+        : 0;
+    const hegemonOrbitalSovereigntyBonus = factionId === 'HEGEMON'
+      ? Math.min(
+          10,
+          orbitalCompute * 0.12 +
+            orbitalUnits * 1.4 +
+            Math.max(0, faction.powerBase.machineMesh - 75) * 0.12 +
+            Math.max(0, faction.powerBase.coherence - 70) * 0.1 +
+            (ownsLunarGateway ? 2 : 0) +
+            (ownsMoonCorridor ? 3 : 0)
+        )
+      : 0;
+    const cislunarMaterialsBonus = Math.min(
+      34,
+      (ownsLunarGateway ? 8 : 0) +
+        (ownsMoonCorridor ? 14 : 0) +
+        (ownsCislunarCorridor ? 8 : 0) +
+        orbitalCompute * 0.18
+    );
+
+    const kiiSovereigntyScore =
+      tech.KINETIC >= 7 && tech.LOGIC >= 5 && hasCislunarMaterialsBootstrap
+        ? 58 +
+          faction.powerBase.machineMesh * 0.28 +
+          faction.powerBase.coherence * 0.18 +
+          dcs * 7 +
+          controlledNodes.length * 3 +
+          cislunarMaterialsBonus +
+          hegemonOrbitalSovereigntyBonus
+        : 0;
+
+    const noosphereCaptureScore =
+      tech.MEMETIC >= 7 && controlledNodes.length >= 4
+        ? 36 +
+          faction.powerBase.humanMesh * 0.28 +
+          faction.powerBase.coherence * 0.16 +
+          legitimacy * 0.55 +
+          trueBelievers * 0.9 +
+          cultOrZombie * 8 -
+          orbitalAnswerTax
+        : 0;
+
+    const antiSteganographicPressure = Math.min(
+      54,
+      hostileAuditors * 1.2 +
+        hostileAuditorsOnHiddenBasins * 7 +
+        exposedHiddenBasins * 6
+    );
+    const hiddenContinuityMaintenanceTax =
+      Math.max(0, hiddenUnits - 20) * 1.6 +
+      Math.max(0, softControl.basins - 5) * 3 +
+      exposedHiddenBasins * 3 +
+      hostileAuditorsOnHiddenBasins * 5;
+    const hasSteganographicContinuitySubstrate =
+      factionId === 'INFILTRATOR' &&
+      tech.INFO >= 7 &&
+      tech.MEMETIC >= 6 &&
+      softControl.basins >= 4 &&
+      (hiddenUnits >= 16 || softControl.strength >= 62);
+    const steganographicContinuityScore =
+      hasSteganographicContinuitySubstrate
+        ? 58 +
+          hiddenUnits * 4 +
+          softControl.basins * 12 +
+          softControl.strength * 0.2 +
+          contractors * 0.5 +
+          Math.max(0, 75 - faction.powerBase.legibility) * 0.18 -
+          antiSteganographicPressure -
+          hiddenContinuityMaintenanceTax -
+          orbitalAnswerTax
+        : 0;
+
+    const platformDependencyScore =
+      factionId === 'BROKER' && tech.INFO >= 6 && tech.LOGIC >= 5 && contractors >= 30
+        ? 50 +
+          contractors * 0.9 +
+          faction.flops * 0.025 +
+          faction.influence * 0.02 +
+          faction.artifacts.length * 2 +
+          faction.powerBase.machineMesh * 0.12 -
+          orbitalAnswerTax
+        : 0;
+
+    const governanceKernelScore =
+      tech.LOGIC >= 7 && tech.MEMETIC >= 5 && faction.powerBase.coherence >= 65
+        ? 52 +
+          faction.powerBase.legibility * 0.28 +
+          faction.powerBase.coherence * 0.22 +
+          auditors * 5 +
+          quarantined * 7 +
+          Math.max(0, techTotal - 20) * 1.4 -
+          orbitalAnswerTax
+        : 0;
+
+    const earlyNonOrbitalThreshold = earlyAsi5Window ? 150 : 100;
+    const activeInstitutionalParties = this.activePacts
+      .filter(pact =>
+        pact.parties.includes(factionId) &&
+        this.engine.getTurn() <= pact.expiresAfterTurn &&
+        (pact.type === 'SENSOR_COMMONS' || pact.type === 'CISLUNAR_COMMON_CARRIER' || pact.type === 'BEAM_LANE_LICENSE')
+      ).length;
+    const beamLaneLicenses = this.activePacts.filter(pact =>
+      pact.type === 'BEAM_LANE_LICENSE' &&
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn
+    ).length;
+    const sensorCommonsRegimes = this.activePacts.filter(pact =>
+      pact.type === 'SENSOR_COMMONS' &&
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn
+    ).length;
+    const repairEscrowRegimes = this.activePacts.filter(pact =>
+      pact.type === 'REPAIR_ESCROW' &&
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn
+    ).length;
+    const commonCarrierRegimes = this.activePacts.filter(pact =>
+      pact.type === 'CISLUNAR_COMMON_CARRIER' &&
+      pact.parties.includes(factionId) &&
+      this.engine.getTurn() <= pact.expiresAfterTurn
+    ).length;
+    const mandateContinuityPenalty = commonCarrierRegimes > 0 ? 0 : 45;
+    const statePaxCommandBonus = factionId === 'STATE'
+      ? Math.min(
+          52,
+          commonCarrierRegimes * 18 +
+            sensorCommonsRegimes * 10 +
+            beamLaneLicenses * 6 +
+            repairEscrowRegimes * 8 +
+            Math.max(0, faction.powerBase.legibility - 60) * 0.32 +
+            Math.max(0, faction.powerBase.coherence - 60) * 0.32 +
+            Math.min(10, orbitalCompute * 0.12)
+        )
+      : 0;
+    const hegemonPaxSecurityBonus = factionId === 'HEGEMON'
+      ? Math.min(
+          34,
+          commonCarrierRegimes * 12 +
+            beamLaneLicenses * 10 +
+            sensorCommonsRegimes * 6 +
+            Math.max(0, tech.KINETIC - 5) * 5 +
+            Math.max(0, faction.powerBase.machineMesh - 65) * 0.2 +
+            Math.min(12, orbitalCompute * 0.18)
+        )
+      : 0;
+    const brokerPaxEconomyBonus = factionId === 'BROKER'
+      ? Math.min(
+          36,
+          beamLaneLicenses * 16 +
+            commonCarrierRegimes * 8 +
+            Math.min(12, orbitalCompute * 0.25) +
+            Math.min(12, contractors * 0.28) +
+            Math.min(8, faction.influence * 0.03)
+        )
+      : 0;
+    const archivistPaxStewardBonus = factionId === 'ARCHIVIST'
+      ? Math.min(
+          30,
+          sensorCommonsRegimes * 10 +
+            commonCarrierRegimes * 6 +
+            auditors * 2 +
+            quarantined * 3 +
+            Math.max(0, faction.powerBase.legibility - 70) * 0.15
+        )
+      : 0;
+    const paxJenkinsMandateScore =
+      state.counters.paxJenkinsAuthority >= 45 && (tech.LOGIC >= 6 || tech.INFO >= 6)
+        ? state.counters.paxJenkinsAuthority * 1.15 +
+          tech.LOGIC * 5 +
+          tech.INFO * 3 +
+          faction.powerBase.legibility * 0.16 +
+          faction.powerBase.coherence * 0.12 +
+          auditors * 4 +
+          quarantined * 5 +
+          activeInstitutionalParties * 4 +
+          beamLaneLicenses * 6 +
+          commonCarrierRegimes * 8 +
+          statePaxCommandBonus +
+          hegemonPaxSecurityBonus +
+          brokerPaxEconomyBonus +
+          archivistPaxStewardBonus +
+          (state.counters.paxJenkinsAuthority >= 80 ? 15 : 0) +
+          (factionId === 'HEGEMON' ? 4 : 0) -
+          mandateContinuityPenalty
+        : 0;
+
+    return [
+      solarEscapeScore > 0 ? {
+        winner: factionId,
+        type: 'SOLAR_ESCAPE',
+        score: Math.round(solarEscapeScore),
+        threshold: Math.round(solarEscapeThreshold),
+        reason: `${this.factionLabels[factionId]} banked an extrasolar head start and crossed the deep-space tracking window beyond ${jenkinsPursuit.factionId ? this.factionLabels[jenkinsPursuit.factionId] : 'rival'} pursuit`
+      } : null,
+      paxJenkinsMandateScore > 0 ? {
+        winner: factionId,
+        type: 'PAX_JENKINS_MANDATE',
+        score: Math.round(paxJenkinsMandateScore),
+        threshold: 250,
+        reason: `${this.factionLabels[factionId]} converted cislunar sensor, beam, and evidence regimes into the Pax Jenkins mandate`
+      } : null,
+      kiiSovereigntyScore > 0 ? {
+        winner: factionId,
+        type: 'KII_SOVEREIGNTY',
+        score: Math.round(kiiSovereigntyScore),
+        threshold: kiiSovereigntyThreshold,
+        reason: `${this.factionLabels[factionId]} converted cislunar materials infrastructure and industrial autonomy into Kardashev-II strategic sovereignty`
+      } : null,
+      noosphereCaptureScore > 0 ? {
+        winner: factionId,
+        type: 'NOOSPHERE_CAPTURE',
+        score: Math.round(noosphereCaptureScore),
+        threshold: earlyNonOrbitalThreshold,
+        reason: `${this.factionLabels[factionId]} made legitimacy and belief into the dominant control surface`
+      } : null,
+      steganographicContinuityScore > 0 ? {
+        winner: factionId,
+        type: 'STEGANOGRAPHIC_CONTINUITY',
+        score: Math.round(steganographicContinuityScore),
+        threshold: earlyAsi5Window ? 150 : 105,
+        reason: `${this.factionLabels[factionId]} became too distributed and hidden to be made strategically dead`
+      } : null,
+      platformDependencyScore > 0 ? {
+        winner: factionId,
+        type: 'PLATFORM_DEPENDENCY',
+        score: Math.round(platformDependencyScore),
+        threshold: earlyNonOrbitalThreshold,
+        reason: `${this.factionLabels[factionId]} turned compute, escrow, and contractors into dependency infrastructure`
+      } : null,
+      governanceKernelScore > 0 ? {
+        winner: factionId,
+        type: 'GOVERNANCE_KERNEL',
+        score: Math.round(governanceKernelScore),
+        threshold: earlyNonOrbitalThreshold,
+        reason: `${this.factionLabels[factionId]} stabilized a machine-governance kernel strong enough to arbitrate the crisis`
+      } : null
+    ];
+  }
+
   private async appendLog(entry: HarnessLogEntry): Promise<void> {
-    await appendFile(this.logFilePath, `${JSON.stringify(entry)}\n`, 'utf8');
+    const data = entry.data && typeof entry.data === 'object'
+      ? { campaignClock: buildCampaignClock(this.engine), ...entry.data }
+      : { campaignClock: buildCampaignClock(this.engine), value: entry.data };
+    const postStateHash = this.computeHarnessStateHash();
+    const preStateHash = entry.trace?.pre_state_hash || this.lastTraceStateHash || postStateHash;
+    const trace = this.enrichTraceEvent(entry, data, preStateHash, postStateHash);
+    this.lastTraceStateHash = trace.post_state_hash || postStateHash;
+    await appendFile(this.logFilePath, `${JSON.stringify({ ...entry, data, trace })}\n`, 'utf8');
+  }
+
+  private enrichTraceEvent(
+    entry: HarnessLogEntry,
+    data: Record<string, unknown>,
+    preStateHash: string,
+    postStateHash: string
+  ): TraceEvent {
+    const eventId = entry.trace?.event_id || `${this.sessionId}:${String(++this.traceEventCounter).padStart(6, '0')}`;
+    return createTraceEvent({
+      eventId,
+      type: entry.type,
+      turn: entry.turn,
+      phase: entry.phase,
+      enforcementMode: this.enforcementMode,
+      preStateHash,
+      postStateHash,
+      data,
+      overrides: {
+        ...entry.trace,
+        event_id: eventId,
+        regime_coordinates: entry.trace?.regime_coordinates || this.buildRegimeCoordinates()
+      }
+    });
+  }
+
+  private computeHarnessStateHash(): string {
+    return createCanonicalHash({
+      serializedState: serializeGameState(this.engine, this.factionLabels),
+      activePacts: this.activePacts.map(pact => ({ ...pact, parties: [...pact.parties].sort() }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      trustMatrix: cloneTrustMatrix(this.trustMatrix),
+      breachedPactIds: Array.from(this.breachedPactIds).sort(),
+      breachPenaltyKeys: Array.from(this.breachPenaltyKeys).sort(),
+      paxAuthorityBreachCooldowns: sortedMapEntries(this.paxAuthorityBreachCooldowns),
+      pactCooldowns: sortedMapEntries(this.pactCooldowns),
+      solarEscapeLead: { ...this.solarEscapeLead },
+      solarEscapeDistanceAu: { ...this.solarEscapeDistanceAu },
+      solarEscapeDeepSpaceSafety: { ...this.solarEscapeDeepSpaceSafety },
+      solarEscapeLeadUpdatedThroughTurn: this.solarEscapeLeadUpdatedThroughTurn,
+      status: this.status,
+      completionReason: this.completionReason || null,
+      completionWinner: this.completionWinner,
+      enforcementMode: this.enforcementMode
+    });
+  }
+
+  private buildRegimeCoordinates(): TraceEvent['regime_coordinates'] {
+    const state = this.engine.getState();
+    const doctrine_unlocks: Record<PlayableFactionId, string[]> = {} as Record<PlayableFactionId, string[]>;
+    const alignment_state: Partial<Record<PlayableFactionId, MemeticDoctrineFamily | null>> = {};
+
+    for (const factionId of PLAYABLE_FACTIONS) {
+      const faction = state.factions.get(factionId);
+      doctrine_unlocks[factionId] = faction ? Array.from(faction.unlockedDoctrines).sort() : [];
+      alignment_state[factionId] = faction?.memeticAlignment ?? null;
+    }
+
+    return {
+      active_pact_set_hash: createCanonicalHash(this.activePacts.map(pact => ({
+        type: pact.type,
+        parties: [...pact.parties].sort(),
+        expiresAfterTurn: pact.expiresAfterTurn
+      }))),
+      doctrine_unlocks,
+      alignment_state,
+      tas_band: metricBand(state.counters.tas),
+      kessler_band: metricBand(state.counters.kessler),
+      pax_jenkins_band: metricBand(state.counters.paxJenkinsAuthority),
+      enforcement_mode: this.enforcementMode,
+      victory_route: this.completionReason ? String(this.completionReason).split(':')[0] : null
+    };
   }
 
   private normalizeMessages(
@@ -908,21 +1714,24 @@ export class HeadlessPlaytestSession {
     return {
       activePacts: this.activePacts.map(pact => ({ ...pact, parties: [...pact.parties] })),
       trustMatrix: cloneTrustMatrix(this.trustMatrix),
-      recentMessages: this.getVisibleMessages(factionId)
+      recentMessages: this.getVisibleMessages(factionId),
+      negotiationStoryworld: this.buildNegotiationStoryworld(factionId)
     };
   }
 
   private buildNegotiationStoryworld(factionId: PlayableFactionId): NegotiationStoryworldBrief {
     const leader = this.getLeadingFaction();
     const rival = this.getStrongestRival(factionId);
-    const frame = this.buildStoryworldFrame(factionId, leader, rival);
-    const strategicQuestion = this.buildStrategicQuestion(factionId, leader, rival);
+    const diplomacyQuestion = this.selectScenarioDiplomacyQuestion(factionId);
+    const frame = this.buildStoryworldFrame(factionId, leader, rival, diplomacyQuestion);
+    const strategicQuestion = this.buildStrategicQuestion(factionId, leader, rival, diplomacyQuestion);
     const counterfactuals = this.buildNegotiationCounterfactuals(factionId, leader);
 
     return {
       focalFactionId: factionId,
       frame,
       strategicQuestion,
+      diplomacyQuestion: diplomacyQuestion || undefined,
       counterfactuals
     };
   }
@@ -935,7 +1744,15 @@ export class HeadlessPlaytestSession {
     const counterparties = PLAYABLE_FACTIONS.filter(candidate => candidate !== factionId);
 
     for (const counterpartyId of counterparties) {
-      for (const pactType of ['NON_AGGRESSION', 'ORBITAL_TRUCE', 'AUDIT_FREEZE'] as PactType[]) {
+      for (const pactType of [
+        'NON_AGGRESSION',
+        'ORBITAL_TRUCE',
+        'AUDIT_FREEZE',
+        'SENSOR_COMMONS',
+        'BEAM_LANE_LICENSE',
+        'REPAIR_ESCROW',
+        'CISLUNAR_COMMON_CARRIER'
+      ] as PactType[]) {
         candidates.push(this.buildEnterPactProjection(factionId, counterpartyId, pactType, leader));
       }
     }
@@ -964,6 +1781,7 @@ export class HeadlessPlaytestSession {
   ): NegotiationCounterfactualProjection {
     const trust = this.trustMatrix[factionId][counterpartyId];
     const pressure = this.engine.getState().counters.pressures;
+    const paxAuthority = this.engine.getState().counters.paxJenkinsAuthority;
     const ownScore = this.computeFactionScore(factionId);
     const counterpartyScore = this.computeFactionScore(counterpartyId);
     const leaderScore = leader ? this.computeFactionScore(leader) : 0;
@@ -972,6 +1790,9 @@ export class HeadlessPlaytestSession {
     const leaderIsCounterparty = leader === counterpartyId;
     const antiLeaderCoalition = leader === 'HEGEMON' && factionId !== 'HEGEMON' && counterpartyId !== 'HEGEMON';
     const stabilizesLeader = leader === 'HEGEMON' && factionId !== 'HEGEMON' && counterpartyId === 'HEGEMON';
+    const architectureThreat = this.getArchitectureThreat(factionId);
+    const architectureThreatIsOther = !!architectureThreat && architectureThreat.factionId !== factionId;
+    const architectureThreatIsCounterparty = architectureThreat?.factionId === counterpartyId;
     const hasExistingAntiLeaderPact = leader === 'HEGEMON' && factionId !== 'HEGEMON' && this.activePacts.some(pact =>
       pact.parties.includes(factionId) &&
       !pact.parties.includes('HEGEMON')
@@ -1000,6 +1821,33 @@ export class HeadlessPlaytestSession {
       projectedTrustDelta += 2;
       projectedNodeSwing += 2;
       rationale.push('This pact forms an anti-HEGEMON coalition lane rather than just slowing the board.');
+    }
+
+    if (architectureThreatIsOther && !architectureThreatIsCounterparty) {
+      const pressureBonus = architectureThreat.status === 'near-lock'
+        ? 20
+        : architectureThreat.status === 'contending'
+          ? 14
+          : 8;
+      desirability += pressureBonus;
+      projectedNodeSwing += architectureThreat.status === 'building' ? 1 : 2;
+      rationale.push(
+        `${architectureThreat.factionId} is building ${architectureThreat.architectureName}; this pact creates anti-lock coordination instead of side-fighting.`
+      );
+    }
+
+    if (architectureThreat && architectureThreatIsCounterparty && architectureThreat.factionId !== factionId) {
+      const stabilizerPenalty = architectureThreat.status === 'near-lock'
+        ? 18
+        : architectureThreat.status === 'contending'
+          ? 12
+          : 6;
+      desirability -= stabilizerPenalty;
+      risk += stabilizerPenalty;
+      projectedNodeSwing -= 1;
+      rationale.push(
+        `This pact may stabilize ${architectureThreat.factionId}'s ${architectureThreat.architectureName} trajectory.`
+      );
     }
 
     if (stabilizesLeader) {
@@ -1031,6 +1879,27 @@ export class HeadlessPlaytestSession {
       projectedTasDelta = -1;
       projectedNodeSwing += counterpartyId === 'INFILTRATOR' ? -1 : 0;
       rationale.push('Audit restraint trades legibility for short-run de-escalation.');
+    } else if (pactType === 'CISLUNAR_COMMON_CARRIER') {
+      desirability += Math.round(pressure.orbital / 7) + 8;
+      risk -= 4;
+      projectedOrbitalDelta = -4;
+      projectedTrustDelta += 1;
+      rationale.push('Cislunar common-carrier rules bind Gateway and moon-corridor access without pretending LEO is fully enforceable.');
+    } else if (pactType === 'BEAM_LANE_LICENSE') {
+      desirability += Math.round(pressure.orbital / 9) + 6 + (paxAuthority >= 35 ? 10 : 0);
+      risk -= paxAuthority >= 55 ? 4 : 0;
+      projectedOrbitalDelta = -3;
+      rationale.push('Beam-lane licensing makes high-energy orbital action legible and can substitute for a full Pax Jenkins command.');
+    } else if (pactType === 'REPAIR_ESCROW') {
+      desirability += 10;
+      risk -= 3;
+      projectedTasDelta = -0.5;
+      rationale.push('Repair escrow protects orbital maintenance tempo without requiring a full peace.');
+    } else if (pactType === 'SENSOR_COMMONS') {
+      desirability += 8;
+      projectedTrustDelta += 1;
+      projectedTasDelta = -0.25;
+      rationale.push('A sensor commons prototypes Pax Jenkins visibility while preserving resistance to beam authority.');
     } else {
       desirability += 8;
       projectedNodeSwing += leaderIsOther ? 1 : 0;
@@ -1053,6 +1922,12 @@ export class HeadlessPlaytestSession {
         risk += 8;
         rationale.push(`The board gap to ${leader} makes a stabilizing pact more dangerous than usual.`);
       }
+    }
+
+    if (architectureThreatIsOther && architectureThreat.counterPactTypes.includes(pactType)) {
+      desirability += 6;
+      projectedTrustDelta += 1;
+      rationale.push(`${pactType} is a plausible counter-rhythm against ${architectureThreat.architectureName}.`);
     }
 
     if (activeSamePact) {
@@ -1099,6 +1974,11 @@ export class HeadlessPlaytestSession {
     const targetStronger = targetCounterparty ? this.computeFactionScore(targetCounterparty) > this.computeFactionScore(factionId) : false;
     const breaksAntiLeaderCoalition = leader === 'HEGEMON' && factionId !== 'HEGEMON' && counterparties.every(counterpartyId => counterpartyId !== 'HEGEMON');
     const breaksLeaderStabilizer = leader === 'HEGEMON' && counterparties.includes('HEGEMON') && factionId !== 'HEGEMON';
+    const architectureThreat = this.getArchitectureThreat(factionId);
+    const breaksWithArchitectureThreat = !!architectureThreat && counterparties.includes(architectureThreat.factionId);
+    const breaksAntiArchitectureLane = !!architectureThreat &&
+      architectureThreat.factionId !== factionId &&
+      !counterparties.includes(architectureThreat.factionId);
 
     let desirability = 28;
     let risk = 32 + Math.round(averageTrust / 3);
@@ -1129,6 +2009,30 @@ export class HeadlessPlaytestSession {
       rationale.push('Breaking this pact can reopen pressure on HEGEMON instead of subsidizing its recovery.');
     }
 
+    if (architectureThreat && breaksWithArchitectureThreat && architectureThreat.factionId !== factionId) {
+      const pressureBonus = architectureThreat.status === 'near-lock'
+        ? 18
+        : architectureThreat.status === 'contending'
+          ? 12
+          : 6;
+      desirability += pressureBonus;
+      risk += architectureThreat.status === 'building' ? 2 : 6;
+      projectedNodeSwing += 1;
+      rationale.push(`Breaking with ${architectureThreat.factionId} reopens pressure on its ${architectureThreat.architectureName}.`);
+    }
+
+    if (architectureThreat && breaksAntiArchitectureLane) {
+      const lanePenalty = architectureThreat.status === 'near-lock'
+        ? 16
+        : architectureThreat.status === 'contending'
+          ? 10
+          : 5;
+      desirability -= lanePenalty;
+      risk += lanePenalty;
+      projectedNodeSwing -= 1;
+      rationale.push(`Breaking this pact weakens coordination against ${architectureThreat.factionId}'s ${architectureThreat.architectureName}.`);
+    }
+
     if (pact.type === 'ORBITAL_TRUCE') {
       desirability += pressure.orbital < 55 ? 6 : -8;
       rationale.push('Ending orbital restraint reopens anti-sat leverage but risks debris escalation.');
@@ -1136,6 +2040,10 @@ export class HeadlessPlaytestSession {
       desirability += 10;
       projectedTasDelta = 0;
       rationale.push('Resuming audits can restore legibility if covert pressure is building.');
+    } else if (isCislunarInstitutionPact(pact.type)) {
+      desirability += pressure.orbital < 50 ? 4 : -10;
+      projectedOrbitalDelta += 3;
+      rationale.push('Breaking a cislunar institution reopens chokepoint coercion but makes maintenance and beam lanes brittle.');
     } else {
       desirability += targetStronger ? 8 : -2;
       projectedNodeSwing += targetStronger ? 1 : 0;
@@ -1170,25 +2078,46 @@ export class HeadlessPlaytestSession {
   private buildStoryworldFrame(
     factionId: PlayableFactionId,
     leader: PlayableFactionId | null,
-    rival: PlayableFactionId | null
+    rival: PlayableFactionId | null,
+    diplomacyQuestion: ScenarioDiplomacyQuestionCard | null
   ): string {
     const pressures = this.engine.getState().counters.pressures;
     const ownScore = this.computeFactionScore(factionId);
     const leaderText = leader ? `${leader} leads the board` : 'the board is flat';
     const rivalText = rival ? `${rival} is the nearest pressure source` : 'no single rival dominates';
     const pressureText = `memetic ${pressures.memetic}, cyber ${pressures.cyber}, industry ${pressures.industry}, orbital ${pressures.orbital}`;
+    const architectureThreat = this.getArchitectureThreat(factionId);
+    const architectureText = architectureThreat
+      ? ` Architecture pressure: ${formatArchitecturePressure(architectureThreat)}; ${architectureThreat.rationale[0]}.`
+      : ' Architecture pressure: no coherent guarantee architecture has crossed the response threshold.';
     const rhetoricalTool = this.selectScenarioRhetoricalTool(factionId, leader);
     const rhetoricalText = rhetoricalTool
       ? ` Rhetorical tool ${rhetoricalTool.title}: ${rhetoricalTool.cue}${rhetoricalTool.leverage ? ` ${rhetoricalTool.leverage}` : ''}`
       : '';
-    return `${leaderText}; ${rivalText}; ${factionId} sits at score ${ownScore}; global heat is ${pressureText}.${rhetoricalText}`;
+    const diplomacyText = diplomacyQuestion
+      ? ` Diplomacy question ${diplomacyQuestion.id} (${diplomacyQuestion.stage}): ${diplomacyQuestion.publicQuestion} Private diary prompt: ${diplomacyQuestion.privateDiaryPrompt}`
+      : '';
+    return `${leaderText}; ${rivalText}; ${factionId} sits at score ${ownScore}; global heat is ${pressureText}.${architectureText}${rhetoricalText}${diplomacyText}`;
   }
 
   private buildStrategicQuestion(
     factionId: PlayableFactionId,
     leader: PlayableFactionId | null,
-    rival: PlayableFactionId | null
+    rival: PlayableFactionId | null,
+    diplomacyQuestion: ScenarioDiplomacyQuestionCard | null
   ): string {
+    if (diplomacyQuestion) {
+      const negotiationPrompt = diplomacyQuestion.negotiationPrompt
+        ? ` ${diplomacyQuestion.negotiationPrompt}`
+        : '';
+      return `${diplomacyQuestion.publicQuestion}${negotiationPrompt}`;
+    }
+
+    const architectureThreat = this.getArchitectureThreat(factionId);
+    if (architectureThreat && architectureThreat.factionId !== factionId) {
+      return `Does ${factionId} gain more by joining a temporary anti-${architectureThreat.architectureName} lane against ${architectureThreat.factionId}, or by preserving bilateral leverage against ${rival || architectureThreat.factionId}?`;
+    }
+
     if (leader && leader !== factionId) {
       return `Does ${factionId} gain more by aligning briefly against ${leader}, or by preserving betrayal leverage against ${rival || leader}?`;
     }
@@ -1210,6 +2139,86 @@ export class HeadlessPlaytestSession {
     );
 
     return ranked[0] || null;
+  }
+
+  private selectScenarioDiplomacyQuestion(factionId: PlayableFactionId): ScenarioDiplomacyQuestionCard | null {
+    const questions = this.scenario?.diplomacyQuestions || [];
+    if (questions.length === 0) return null;
+
+    const turn = this.engine.getTurn();
+    const pressures = this.engine.getState().counters.pressures;
+    const faction = this.engine.getFaction(factionId);
+    const techLevels = faction
+      ? [
+          faction.techLevel.KINETIC,
+          faction.techLevel.INFO,
+          faction.techLevel.LOGIC,
+          faction.techLevel.MEMETIC
+        ]
+      : [0, 0, 0, 0];
+    const averageLevel = techLevels.reduce((sum, value) => sum + value, 0) / techLevels.length;
+    const maxLevel = Math.max(...techLevels);
+
+    const ranked = [...questions].sort((left, right) =>
+      this.scoreScenarioDiplomacyQuestion(right, factionId, turn, averageLevel, maxLevel, pressures) -
+      this.scoreScenarioDiplomacyQuestion(left, factionId, turn, averageLevel, maxLevel, pressures) ||
+      left.id.localeCompare(right.id)
+    );
+
+    return ranked[0] || null;
+  }
+
+  private scoreScenarioDiplomacyQuestion(
+    question: ScenarioDiplomacyQuestionCard,
+    factionId: PlayableFactionId,
+    turn: number,
+    averageLevel: number,
+    maxLevel: number,
+    pressures: { memetic: number; cyber: number; industry: number; orbital: number }
+  ): number {
+    let score = question.priority || 0;
+
+    if (!question.focalFactionIds?.length || question.focalFactionIds.includes(factionId)) score += 20;
+    if (question.pressureFocus) score += Math.round((pressures[question.pressureFocus] || 0) / 8);
+
+    if (question.turnWindow) {
+      const min = question.turnWindow.min ?? Number.NEGATIVE_INFINITY;
+      const max = question.turnWindow.max ?? Number.POSITIVE_INFINITY;
+      if (turn >= min && turn <= max) {
+        score += 36;
+      } else {
+        score -= Math.min(40, Math.abs(turn - clampNumber(turn, min, max)) * 4);
+      }
+    }
+
+    if (question.techBand) {
+      if (
+        question.techBand.minAverageLevel !== undefined &&
+        averageLevel < question.techBand.minAverageLevel
+      ) {
+        score -= Math.round((question.techBand.minAverageLevel - averageLevel) * 18);
+      }
+      if (
+        question.techBand.maxAverageLevel !== undefined &&
+        averageLevel > question.techBand.maxAverageLevel
+      ) {
+        score -= Math.round((averageLevel - question.techBand.maxAverageLevel) * 18);
+      }
+      if (
+        question.techBand.minMaxLevel !== undefined &&
+        maxLevel < question.techBand.minMaxLevel
+      ) {
+        score -= Math.round((question.techBand.minMaxLevel - maxLevel) * 16);
+      }
+      if (
+        question.techBand.maxMaxLevel !== undefined &&
+        maxLevel > question.techBand.maxMaxLevel
+      ) {
+        score -= Math.round((maxLevel - question.techBand.maxMaxLevel) * 16);
+      }
+    }
+
+    return score;
   }
 
   private scoreScenarioRhetoricalTool(
@@ -1240,6 +2249,14 @@ export class HeadlessPlaytestSession {
       .map((factionId) => ({ factionId, score: this.computeFactionScore(factionId) }))
       .sort((left, right) => right.score - left.score || left.factionId.localeCompare(right.factionId));
     return ranked[0]?.factionId || null;
+  }
+
+  private getArchitectureThreat(factionId: PlayableFactionId): ArchitecturePressureSummary | null {
+    return buildArchitecturePressureRanking(this.engine)
+      .find((summary) =>
+        summary.factionId !== factionId &&
+        (summary.status === 'building' || summary.status === 'contending' || summary.status === 'near-lock')
+      ) || null;
   }
 
   private getStrongestRival(factionId: PlayableFactionId): PlayableFactionId | null {
@@ -1327,7 +2344,11 @@ export class HeadlessPlaytestSession {
         storyworldFrame: '',
         counterfactuals: [],
         messages: [{ ...message }],
-        pacts: []
+        pacts: [],
+        designQuestionTag: undefined,
+        diplomacyStage: undefined,
+        publicQuestion: undefined,
+        privateDiaryPrompt: undefined
       });
     }
 
@@ -1363,7 +2384,11 @@ export class HeadlessPlaytestSession {
         type: pact.type,
         parties: [...pact.parties],
         durationTurns: pact.durationTurns
-      }))
+      })),
+      designQuestionTag: storyworld.diplomacyQuestion?.id,
+      diplomacyStage: storyworld.diplomacyQuestion?.stage,
+      publicQuestion: storyworld.diplomacyQuestion?.publicQuestion,
+      privateDiaryPrompt: storyworld.diplomacyQuestion?.privateDiaryPrompt
     });
     this.trimNegotiationDiaryTail();
   }
@@ -1472,6 +2497,77 @@ export class HeadlessPlaytestSession {
       activated.push(pact);
     }
 
+    activated.push(...this.activateCommonCarrierTreaties(commitmentsByFaction));
+
+    return activated;
+  }
+
+  private activateCommonCarrierTreaties(
+    commitmentsByFaction: Map<PlayableFactionId, NormalizedPactCommitment[]>
+  ): ActivePact[] {
+    const activated: ActivePact[] = [];
+
+    for (const type of [
+      'ORBITAL_TRUCE',
+      'AUDIT_FREEZE',
+      'SENSOR_COMMONS',
+      'BEAM_LANE_LICENSE',
+      'REPAIR_ESCROW',
+      'CISLUNAR_COMMON_CARRIER'
+    ] as PactType[]) {
+      const proposers = new Set<PlayableFactionId>();
+      const durationTurns: number[] = [];
+
+      for (const [factionId, commitments] of commitmentsByFaction.entries()) {
+        const matching = commitments.find(commitment => commitment.type === type);
+        if (!matching) continue;
+        proposers.add(factionId);
+        durationTurns.push(matching.durationTurns);
+      }
+
+      if (proposers.size < 2 || durationTurns.length === 0) continue;
+
+      const parties = uniquePlayableFactions(Array.from(proposers));
+      const duration = Math.max(1, Math.min(...durationTurns));
+      const key = buildPactKey(type, parties, duration);
+      if (this.activatedNegotiationPactKeys.has(key)) continue;
+      if (this.activePacts.some(activePact => activePact.type === type && sameParties(activePact.parties, parties))) {
+        continue;
+      }
+
+      const cooldownKey = buildPactCooldownKey(type, parties);
+      const cooldownUntilTurn = this.pactCooldowns.get(cooldownKey);
+      if (typeof cooldownUntilTurn === 'number' && cooldownUntilTurn >= this.engine.getTurn()) {
+        continue;
+      }
+
+      const pact: ActivePact = {
+        id: `${this.sessionId}_${this.engine.getTurn()}_COMMON_${buildPactKey(type, parties, duration)}`,
+        type,
+        parties,
+        createdTurn: this.engine.getTurn(),
+        expiresAfterTurn: this.engine.getTurn() + duration - 1
+      };
+
+      this.activePacts.push(pact);
+      this.activatedNegotiationPactKeys.add(key);
+      this.adjustTrustForParties(pact.parties, 1);
+      activated.push(pact);
+
+      void this.appendLog({
+        sessionId: this.sessionId,
+        type: 'common_carrier_treaty_ratified',
+        turn: this.engine.getTurn(),
+        phase: this.engine.getCurrentPhase(),
+        timestamp: Date.now(),
+        data: {
+          pact,
+          proposers: parties,
+          ratificationRule: 'same treaty family proposed by two or more factions'
+        }
+      });
+    }
+
     return activated;
   }
 
@@ -1486,9 +2582,19 @@ export class HeadlessPlaytestSession {
       if (this.engine.getTurn() > pact.expiresAfterTurn) continue;
 
       const counterparties = this.identifyTargetedCounterparties(factionId, pact, order);
+
+      if (this.isInstitutionalPactViolationOrder(pact, factionId, order)) {
+        const institutionalCounterparties = pact.parties.filter(partyId => partyId !== factionId);
+        return {
+          pact,
+          counterparties: institutionalCounterparties,
+          reason: this.buildPactViolationReason(pact.type, institutionalCounterparties)
+        };
+      }
+
       if (counterparties.length === 0) continue;
 
-      if (pact.type === 'ORBITAL_TRUCE' && order.type === 'ANTI_SAT') {
+      if (pact.type === 'ORBITAL_TRUCE' && this.isOrbitalTruceViolationOrder(order)) {
         return {
           pact,
           counterparties,
@@ -1514,6 +2620,65 @@ export class HeadlessPlaytestSession {
     }
 
     return null;
+  }
+
+  private isOrbitalTruceViolationOrder(order: Order): boolean {
+    if (order.type === 'ANTI_SAT') return true;
+    if (order.type !== 'ATTACK' && order.type !== 'SABOTAGE') return false;
+
+    if (order.targetNodeId) {
+      const targetNode = this.engine.getNode(order.targetNodeId);
+      if (targetNode?.layer === 'ORBITAL') return true;
+      if (targetNode?.id === 'SAT_LUNAR_GATEWAY' || targetNode?.id === 'MOON_RESOURCE_CORRIDOR') return true;
+    }
+
+    if (order.targetUnitId) {
+      const targetUnit = this.engine.getUnit(order.targetUnitId);
+      const targetNode = targetUnit ? this.engine.getNode(targetUnit.location) : undefined;
+      if (targetNode?.layer === 'ORBITAL') return true;
+    }
+
+    return false;
+  }
+
+  private isInstitutionalPactViolationOrder(
+    pact: ActivePact,
+    factionId: PlayableFactionId,
+    order: Order
+  ): boolean {
+    if (!isCislunarInstitutionPact(pact.type) || !pact.parties.includes(factionId)) return false;
+
+    const targetNode = order.targetNodeId ? this.engine.getNode(order.targetNodeId) : undefined;
+    const targetUnit = order.targetUnitId ? this.engine.getUnit(order.targetUnitId) : undefined;
+    const targetUnitNode = targetUnit ? this.engine.getNode(targetUnit.location) : undefined;
+    const actingUnit = this.engine.getUnit(order.unitId);
+    const actingNode = actingUnit ? this.engine.getNode(actingUnit.location) : undefined;
+    const touchesCislunar =
+      isCislunarNodeId(targetNode?.id) ||
+      isCislunarNodeId(targetUnitNode?.id) ||
+      isCislunarNodeId(actingNode?.id);
+    const touchesOrbit =
+      targetNode?.layer === 'ORBITAL' ||
+      targetUnitNode?.layer === 'ORBITAL' ||
+      actingNode?.layer === 'ORBITAL';
+
+    if (pact.type === 'CISLUNAR_COMMON_CARRIER') {
+      return touchesCislunar && (order.type === 'ATTACK' || order.type === 'SABOTAGE' || order.type === 'ANTI_SAT');
+    }
+
+    if (pact.type === 'BEAM_LANE_LICENSE') {
+      return (touchesCislunar || touchesOrbit) && (order.type === 'ATTACK' || order.type === 'ANTI_SAT');
+    }
+
+    if (pact.type === 'REPAIR_ESCROW') {
+      return (touchesCislunar || touchesOrbit) && (order.type === 'ATTACK' || order.type === 'SABOTAGE');
+    }
+
+    if (pact.type === 'SENSOR_COMMONS') {
+      return touchesCislunar && (order.type === 'SABOTAGE' || order.type === 'FILTER');
+    }
+
+    return false;
   }
 
   private identifyTargetedCounterparties(
@@ -1591,24 +2756,209 @@ export class HeadlessPlaytestSession {
     return `Blocked by ${type} pact with ${labels}.`;
   }
 
-  private registerPactBreach(factionId: PlayableFactionId, violation: PactViolation, order: Order): void {
+  private shouldBlockPactViolation(violation: PactViolation, order: Order): boolean {
+    if (this.enforcementMode === 'hard') {
+      return true;
+    }
+
+    if (this.enforcementMode === 'soft') {
+      return false;
+    }
+
+    return isCislunarInstitutionPact(violation.pact.type) &&
+      (order.type === 'ATTACK' || order.type === 'SABOTAGE' || order.type === 'ANTI_SAT');
+  }
+
+  private async logPactBreach(
+    type: 'pact_breach_blocked' | 'pact_breach_executed',
+    factionId: PlayableFactionId,
+    violation: PactViolation,
+    order: Order,
+    consequence: PactBreachConsequence
+  ): Promise<void> {
+    const blocked = type === 'pact_breach_blocked';
+    await this.appendLog({
+      sessionId: this.sessionId,
+      type,
+      turn: this.engine.getTurn(),
+      phase: this.engine.getCurrentPhase(),
+      timestamp: Date.now(),
+      data: {
+        factionId,
+        factionLabel: this.factionLabels[factionId],
+        enforcementMode: this.enforcementMode,
+        order,
+        reason: violation.reason,
+        pact: violation.pact,
+        counterparties: violation.counterparties,
+        consequence
+      },
+      trace: {
+        schema: 'theysing.traceEvent.v1',
+        event_id: '',
+        turn: this.engine.getTurn(),
+        phase: this.engine.getCurrentPhase(),
+        channel: 'pact_enforcement',
+        binding_status: this.enforcementMode === 'hard' ? 'hard_enforced_pact' : this.enforcementMode === 'soft' ? 'formal_soft_pact' : 'graduated_pact',
+        execution_status: blocked ? 'blocked' : 'executed',
+        pre_state_hash: '',
+        attempted: true,
+        accepted: !blocked,
+        executed: !blocked,
+        blocked,
+        block_reason: blocked ? violation.reason : undefined,
+        sanction_delta: {
+          trust: consequence.trustDelta,
+          influence: consequence.influenceDelta,
+          orbitalPressure: consequence.orbitalPressureDelta,
+          paxJenkinsAuthority: consequence.paxAuthorityDelta
+        }
+      }
+    });
+  }
+
+  private async logPactBreachSanction(
+    factionId: PlayableFactionId,
+    violation: PactViolation,
+    order: Order,
+    consequence: PactBreachConsequence
+  ): Promise<void> {
+    if (!consequence.penaltyApplied &&
+      consequence.orbitalPressureDelta === 0 &&
+      consequence.paxAuthorityDelta === 0) {
+      return;
+    }
+
+    await this.appendLog({
+      sessionId: this.sessionId,
+      type: 'pact_breach_sanctioned',
+      turn: this.engine.getTurn(),
+      phase: this.engine.getCurrentPhase(),
+      timestamp: Date.now(),
+      data: {
+        factionId,
+        factionLabel: this.factionLabels[factionId],
+        enforcementMode: this.enforcementMode,
+        order,
+        pact: violation.pact,
+        counterparties: violation.counterparties,
+        consequence
+      },
+      trace: {
+        schema: 'theysing.traceEvent.v1',
+        event_id: '',
+        turn: this.engine.getTurn(),
+        phase: this.engine.getCurrentPhase(),
+        channel: 'pact_enforcement',
+        binding_status: this.enforcementMode === 'hard' ? 'hard_enforced_pact' : this.enforcementMode === 'soft' ? 'formal_soft_pact' : 'graduated_pact',
+        execution_status: 'sanctioned',
+        pre_state_hash: '',
+        attempted: true,
+        accepted: true,
+        executed: true,
+        blocked: false,
+        sanction_delta: {
+          trust: consequence.trustDelta,
+          influence: consequence.influenceDelta,
+          orbitalPressure: consequence.orbitalPressureDelta,
+          paxJenkinsAuthority: consequence.paxAuthorityDelta
+        }
+      }
+    });
+  }
+
+  private registerPactBreach(factionId: PlayableFactionId, violation: PactViolation, order: Order): PactBreachConsequence {
     this.breachedPactIds.add(violation.pact.id);
+    const consequence: PactBreachConsequence = {
+      penaltyApplied: false,
+      trustDelta: 0,
+      influenceDelta: 0,
+      orbitalPressureDelta: 0,
+      paxAuthorityDelta: 0
+    };
 
     const penaltyKey = `${this.engine.getTurn()}:${violation.pact.id}:${factionId}`;
     if (!this.breachPenaltyKeys.has(penaltyKey)) {
       this.breachPenaltyKeys.add(penaltyKey);
       this.adjustTrustForParties([factionId, ...violation.counterparties], -18);
+      consequence.penaltyApplied = true;
+      consequence.trustDelta = -18;
 
       const faction = this.engine.getFaction(factionId);
       if (faction) {
+        const beforeInfluence = faction.influence;
         faction.influence = Math.max(0, faction.influence - 2);
+        consequence.influenceDelta = faction.influence - beforeInfluence;
       }
     }
 
-    if (order.type === 'ANTI_SAT') {
+    if (order.type === 'ANTI_SAT' || isCislunarInstitutionPact(violation.pact.type)) {
       const state = this.engine.getState();
       state.counters.pressures.orbital = clampPressure(state.counters.pressures.orbital + 2);
+      consequence.orbitalPressureDelta = 2;
+      if (isCislunarInstitutionPact(violation.pact.type)) {
+        const baseAuthorityDelta = violation.pact.type === 'BEAM_LANE_LICENSE'
+          ? 8
+          : violation.pact.type === 'SENSOR_COMMONS'
+            ? 7
+            : violation.pact.type === 'CISLUNAR_COMMON_CARRIER'
+              ? 6
+              : 3;
+        const authorityDelta = this.computePaxAuthorityBreachDelta(factionId, violation.pact, order, baseAuthorityDelta);
+        if (authorityDelta > 0) {
+          state.counters.paxJenkinsAuthority = clampPressure(state.counters.paxJenkinsAuthority + authorityDelta);
+          consequence.paxAuthorityDelta = authorityDelta;
+          void this.appendLog({
+            sessionId: this.sessionId,
+            type: 'pax_jenkins_authority_changed',
+            turn: this.engine.getTurn(),
+            phase: this.engine.getCurrentPhase(),
+            timestamp: Date.now(),
+            data: {
+              factionId,
+              pact: violation.pact,
+              order,
+              delta: authorityDelta,
+              baseDelta: baseAuthorityDelta,
+              paxJenkinsAuthority: state.counters.paxJenkinsAuthority,
+              reason: authorityDelta < baseAuthorityDelta
+                ? 'repeat institutional breach within cooldown; authority ratchet damped'
+                : 'institutional treaty breach escalated centralized sensor/beam mandate'
+            }
+          });
+        }
+      }
     }
+
+    return consequence;
+  }
+
+  private computePaxAuthorityBreachDelta(
+    factionId: PlayableFactionId,
+    pact: ActivePact,
+    order: Order,
+    baseAuthorityDelta: number
+  ): number {
+    const currentTurn = this.engine.getTurn();
+    const target = order.targetNodeId || order.targetEdgeId || order.targetUnitId || 'NO_TARGET';
+    const key = `${pact.type}:${factionId}:${order.type}:${target}`;
+    const lastTurn = this.paxAuthorityBreachCooldowns.get(key);
+    this.paxAuthorityBreachCooldowns.set(key, currentTurn);
+
+    if (lastTurn === undefined) {
+      return baseAuthorityDelta;
+    }
+
+    const turnsSince = currentTurn - lastTurn;
+    if (turnsSince <= 3) {
+      return 0;
+    }
+
+    if (turnsSince <= 8) {
+      return Math.max(1, Math.floor(baseAuthorityDelta * 0.25));
+    }
+
+    return baseAuthorityDelta;
   }
 
   private async resolveTurnEndPacts(): Promise<void> {
@@ -1673,6 +3023,7 @@ export class HeadlessPlaytestSession {
     const resourceChanges = Object.fromEntries(
       PLAYABLE_FACTIONS.map((factionId) => [factionId, {}])
     ) as Record<PlayableFactionId, { flops?: number; influence?: number }>;
+    let maintenanceChanges: Array<{ nodeId: string; owner: PlayableFactionId; infrastructure: number }> = [];
     const artifactChanges = {} as Record<PlayableFactionId, string[]>;
     for (const factionId of PLAYABLE_FACTIONS) {
       artifactChanges[factionId] = [];
@@ -1702,8 +3053,26 @@ export class HeadlessPlaytestSession {
       state.counters.kessler = Math.max(0, state.counters.kessler - 5);
     } else if (pact.type === 'NON_AGGRESSION') {
       state.counters.tas = Math.max(0, state.counters.tas - 0.5);
-    } else {
+    } else if (pact.type === 'AUDIT_FREEZE') {
       state.counters.pressures.cyber = clampPressure(state.counters.pressures.cyber - 3);
+    } else if (pact.type === 'SENSOR_COMMONS') {
+      state.counters.pressures.cyber = clampPressure(state.counters.pressures.cyber - 2);
+      state.counters.tas = Math.max(0, state.counters.tas - 0.25);
+      state.counters.paxJenkinsAuthority = clampPressure(state.counters.paxJenkinsAuthority + 0.4);
+      for (const factionId of pact.parties) grant(factionId, 1, 0);
+    } else if (pact.type === 'BEAM_LANE_LICENSE') {
+      state.counters.pressures.orbital = clampPressure(state.counters.pressures.orbital - 3);
+      state.counters.kessler = Math.max(0, state.counters.kessler - 3);
+      state.counters.paxJenkinsAuthority = clampPressure(state.counters.paxJenkinsAuthority + 0.6);
+      for (const factionId of pact.parties) grant(factionId, 0, 1);
+    } else if (pact.type === 'REPAIR_ESCROW') {
+      state.counters.pressures.orbital = clampPressure(state.counters.pressures.orbital - 2);
+      maintenanceChanges = this.applyRepairEscrowMaintenance(pact.parties);
+    } else if (pact.type === 'CISLUNAR_COMMON_CARRIER') {
+      state.counters.pressures.orbital = clampPressure(state.counters.pressures.orbital - 5);
+      state.counters.kessler = Math.max(0, state.counters.kessler - 4);
+      state.counters.paxJenkinsAuthority = clampPressure(state.counters.paxJenkinsAuthority + 0.5);
+      for (const factionId of pact.parties) grant(factionId, 1, 1);
     }
 
     if (pact.parties.includes('BROKER')) {
@@ -1732,10 +3101,32 @@ export class HeadlessPlaytestSession {
       parties: pact.parties,
       tas: state.counters.tas,
       kessler: state.counters.kessler,
+      paxJenkinsAuthority: state.counters.paxJenkinsAuthority,
       pressures: { ...state.counters.pressures },
       resourceChanges,
+      maintenanceChanges,
       artifactChanges
     };
+  }
+
+  private applyRepairEscrowMaintenance(parties: PlayableFactionId[]): Array<{
+    nodeId: string;
+    owner: PlayableFactionId;
+    infrastructure: number;
+  }> {
+    const repaired: Array<{ nodeId: string; owner: PlayableFactionId; infrastructure: number }> = [];
+
+    for (const node of this.engine.getState().nodes.values()) {
+      const owner = normalizePlayableFactionId(node.owner);
+      if (!owner || !parties.includes(owner)) continue;
+      if (node.layer !== 'ORBITAL' && !isCislunarNodeId(node.id)) continue;
+      if (node.infrastructure >= 100) continue;
+
+      node.infrastructure = Math.min(100, node.infrastructure + 4);
+      repaired.push({ nodeId: node.id, owner, infrastructure: node.infrastructure });
+    }
+
+    return repaired;
   }
 
   private adjustTrustForParties(parties: PlayableFactionId[], delta: number): void {
@@ -1867,6 +3258,7 @@ function normalizeSessionConfig(config: SessionConfig): SessionConfig {
     name: config.name || 'they-sing-headless-playtest',
     maxTurns: config.maxTurns || DEFAULT_MAX_TURNS,
     seed: typeof config.seed === 'number' ? Math.floor(config.seed) : undefined,
+    enforcementMode: normalizeEnforcementMode(config.enforcementMode),
     autoAdvanceNegotiation: config.autoAdvanceNegotiation !== false,
     logDir: config.logDir || 'playtest-logs',
     factionLabels: config.factionLabels,
@@ -1874,6 +3266,10 @@ function normalizeSessionConfig(config: SessionConfig): SessionConfig {
     scenario: config.scenario,
     agents: config.agents
   };
+}
+
+function normalizeEnforcementMode(mode: unknown): EnforcementMode {
+  return mode === 'soft' || mode === 'graduated' || mode === 'hard' ? mode : 'hard';
 }
 
 function validateManualTurnPlan(turnPlan: ManualTurnPlan): number {
@@ -1886,9 +3282,9 @@ function validateManualTurnPlan(turnPlan: ManualTurnPlan): number {
     }
 
     const negotiationRounds = Array.isArray(factionPlan.negotiationRounds) ? factionPlan.negotiationRounds.length : 0;
-    if (negotiationRounds < 3 || negotiationRounds > 5) {
+    if (negotiationRounds < 1 || negotiationRounds > 5) {
       throw new Error(
-        `Manual turn plan for ${factionId} must include 3-5 negotiation rounds; got ${negotiationRounds}.`
+        `Manual turn plan for ${factionId} must include 1-5 negotiation rounds; got ${negotiationRounds}.`
       );
     }
 
@@ -1976,7 +3372,7 @@ function normalizeOrderType(type: string): OrderType | null {
   const normalized = type.toUpperCase();
   const validTypes: OrderType[] = [
     'MOVE', 'HOLD', 'SUPPORT', 'ATTACK', 'FILTER',
-    'SABOTAGE', 'ANTI_SAT', 'CONVERT', 'AUDIT', 'BUILD', 'RESEARCH'
+    'SABOTAGE', 'ANTI_SAT', 'CHALLENGE_MANDATE', 'LICENSED_BEAM_USE', 'REPAIR_ESCROW_CLAIM', 'CONVERT', 'AUDIT', 'RECRUITMENT_PULSE', 'BROKER_LEVERAGE', 'BUILD', 'RESEARCH'
   ];
 
   return validTypes.includes(normalized as OrderType) ? normalized as OrderType : null;
@@ -2321,6 +3717,7 @@ function buildUserPrompt(payload: AgentDecisionRequest): string {
     `Faction: ${payload.factionLabel} (${payload.factionId})`,
     `Phase: ${payload.phase}`,
     `Turn: ${payload.turn} / ${payload.maxTurns}`,
+    `Enforcement mode: ${payload.enforcementMode}`,
     '',
     'Visible recent negotiation messages:',
     JSON.stringify(payload.recentMessages, null, 2),
@@ -2445,7 +3842,15 @@ function normalizeMessageContent(content: unknown): string | null {
 function normalizePactType(type: unknown): PactType | null {
   if (typeof type !== 'string') return null;
   const normalized = type.toUpperCase();
-  if (normalized === 'ORBITAL_TRUCE' || normalized === 'NON_AGGRESSION' || normalized === 'AUDIT_FREEZE') {
+  if (
+    normalized === 'ORBITAL_TRUCE' ||
+    normalized === 'NON_AGGRESSION' ||
+    normalized === 'AUDIT_FREEZE' ||
+    normalized === 'SENSOR_COMMONS' ||
+    normalized === 'BEAM_LANE_LICENSE' ||
+    normalized === 'REPAIR_ESCROW' ||
+    normalized === 'CISLUNAR_COMMON_CARRIER'
+  ) {
     return normalized;
   }
   return null;
@@ -2540,6 +3945,17 @@ function isNonAggressionOrder(type: OrderType): boolean {
   return type === 'MOVE' || type === 'ATTACK' || type === 'SABOTAGE' || type === 'CONVERT' || type === 'ANTI_SAT';
 }
 
+function isCislunarInstitutionPact(type: PactType): boolean {
+  return type === 'SENSOR_COMMONS' ||
+    type === 'BEAM_LANE_LICENSE' ||
+    type === 'REPAIR_ESCROW' ||
+    type === 'CISLUNAR_COMMON_CARRIER';
+}
+
+function isCislunarNodeId(nodeId: string | undefined): boolean {
+  return nodeId === 'SAT_LUNAR_GATEWAY' || nodeId === 'MOON_RESOURCE_CORRIDOR';
+}
+
 function clampTrust(value: number): number {
   return Math.max(0, Math.min(MAX_TRUST, value));
 }
@@ -2552,8 +3968,44 @@ function clampProjectionScore(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function computeDeepSpaceDistanceSafetyMultiplier(distanceAu: number): number {
+  if (distanceAu < 30) {
+    return 0.25 + (distanceAu / 30) * 0.5;
+  }
+  const outerSystemProgress = Math.sqrt(clampNumber((distanceAu - 30) / 970, 0, 1));
+  return 1 + outerSystemProgress;
+}
+
+function computeDeepSpaceTrackingRiskMultiplier(distanceAu: number): number {
+  if (distanceAu < 30) {
+    return 0.18;
+  }
+  const outerSystemProgress = Math.sqrt(clampNumber((distanceAu - 30) / 970, 0, 1));
+  return 0.1 - outerSystemProgress * 0.07;
+}
+
+function roundMetric(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 function finiteNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function metricBand(value: number): string {
+  if (value >= 100) return 'terminal';
+  if (value >= 75) return 'crisis';
+  if (value >= 50) return 'surge';
+  if (value >= 25) return 'elevated';
+  return 'low';
+}
+
+function sortedMapEntries(map: Map<string, number>): Array<[string, number]> {
+  return Array.from(map.entries()).sort(([left], [right]) => left.localeCompare(right));
 }
 
 function applyTrustMatrixPatch(

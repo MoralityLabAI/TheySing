@@ -198,7 +198,7 @@ function buildWebhookContract(): Record<string, unknown> {
       ],
       orders: [
         {
-          type: 'MOVE | HOLD | SUPPORT | ATTACK | FILTER | SABOTAGE | ANTI_SAT | CONVERT | AUDIT | BUILD | RESEARCH',
+          type: 'MOVE | HOLD | SUPPORT | ATTACK | FILTER | SABOTAGE | ANTI_SAT | CHALLENGE_MANDATE | LICENSED_BEAM_USE | REPAIR_ESCROW_CLAIM | CONVERT | AUDIT | RECRUITMENT_PULSE | BROKER_LEVERAGE | BUILD | RESEARCH',
           unitId: 'optional string',
           targetNodeId: 'optional string',
           targetEdgeId: 'optional string',
@@ -216,6 +216,7 @@ function buildSessionConfigContract(): Record<string, unknown> {
       name: 'optional string',
       maxTurns: 'optional number',
       seed: 'optional number',
+      enforcementMode: 'optional hard | soft | graduated',
       logDir: 'optional string',
       autoAdvanceNegotiation: 'optional boolean',
       factionLabels: 'optional labels per playable faction',

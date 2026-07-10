@@ -100,6 +100,7 @@ export function serializeGameState(
     counters: {
       tas: state.counters.tas,
       kessler: state.counters.kessler,
+      paxJenkinsAuthority: state.counters.paxJenkinsAuthority,
       turn: state.counters.turn,
       regulatoryPanic: state.counters.regulatoryPanic,
       protocolFailure: state.counters.protocolFailure,

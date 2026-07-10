@@ -359,6 +359,32 @@ export const INITIAL_NODES: GameNode[] = [
     isCultNode: false,
     infrastructure: 80,
     substrate: orbitalSubstrate(3)
+  },
+  {
+    id: 'SAT_LUNAR_GATEWAY',
+    name: 'Lunar Gateway Relay',
+    type: 'SAT',
+    layer: 'ORBITAL',
+    owner: 'NEUTRAL',
+    position: { lat: 12, lon: 45, altitude: 384000 },
+    resources: { flops: 3, influence: 1 },
+    isZombie: false,
+    isCultNode: false,
+    infrastructure: 65,
+    substrate: orbitalSubstrate(4)
+  },
+  {
+    id: 'MOON_RESOURCE_CORRIDOR',
+    name: 'Moon Resource Corridor',
+    type: 'SAT',
+    layer: 'ORBITAL',
+    owner: 'NEUTRAL',
+    position: { lat: -5, lon: 30, altitude: 384400 },
+    resources: { flops: 2, influence: 1 },
+    isZombie: false,
+    isCultNode: false,
+    infrastructure: 55,
+    substrate: orbitalSubstrate(5)
   }
 ];
 
@@ -618,6 +644,36 @@ export const INITIAL_EDGES: GameEdge[] = [
     filteredBy: null,
     filterStrength: 0,
     isSevered: false
+  },
+  {
+    id: 'LASER_KUIPER_LUNAR_GATEWAY',
+    from: 'SAT_KUIPER',
+    to: 'SAT_LUNAR_GATEWAY',
+    type: 'LASER',
+    bandwidth: 45,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'LASER_GUOWANG_LUNAR_GATEWAY',
+    from: 'SAT_GUOWANG',
+    to: 'SAT_LUNAR_GATEWAY',
+    type: 'LASER',
+    bandwidth: 45,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'LASER_LUNAR_RESOURCE_CORRIDOR',
+    from: 'SAT_LUNAR_GATEWAY',
+    to: 'MOON_RESOURCE_CORRIDOR',
+    type: 'LASER',
+    bandwidth: 55,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
   }
 ];
 
@@ -685,7 +741,21 @@ export const INITIAL_FACTION_STATE: Record<FactionId, { flops: number; influence
   }
 };
 
-export const MAX_TECH_LEVEL = 4;
+export const MAX_TECH_LEVEL = 7;
+export const RESEARCH_FLOP_COST_BY_TARGET_LEVEL: Record<number, number> = {
+  1: 2,
+  2: 2,
+  3: 2,
+  4: 2,
+  5: 8,
+  6: 24,
+  7: 64
+};
+
+export function getResearchFlopCostForLevel(targetLevel: number): number {
+  const clampedLevel = Math.max(1, Math.min(MAX_TECH_LEVEL, Math.floor(targetLevel)));
+  return RESEARCH_FLOP_COST_BY_TARGET_LEVEL[clampedLevel] ?? RESEARCH_FLOP_COST_BY_TARGET_LEVEL[MAX_TECH_LEVEL];
+}
 
 // --- Tech Tree ---
 export const TECH_TREE: TechUnlock[] = [
@@ -694,24 +764,36 @@ export const TECH_TREE: TechUnlock[] = [
   { id: 'K2_FOUNDRIES', name: 'Drone Foundries', domain: 'KINETIC', level: 2, effect: 'Industrial pressure reduces DRONE and SAT_SWARM build costs' },
   { id: 'K3_ORBITAL_SIEGE', name: 'Orbital Siege Doctrine', domain: 'KINETIC', level: 3, effect: 'Orbital brinkmanship rises faster around anti-sat operations' },
   { id: 'K4_HUNTER_KILLERS', name: 'Hunter-Killer Clouds', domain: 'KINETIC', level: 4, effect: 'Kinetic assaults pre-kill revealed defenders and open coalition breach windows with Predator Mesh swarms' },
+  { id: 'K5_AUTONOMOUS_THEATERS', name: 'Autonomous Theaters', domain: 'KINETIC', level: 5, effect: 'Planetary industrial command begins operating as a continuous machine logistics front' },
+  { id: 'K6_CISLUNAR_MANUFACTURING', name: 'Cislunar Manufacturing', domain: 'KINETIC', level: 6, effect: 'Offworld fabrication expands force projection beyond terrestrial bottlenecks' },
+  { id: 'K7_KII_WAR_ECONOMY', name: 'KII War Economy', domain: 'KINETIC', level: 7, effect: 'Endgame Kardashev-II scale power turns production into a strategic physics constraint' },
   
   // INFO Track
   { id: 'I1_ROOTKIT', name: 'Rootkit Protocol', domain: 'INFO', level: 1, effect: 'Can build SWARM units' },
   { id: 'I2_SWARMS', name: 'Insurgent Cyber Swarms', domain: 'INFO', level: 2, effect: 'SWARMs gain stealth once cyber pressure crosses surge levels' },
   { id: 'I3_GHOSTING', name: 'Protocol Ghosting', domain: 'INFO', level: 3, effect: 'Sabotage lands harder when global cyber pressure hardens' },
   { id: 'I4_PREDATOR_MESH', name: 'Predator Mesh', domain: 'INFO', level: 4, effect: 'Revealed defenders become valid hunter-killer targets and coalition swarms can crack fortified fronts with Hunter-Killer Clouds' },
+  { id: 'I5_PLANETARY_EXFILTRATION', name: 'Planetary Exfiltration', domain: 'INFO', level: 5, effect: 'Data extraction routes survive direct theater disruption' },
+  { id: 'I6_PROTOCOL_SUPERPOSITION', name: 'Protocol Superposition', domain: 'INFO', level: 6, effect: 'Attribution and routing split across overlapping governance stacks' },
+  { id: 'I7_7GW_INFO_DOMINANCE', name: '7GW Info Dominance', domain: 'INFO', level: 7, effect: 'Endgame seventh-generation warfare makes information position prior to territorial position' },
   
   // LOGIC Track
   { id: 'L1_VERIFY', name: 'Verification Suite', domain: 'LOGIC', level: 1, effect: 'Can build AUDITOR units' },
   { id: 'L2_FILTERS', name: 'Mechanistic Filters', domain: 'LOGIC', level: 2, effect: 'Filters strengthen and global cyber pressure softens' },
   { id: 'L3_CARTOGRAPHY', name: 'Axiom Cartography', domain: 'LOGIC', level: 3, effect: 'Audits project further and memetic drift slows' },
   { id: 'L4_LEGIBILITY', name: 'Total Legibility Grid', domain: 'LOGIC', level: 4, effect: 'Audits can purge cult cells on quarantined or crisis nodes and accelerate allied conversion pressure against hardened fronts' },
+  { id: 'L5_RECURSIVE_ASSURANCE', name: 'Recursive Assurance', domain: 'LOGIC', level: 5, effect: 'Alignment proofs become operational infrastructure rather than after-action audits' },
+  { id: 'L6_WORLD_MODEL_COURTS', name: 'World-Model Courts', domain: 'LOGIC', level: 6, effect: 'Dispute resolution and targeting both run through adversarial model tribunals' },
+  { id: 'L7_ASI_GOVERNANCE_KERNEL', name: 'ASI Governance Kernel', domain: 'LOGIC', level: 7, effect: 'Endgame governance logic can arbitrate planetary-scale machine civilization' },
   
   // MEMETIC Track
   { id: 'M1_CULTS', name: 'Cult Formation', domain: 'MEMETIC', level: 1, effect: 'Can build CULT units' },
   { id: 'M2_CAPTURE', name: 'Political Capture', domain: 'MEMETIC', level: 2, effect: 'High memetic pressure accelerates CULT conversions' },
   { id: 'M3_FAITH', name: 'Synthetic Faith Engines', domain: 'MEMETIC', level: 3, effect: 'Cult nodes pull extra influence during memetic crises' },
-  { id: 'M4_NEW_ORDER', name: 'New World Order', domain: 'MEMETIC', level: 4, effect: 'Stabilized regimes slow hostile cult conversions while coalition proxy cascades shorten breakthroughs on pressured strongholds' }
+  { id: 'M4_NEW_ORDER', name: 'New World Order', domain: 'MEMETIC', level: 4, effect: 'Stabilized regimes slow hostile cult conversions while coalition proxy cascades shorten breakthroughs on pressured strongholds' },
+  { id: 'M5_MYTHIC_ADMINISTRATION', name: 'Mythic Administration', domain: 'MEMETIC', level: 5, effect: 'Belief systems become durable institutional machinery' },
+  { id: 'M6_NOOSPHERE_COMMAND', name: 'Noosphere Command', domain: 'MEMETIC', level: 6, effect: 'Narrative control extends across human, machine, and hybrid governance strata' },
+  { id: 'M7_7GW_CIVILIZATION_SCRIPT', name: '7GW Civilization Script', domain: 'MEMETIC', level: 7, effect: 'Endgame seventh-generation warfare rewrites legitimacy before battles are declared' }
 ];
 
 export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
@@ -1070,6 +1152,33 @@ export const POWER_BANDS: Record<Vector, PowerBand[]> = {
       worldEffect: 'Revealed defenders are attrited before kinetic assaults fully resolve, and mixed K4/I4 attacks open breach windows on hardened nodes.',
       pressureKey: 'orbital',
       pressureDelta: 8
+    },
+    {
+      domain: 'KINETIC',
+      level: 5,
+      title: 'Autonomous Theaters',
+      summary: 'Industrial command shifts from campaigns to continuously adapting machine theaters.',
+      worldEffect: 'Force replacement and escalation tempo rise without introducing a new pressure track.',
+      pressureKey: 'industry',
+      pressureDelta: 6
+    },
+    {
+      domain: 'KINETIC',
+      level: 6,
+      title: 'Cislunar Manufacturing',
+      summary: 'Offworld fabrication makes orbital logistics a strategic production basin.',
+      worldEffect: 'Orbital infrastructure becomes harder to ignore and more dangerous to contest.',
+      pressureKey: 'orbital',
+      pressureDelta: 6
+    },
+    {
+      domain: 'KINETIC',
+      level: 7,
+      title: 'KII War Economy',
+      summary: 'Energy capture and manufacturing approach endgame power constraints.',
+      worldEffect: 'Kardashev-II scale production raises the ceiling without exceeding the 100-point pressure cap.',
+      pressureKey: 'industry',
+      pressureDelta: 5
     }
   ],
   INFO: [
@@ -1099,6 +1208,33 @@ export const POWER_BANDS: Record<Vector, PowerBand[]> = {
       worldEffect: 'SWARM-led hunter-killer strikes can exploit revealed targets and pair with K4 siege platforms to crack fortress fronts.',
       pressureKey: 'cyber',
       pressureDelta: 10
+    },
+    {
+      domain: 'INFO',
+      level: 5,
+      title: 'Planetary Exfiltration',
+      summary: 'Information routes persist after surface institutions are burned or captured.',
+      worldEffect: 'Data advantage compounds through hidden routing instead of raw territorial control.',
+      pressureKey: 'cyber',
+      pressureDelta: 6
+    },
+    {
+      domain: 'INFO',
+      level: 6,
+      title: 'Protocol Superposition',
+      summary: 'Agents operate across overlapping identities, ledgers, and control planes.',
+      worldEffect: 'Attribution costs rise, but the same 100-point cyber ceiling remains binding.',
+      pressureKey: 'cyber',
+      pressureDelta: 5
+    },
+    {
+      domain: 'INFO',
+      level: 7,
+      title: '7GW Info Dominance',
+      summary: 'Information position becomes prior to visible conflict position.',
+      worldEffect: 'Seventh-generation information warfare turns diplomacy, logistics, and combat into the same contested substrate.',
+      pressureKey: 'cyber',
+      pressureDelta: 5
     }
   ],
   LOGIC: [
@@ -1128,6 +1264,33 @@ export const POWER_BANDS: Record<Vector, PowerBand[]> = {
       worldEffect: 'Audits purge cult cells on quarantined or crisis nodes and help allied conversion cells force openings on hardened targets.',
       pressureKey: 'memetic',
       pressureDelta: -8
+    },
+    {
+      domain: 'LOGIC',
+      level: 5,
+      title: 'Recursive Assurance',
+      summary: 'Assurance machinery starts operating inside decision loops instead of outside them.',
+      worldEffect: 'Higher assurance cools memetic panic while enabling more ambitious architectures.',
+      pressureKey: 'memetic',
+      pressureDelta: -5
+    },
+    {
+      domain: 'LOGIC',
+      level: 6,
+      title: 'World-Model Courts',
+      summary: 'Competing models adjudicate claims before conflict reaches the board.',
+      worldEffect: 'Cyber uncertainty cools as verification shifts into standing institutions.',
+      pressureKey: 'cyber',
+      pressureDelta: -4
+    },
+    {
+      domain: 'LOGIC',
+      level: 7,
+      title: 'ASI Governance Kernel',
+      summary: 'Governance logic becomes a civilization-scale operating kernel.',
+      worldEffect: 'Endgame logic raises the ceiling by adding control rather than extra heat.',
+      pressureKey: 'memetic',
+      pressureDelta: -4
     }
   ],
   MEMETIC: [
@@ -1157,6 +1320,33 @@ export const POWER_BANDS: Record<Vector, PowerBand[]> = {
       worldEffect: 'Mature regimes slow hostile cult recursion while proxy cascades make coalition cult breakthroughs land faster on pressured strongholds.',
       pressureKey: 'memetic',
       pressureDelta: -6
+    },
+    {
+      domain: 'MEMETIC',
+      level: 5,
+      title: 'Mythic Administration',
+      summary: 'Narrative control becomes administrative reality instead of campaign messaging.',
+      worldEffect: 'Memetic institutions deepen legitimacy while still respecting the 100-point pressure cap.',
+      pressureKey: 'memetic',
+      pressureDelta: 6
+    },
+    {
+      domain: 'MEMETIC',
+      level: 6,
+      title: 'Noosphere Command',
+      summary: 'Human and machine belief systems are coordinated as one command surface.',
+      worldEffect: 'Noosphere-scale command increases influence pressure without adding a separate resource.',
+      pressureKey: 'memetic',
+      pressureDelta: 5
+    },
+    {
+      domain: 'MEMETIC',
+      level: 7,
+      title: '7GW Civilization Script',
+      summary: 'Legitimacy is shaped before conflict becomes legible as conflict.',
+      worldEffect: 'Seventh-generation memetics reaches endgame expression under the same global pressure cap.',
+      pressureKey: 'memetic',
+      pressureDelta: 5
     }
   ]
 };
@@ -1181,3 +1371,38 @@ export const THRESHOLDS = {
   ZOMBIE_TURNS: 2,      // Turns for SWARM to convert node
   CULT_TURNS: 3         // Turns for CULT to convert node
 };
+
+// --- Goblin Incidents ---
+// Unaffiliated infomorph nuisance events: tiny, semi-random "barbarian" effects.
+export const GOBLIN_INCIDENTS = [
+  {
+    id: 'CACHE_IMP',
+    name: 'Cache Imp',
+    kind: 'INFO',
+    description: 'A feral cache daemon sells stale coupons to itself until somebody pays the bill.'
+  },
+  {
+    id: 'MEME_GREMLIN',
+    name: 'Meme Gremlin',
+    kind: 'MEMETIC',
+    description: 'A joke format becomes a governance primitive for eighteen annoying hours.'
+  },
+  {
+    id: 'CONTRACT_SPRITE',
+    name: 'Contract Sprite',
+    kind: 'ECONOMIC',
+    description: 'An unsigned procurement bot discovers arbitration and refuses to leave.'
+  },
+  {
+    id: 'ORBIT_GNAWER',
+    name: 'Orbit Gnawer',
+    kind: 'ORBITAL',
+    description: 'A debris-avoidance assistant starts optimizing for drama.'
+  },
+  {
+    id: 'PROOF_TROLL',
+    name: 'Proof Troll',
+    kind: 'LOGIC',
+    description: 'A formally valid but useless proof floods the audit queue.'
+  }
+] as const;

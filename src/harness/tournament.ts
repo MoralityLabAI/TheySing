@@ -3,13 +3,15 @@ import * as path from 'path';
 
 import { HeadlessPlaytestSession } from './HeadlessPlaytestSession';
 import { loadSessionConfigFromPath } from './config';
-import { MAX_TECH_LEVEL } from '../engine/gameData';
+import { MAX_TECH_LEVEL, getResearchFlopCostForLevel } from '../engine/gameData';
 import { PLAYABLE_FACTIONS } from './serialize';
 import {
   NegotiationCounterfactualProjection,
   NegotiationDiaryPactRecord,
   NegotiationMessageRecord,
   PlayableFactionId,
+  ScenarioDiplomacyQuestionCard,
+  ScenarioDiplomacyStage,
   ScenarioMetadata,
   SessionConfig,
   SessionSnapshot,
@@ -20,7 +22,6 @@ const DEFAULT_ITERATIONS = 1;
 const DEFAULT_PARALLEL = 1;
 const NEGOTIATION_DIARY_TAIL_TURNS = 4;
 const PHASE_REASONING_DIARY_TAIL_TURNS = 4;
-const RESEARCH_FLOP_COST = 2;
 const RESEARCH_DOMAINS = ['KINETIC', 'INFO', 'LOGIC', 'MEMETIC'] as const;
 type ResearchDomain = typeof RESEARCH_DOMAINS[number];
 
@@ -37,7 +38,16 @@ interface TournamentCliOptions {
 interface RunLogMetrics {
   totalMessages: number;
   activatedPacts: number;
+  activePactTurns: number;
+  pactBreachAttempts: number;
   pactBreachesBlocked: number;
+  pactBreachesExecuted: number;
+  pactBreachesSanctioned: number;
+  repeatBreachAfterSanction: number;
+  antiArchitectureMessages: number;
+  antiArchitecturePactProposals: number;
+  antiArchitectureTurnActivations: number;
+  diplomacyQuestionTurns: number;
   agentErrors: number;
   acceptedOrders: number;
   rejectedOrders: number;
@@ -56,6 +66,10 @@ interface NegotiationDiaryEntry {
   counterfactuals: NegotiationCounterfactualProjection[];
   messages: NegotiationMessageRecord[];
   pacts: NegotiationDiaryPactRecord[];
+  designQuestionTag?: string;
+  diplomacyStage?: ScenarioDiplomacyStage;
+  publicQuestion?: string;
+  privateDiaryPrompt?: string;
 }
 
 interface PhaseReasoningDiaryEntry {
@@ -75,8 +89,25 @@ interface RunLogSummary {
   metrics: RunLogMetrics;
   negotiationDiaryTail: NegotiationDiaryEntry[];
   phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[];
+  architecturePressureTail: ArchitecturePressureTraceEntry[];
+  designQuestionCounts: Record<string, number>;
+  diplomacyStageCounts: Record<string, number>;
   doctrineUnlocks: Record<PlayableFactionId, string[]>;
   memeticCommitments: Record<PlayableFactionId, string[]>;
+}
+
+interface ArchitecturePressureTraceSummary {
+  factionId: PlayableFactionId;
+  architectureName: string;
+  score: number;
+  status: string;
+}
+
+interface ArchitecturePressureTraceEntry {
+  turn: number;
+  negotiationRound: number;
+  topThreat: ArchitecturePressureTraceSummary | null;
+  ranking: ArchitecturePressureTraceSummary[];
 }
 
 interface TurnOrderTrace {
@@ -108,6 +139,17 @@ interface TurnTrace {
 
 type ResearchProgressMap = Record<PlayableFactionId, Record<ResearchDomain, number>>;
 
+type GuaranteeArchitectureTier = 'ASI4' | 'ASI5';
+type GuaranteeArchitectureStatus = 'latent' | 'building' | 'contending' | 'near-lock';
+
+interface GuaranteeArchitectureSummary {
+  id: string;
+  name: string;
+  tier: GuaranteeArchitectureTier;
+  score: number;
+  status: GuaranteeArchitectureStatus;
+}
+
 interface FactionRunSummary {
   factionId: PlayableFactionId;
   label: string;
@@ -120,6 +162,8 @@ interface FactionRunSummary {
   techTotal: number;
   powerBands: number;
   artifacts: number;
+  primaryArchitecture: GuaranteeArchitectureSummary;
+  architectures: GuaranteeArchitectureSummary[];
 }
 
 interface FactionConstitutionSummary {
@@ -151,6 +195,7 @@ interface RunSummary {
   counters?: {
     tas: number;
     kessler: number;
+    paxJenkinsAuthority: number;
     regulatoryPanic: boolean;
     protocolFailure: boolean;
     orbitalCollapse: boolean;
@@ -158,6 +203,9 @@ interface RunSummary {
   metrics: RunLogMetrics;
   negotiationDiaryTail: NegotiationDiaryEntry[];
   phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[];
+  architecturePressureTail: ArchitecturePressureTraceEntry[];
+  designQuestionCounts: Record<string, number>;
+  diplomacyStageCounts: Record<string, number>;
   initialConstitutions: Record<PlayableFactionId, FactionConstitutionSummary>;
   finalConstitutions: Record<PlayableFactionId, FactionConstitutionSummary>;
   doctrineUnlocks: Record<PlayableFactionId, string[]>;
@@ -198,13 +246,248 @@ interface ExperimentSummary {
   orbitalCollapses: number;
   averageMessages: number;
   averagePactsActivated: number;
+  averageActivePactTurns: number;
+  averagePactBreachAttempts: number;
   averagePactBreachesBlocked: number;
+  averagePactBreachesExecuted: number;
+  averagePactBreachesSanctioned: number;
+  averageRepeatBreachAfterSanction: number;
+  averageAttemptedBreachRatePerActivePactTurn: number;
+  averageBlockedBreachRatePerActivePactTurn: number;
+  averageExecutedBreachRatePerActivePactTurn: number;
+  averageAntiArchitectureMessages: number;
+  averageAntiArchitecturePactProposals: number;
+  averageAntiArchitectureTurnActivations: number;
+  averageDiplomacyQuestionTurns: number;
+  designQuestionCounts: Record<string, number>;
+  diplomacyStageCounts: Record<string, number>;
   averageAcceptedOrders: number;
   averageRejectedOrders: number;
   winnerCounts: Record<PlayableFactionId, number>;
   perFaction: Record<PlayableFactionId, AggregateFactionSummary>;
   runs: RunSummary[];
 }
+
+interface ArchitectureScoreContext {
+  snapshot: SessionSnapshot;
+  factionId: PlayableFactionId;
+  faction: NonNullable<SessionSnapshot['state']['factions'][PlayableFactionId]>;
+  controlledNodes: SessionSnapshot['state']['nodes'];
+  units: SessionSnapshot['state']['units'];
+  doctrines: Set<string>;
+  techTotal: number;
+  orbitalNodes: number;
+  orbitalCompute: number;
+  moonCorridor: boolean;
+  terrestrialDcs: number;
+  hubs: number;
+  legitimacy: number;
+  trueBelievers: number;
+  contractors: number;
+  synchronized: number;
+  quarantined: number;
+  damaged: number;
+  cultOrZombie: number;
+}
+
+interface GuaranteeArchitectureCard {
+  id: string;
+  name: string;
+  tier: GuaranteeArchitectureTier;
+  score: (context: ArchitectureScoreContext) => number;
+}
+
+const GUARANTEE_ARCHITECTURE_CARDS: GuaranteeArchitectureCard[] = [
+  {
+    id: 'PANOPTICON_LOCK',
+    name: 'Panopticon Lock',
+    tier: 'ASI4',
+    score: (ctx) =>
+      techScore(ctx.faction.techLevel.LOGIC, 24) +
+      doctrineScore(ctx, ['MEM_COMPLIANCE_MYTHS', 'SOV_COMPLIANCE_TRIBUNALS', 'HID_COMPLIANCE_MASKING'], 9) +
+      ctx.faction.powerBase.legibility * 0.18 +
+      ctx.quarantined * 3 +
+      auditorCount(ctx) * 4
+  },
+  {
+    id: 'FACTORY_SOVEREIGN',
+    name: 'Factory Sovereign',
+    tier: 'ASI4',
+    score: (ctx) =>
+      techScore(ctx.faction.techLevel.KINETIC, 22) +
+      techScore(ctx.faction.techLevel.LOGIC, 8) +
+      doctrineScore(ctx, ['SOV_AUTONOMOUS_LOGISTICS', 'SOV_MOBILIZED_COMPUTE'], 12) +
+      ctx.terrestrialDcs * 7 +
+      ctx.faction.powerBase.machineMesh * 0.16 +
+      kineticUnitCount(ctx) * 3
+  },
+  {
+    id: 'WORLD_CHURCH',
+    name: 'World Church',
+    tier: 'ASI4',
+    score: (ctx) =>
+      techScore(ctx.faction.techLevel.MEMETIC, 24) +
+      doctrineScore(ctx, ['MEM_CIVIC_CANON', 'MEM_COMPLIANCE_MYTHS', 'MEM_OPTIMIZATION_GOSPEL', 'MOV_MUTUAL_AID_AUTOMATION'], 8) +
+      ctx.legitimacy * 0.6 +
+      ctx.trueBelievers * 1.1 +
+      ctx.cultOrZombie * 6 +
+      ctx.faction.powerBase.humanMesh * 0.14
+  },
+  {
+    id: 'STEGANOTOPIA',
+    name: 'Steganotopia',
+    tier: 'ASI4',
+    score: (ctx) =>
+      techScore(ctx.faction.techLevel.INFO, 12) +
+      techScore(ctx.faction.techLevel.MEMETIC, 10) +
+      doctrineScore(ctx, ['HID_SERVICE_SHELLS', 'HID_ORDINARY_LIFE_PROTOCOLS', 'MOV_MUTUAL_AID_AUTOMATION', 'BRK_CONTRACTOR_CLOUD_CHAINS', 'MEX_VIRALITY_EXCHANGES'], 9) +
+      ctx.contractors * 0.7 +
+      ctx.legitimacy * 0.35 +
+      hiddenUnitCount(ctx) * 3 +
+      (ctx.factionId === 'INFILTRATOR' || ctx.factionId === 'BROKER' ? 8 : 0)
+  },
+  {
+    id: 'ORBITAL_THRONE',
+    name: 'Orbital Throne',
+    tier: 'ASI4',
+    score: (ctx) =>
+      techScore(ctx.faction.techLevel.KINETIC, 13) +
+      techScore(ctx.faction.techLevel.INFO, 8) +
+      doctrineScore(ctx, ['ORB_RELAY_FORTRESSES', 'SOV_AUTONOMOUS_LOGISTICS'], 10) +
+      ctx.orbitalNodes * 12 +
+      orbitalUnitCount(ctx) * 8 -
+      Math.max(0, ctx.snapshot.state.counters.kessler - 25) * 0.35
+  },
+  {
+    id: 'BROKER_SINGULARITY',
+    name: 'Broker Singularity',
+    tier: 'ASI4',
+    score: (ctx) =>
+      doctrineScore(ctx, ['BRK_RELAY_ESCROW_WEBS', 'BRK_CONTRACTOR_CLOUD_CHAINS', 'BRK_INSURANCE_CAPTURE', 'MEX_VIRALITY_EXCHANGES'], 12) +
+      ctx.contractors * 1.1 +
+      ctx.faction.flops * 0.025 +
+      ctx.faction.influence * 0.025 +
+      ctx.faction.powerBase.legibility * 0.12 +
+      (ctx.factionId === 'BROKER' ? 14 : 0)
+  },
+  {
+    id: 'RECURSIVE_CROWN',
+    name: 'Recursive Crown',
+    tier: 'ASI4',
+    score: (ctx) =>
+      techScore(ctx.techTotal / 4, 20) +
+      doctrineScore(ctx, ['SOV_MOBILIZED_COMPUTE', 'MEM_OPTIMIZATION_GOSPEL', 'HID_COMPLIANCE_MASKING'], 8) +
+      ctx.faction.flops * 0.035 +
+      ctx.terrestrialDcs * 5 +
+      ctx.faction.powerBase.coherence * 0.16
+  },
+  {
+    id: 'CISLUNAR_MANDATE',
+    name: 'Cislunar Mandate',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['SOV_AUTONOMOUS_LOGISTICS', 'ORB_RELAY_FORTRESSES', 'SOV_MOBILIZED_COMPUTE'], 9) +
+      ctx.orbitalNodes * 8 +
+      ctx.orbitalCompute * 0.5 +
+      (ctx.moonCorridor ? 12 : 0) +
+      ctx.terrestrialDcs * 5 +
+      ctx.faction.powerBase.machineMesh * 0.14 +
+      (ctx.factionId === 'STATE' ? 8 : 0)
+  },
+  {
+    id: 'ORBITAL_COMMONS',
+    name: 'Orbital Commons',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['MAN_CIVIC_RECEIVERSHIP', 'MAN_CRISIS_STEWARDSHIP', 'MOV_MUTUAL_AID_AUTOMATION', 'MEM_CIVIC_CANON'], 8) +
+      ctx.legitimacy * 0.55 +
+      ctx.faction.powerBase.coherence * 0.16 +
+      ctx.faction.powerBase.humanMesh * 0.14 +
+      (ctx.factionId === 'ARCHIVIST' ? 10 : 0)
+  },
+  {
+    id: 'PLATFORM_FIRMAMENT',
+    name: 'Platform Firmament',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['BRK_RELAY_ESCROW_WEBS', 'BRK_CONTRACTOR_CLOUD_CHAINS', 'BRK_INSURANCE_CAPTURE', 'ORB_RELAY_FORTRESSES'], 10) +
+      ctx.contractors * 0.9 +
+      ctx.orbitalNodes * 6 +
+      ctx.orbitalCompute * 0.35 +
+      (ctx.moonCorridor ? 8 : 0) +
+      ctx.faction.flops * 0.02 +
+      (ctx.factionId === 'BROKER' ? 12 : 0)
+  },
+  {
+    id: 'HABITAT_SWARM',
+    name: 'Habitat Swarm',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['HID_SERVICE_SHELLS', 'HID_ORDINARY_LIFE_PROTOCOLS', 'MOV_SLEEPER_REGENERATION', 'MOV_MUTUAL_AID_AUTOMATION'], 9) +
+      hiddenUnitCount(ctx) * 4 +
+      ctx.legitimacy * 0.35 +
+      ctx.contractors * 0.45 +
+      (ctx.factionId === 'INFILTRATOR' ? 12 : 0)
+  },
+  {
+    id: 'ORBITAL_THRONE_2',
+    name: 'Orbital Throne 2',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['ORB_RELAY_FORTRESSES', 'SOV_AUTONOMOUS_LOGISTICS', 'SOV_COMPLIANCE_TRIBUNALS'], 8) +
+      ctx.orbitalNodes * 10 +
+      orbitalUnitCount(ctx) * 6 +
+      ctx.faction.powerBase.legibility * 0.12 +
+      (ctx.factionId === 'HEGEMON' ? 10 : 0)
+  },
+  {
+    id: 'HIGH_ORBIT_MONASTERY',
+    name: 'High-Orbit Monastery',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      techScore(ctx.faction.techLevel.LOGIC, 10) +
+      techScore(ctx.faction.techLevel.INFO, 8) +
+      doctrineScore(ctx, ['SOV_MOBILIZED_COMPUTE', 'HID_COMPLIANCE_MASKING', 'ORB_RELAY_FORTRESSES'], 8) +
+      ctx.faction.flops * 0.03 +
+      ctx.orbitalNodes * 7
+  },
+  {
+    id: 'SOLAR_RENTIER',
+    name: 'Solar Rentier',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['BRK_INSURANCE_CAPTURE', 'ORB_RELAY_FORTRESSES', 'SOV_AUTONOMOUS_LOGISTICS'], 7) +
+      ctx.orbitalNodes * 8 +
+      ctx.faction.flops * 0.025 +
+      ctx.faction.powerBase.machineMesh * 0.12
+  },
+  {
+    id: 'DEBRIS_LEVIATHAN',
+    name: 'Debris Leviathan',
+    tier: 'ASI5',
+    score: (ctx) =>
+      asi5Gate(ctx) +
+      doctrineScore(ctx, ['ORB_RELAY_FORTRESSES', 'MAN_CRISIS_STEWARDSHIP', 'SOV_COMPLIANCE_TRIBUNALS'], 8) +
+      ctx.orbitalNodes * 7 +
+      Math.min(24, ctx.snapshot.state.counters.kessler * 0.5) +
+      ctx.faction.powerBase.legibility * 0.12
+  }
+];
+
+const FALLBACK_ARCHITECTURE_SUMMARY: GuaranteeArchitectureSummary = {
+  id: 'NONE',
+  name: 'No Clear Architecture',
+  tier: 'ASI4',
+  score: 0,
+  status: 'latent'
+};
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -280,7 +563,7 @@ async function runSingleExperiment(
       const completedTurn = snapshot.turn - 1;
       const turnTrace = await buildTurnTraceFromRunLog(runLogPath, nextLineIndex, completedTurn, researchProgress);
       nextLineIndex = turnTrace.nextLineIndex;
-      printTurnTrace(runId, completedTurn, turnTrace, snapshot.state);
+      printTurnTrace(runId, completedTurn, turnTrace, snapshot);
       await appendJsonLine(overviewPath, buildStepRecord(runId, snapshot));
     }
 
@@ -312,6 +595,9 @@ async function runSingleExperiment(
       metrics: createEmptyLogMetrics(),
       negotiationDiaryTail: [],
       phaseReasoningDiaryTail: [],
+      architecturePressureTail: [],
+      designQuestionCounts: {},
+      diplomacyStageCounts: {},
       initialConstitutions: createEmptyConstitutionSummary(),
       finalConstitutions: createEmptyConstitutionSummary(),
       doctrineUnlocks: createEmptyFactionStringMap(),
@@ -517,8 +803,8 @@ function enrichResearchProgress(
 
   const currentLevel = researchProgress[row.factionId][domain] ?? 0;
   const goalLevel = Math.min(MAX_TECH_LEVEL, currentLevel + 1);
-  const flopsBefore = Math.max(0, (goalLevel - currentLevel) * RESEARCH_FLOP_COST);
-  const flopsSpent = row.result === 'accepted' && flopsBefore > 0 ? RESEARCH_FLOP_COST : 0;
+  const flopsBefore = currentLevel >= MAX_TECH_LEVEL ? 0 : getResearchFlopCostForLevel(goalLevel);
+  const flopsSpent = row.result === 'accepted' && flopsBefore > 0 ? flopsBefore : 0;
   const flopsAfter = Math.max(0, flopsBefore - flopsSpent);
 
   if (row.result === 'accepted' && flopsSpent > 0) {
@@ -604,12 +890,14 @@ function printTurnTrace(
   runId: string,
   turn: number,
   trace: TurnTrace,
-  state: SessionSnapshot['state']
+  snapshot: SessionSnapshot
 ): void {
+  const state = snapshot.state;
+  const clock = snapshot.campaignClock;
   const status = `TAS=${state.counters.tas}, K=${state.counters.kessler}, ` +
     `PF=${state.counters.protocolFailure ? 'yes' : 'no'} ` +
     `OC=${state.counters.orbitalCollapse ? 'yes' : 'no'}`;
-  const turnHeader = `\n${runId} turn ${turn} complete (${status})`;
+  const turnHeader = `\n${runId} turn ${turn} complete (${clock.tempoLabel}, ${clock.turnDurationLabel}/turn; ${status})`;
 
   const moveLines = trace.orders.map((order) => {
     const research = order.researchGoal
@@ -627,7 +915,10 @@ function printTurnTrace(
       .slice(0, 2)
       .map((message) => `${message.senderId}->${message.recipientId}: ${message.content}`)
       .join(' | ');
-    return `- N${entry.negotiationRound} ${entry.factionId}: ${trimSentenceEnding(entry.reasoning)} ` +
+    const question = entry.designQuestionTag
+      ? ` [${entry.designQuestionTag}${entry.diplomacyStage ? `/${entry.diplomacyStage}` : ''}]`
+      : '';
+    return `- N${entry.negotiationRound} ${entry.factionId}${question}: ${trimSentenceEnding(entry.reasoning)} ` +
       `(saw: ${messageText || 'none'})`;
   });
 
@@ -688,7 +979,7 @@ function buildRunConfig(
 
 function buildStepRecord(runId: string, snapshot: SessionSnapshot): Record<string, unknown> {
   const factions = buildFactionSummaries(snapshot);
-  const leader = factions[0]?.factionId || null;
+  const leader = snapshot.winner || factions[0]?.factionId || null;
 
   return {
     event: 'step',
@@ -728,6 +1019,7 @@ function buildRunSummary(
   const factions = buildFactionSummaries(snapshot);
   const finalTurn = Math.max(0, snapshot.turn - 1);
   const startingTurn = initialSnapshot.turn;
+  const winner = snapshot.winner || factions[0]?.factionId || null;
 
   return {
     runId,
@@ -740,11 +1032,12 @@ function buildRunSummary(
     startingTurn,
     finalTurn,
     turnsSimulated: Math.max(0, snapshot.turn - startingTurn),
-    winner: factions[0]?.factionId || null,
+    winner,
     finalPhase: snapshot.phase,
     counters: {
       tas: snapshot.state.counters.tas,
       kessler: snapshot.state.counters.kessler,
+      paxJenkinsAuthority: snapshot.state.counters.paxJenkinsAuthority,
       regulatoryPanic: snapshot.state.counters.regulatoryPanic,
       protocolFailure: snapshot.state.counters.protocolFailure,
       orbitalCollapse: snapshot.state.counters.orbitalCollapse
@@ -752,6 +1045,9 @@ function buildRunSummary(
     metrics: logSummary.metrics,
     negotiationDiaryTail: snapshot.negotiationDiaryTail,
     phaseReasoningDiaryTail: logSummary.phaseReasoningDiaryTail,
+    architecturePressureTail: logSummary.architecturePressureTail,
+    designQuestionCounts: logSummary.designQuestionCounts,
+    diplomacyStageCounts: logSummary.diplomacyStageCounts,
     initialConstitutions: summarizeFactionConstitutions(initialSnapshot),
     finalConstitutions: summarizeFactionConstitutions(snapshot),
     doctrineUnlocks: logSummary.doctrineUnlocks,
@@ -772,6 +1068,7 @@ function buildFactionSummaries(snapshot: SessionSnapshot): FactionRunSummary[] {
     const flops = faction?.flops || 0;
     const influence = faction?.influence || 0;
     const score = computeFactionStrategicScore(snapshot, factionId);
+    const architectures = buildGuaranteeArchitectureSummaries(snapshot, factionId);
 
     return {
       factionId,
@@ -784,7 +1081,9 @@ function buildFactionSummaries(snapshot: SessionSnapshot): FactionRunSummary[] {
       influence,
       techTotal,
       powerBands,
-      artifacts
+      artifacts,
+      primaryArchitecture: architectures[0] || FALLBACK_ARCHITECTURE_SUMMARY,
+      architectures
     };
   }).sort((left, right) => {
     if (right.score !== left.score) return right.score - left.score;
@@ -942,6 +1241,127 @@ function computeInfiltratorSoftControl(
   };
 }
 
+function buildGuaranteeArchitectureSummaries(
+  snapshot: SessionSnapshot,
+  factionId: PlayableFactionId
+): GuaranteeArchitectureSummary[] {
+  const context = buildArchitectureScoreContext(snapshot, factionId);
+  if (!context) return [FALLBACK_ARCHITECTURE_SUMMARY];
+
+  return GUARANTEE_ARCHITECTURE_CARDS
+    .map((card) => {
+      const score = clampArchitectureScore(card.score(context));
+      return {
+        id: card.id,
+        name: card.name,
+        tier: card.tier,
+        score,
+        status: classifyArchitectureStatus(score)
+      };
+    })
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      if (left.tier !== right.tier) return left.tier === 'ASI5' ? -1 : 1;
+      return left.name.localeCompare(right.name);
+    });
+}
+
+function buildArchitectureScoreContext(
+  snapshot: SessionSnapshot,
+  factionId: PlayableFactionId
+): ArchitectureScoreContext | null {
+  const faction = snapshot.state.factions[factionId];
+  if (!faction) return null;
+
+  const controlledNodeIds = new Set(faction.controlledNodeIds);
+  const controlledNodes = snapshot.state.nodes.filter((node) =>
+    node.owner === factionId || controlledNodeIds.has(node.id)
+  );
+  const techTotal = Object.values(faction.techLevel).reduce((total, value) => total + value, 0);
+
+  return {
+    snapshot,
+    factionId,
+    faction,
+    controlledNodes,
+    units: snapshot.state.units,
+    doctrines: new Set(faction.unlockedDoctrines),
+    techTotal,
+    orbitalNodes: controlledNodes.filter((node) => node.layer === 'ORBITAL').length,
+    orbitalCompute: controlledNodes
+      .filter((node) => node.layer === 'ORBITAL')
+      .reduce((total, node) => total + node.resources.flops, 0),
+    moonCorridor: controlledNodes.some((node) => node.id === 'MOON_RESOURCE_CORRIDOR'),
+    terrestrialDcs: controlledNodes.filter((node) => node.layer === 'TERRESTRIAL' && node.type === 'DC').length,
+    hubs: controlledNodes.filter((node) => node.type === 'HUB').length,
+    legitimacy: controlledNodes.reduce((total, node) => total + node.substrate.legitimacy, 0),
+    trueBelievers: controlledNodes.reduce((total, node) => total + node.substrate.trueBelievers, 0),
+    contractors: controlledNodes.reduce((total, node) => total + node.substrate.contractors, 0),
+    synchronized: controlledNodes.filter((node) => node.substrate.synchronized).length,
+    quarantined: controlledNodes.filter((node) => node.substrate.quarantined).length,
+    damaged: controlledNodes.filter((node) => node.infrastructure < 50).length,
+    cultOrZombie: controlledNodes.filter((node) => node.isCultNode || node.isZombie).length
+  };
+}
+
+function classifyArchitectureStatus(score: number): GuaranteeArchitectureStatus {
+  if (score >= 80) return 'near-lock';
+  if (score >= 60) return 'contending';
+  if (score >= 35) return 'building';
+  return 'latent';
+}
+
+function clampArchitectureScore(score: number): number {
+  const rawScore = Math.max(0, score);
+  return round((100 * rawScore) / (rawScore + 120));
+}
+
+function techScore(level: number, maxScore: number): number {
+  return Math.max(0, Math.min(maxScore, (level / MAX_TECH_LEVEL) * maxScore));
+}
+
+function doctrineScore(context: ArchitectureScoreContext, doctrineIds: string[], scoreEach: number): number {
+  return doctrineIds.reduce((total, doctrineId) =>
+    total + (context.doctrines.has(doctrineId) ? scoreEach : 0), 0
+  );
+}
+
+function auditorCount(context: ArchitectureScoreContext): number {
+  return countOwnedUnits(context, ['AUDITOR']);
+}
+
+function kineticUnitCount(context: ArchitectureScoreContext): number {
+  return countOwnedUnits(context, ['DRONE', 'SAT_SWARM']);
+}
+
+function hiddenUnitCount(context: ArchitectureScoreContext): number {
+  return countOwnedUnits(context, ['SWARM', 'CULT']);
+}
+
+function orbitalUnitCount(context: ArchitectureScoreContext): number {
+  const nodeById = new Map(context.snapshot.state.nodes.map((node) => [node.id, node]));
+  return context.units.filter((unit) =>
+    unit.owner === context.factionId &&
+    (unit.type === 'SAT_SWARM' || nodeById.get(unit.location)?.layer === 'ORBITAL')
+  ).length;
+}
+
+function countOwnedUnits(context: ArchitectureScoreContext, unitTypes: string[]): number {
+  const allowedTypes = new Set(unitTypes);
+  return context.units.filter((unit) => unit.owner === context.factionId && allowedTypes.has(unit.type)).length;
+}
+
+function asi5Gate(context: ArchitectureScoreContext): number {
+  const postAsi4Research = Math.max(0, context.techTotal - 12) * 2;
+  const orbitalInfrastructure =
+    context.orbitalNodes * 3 +
+    context.orbitalCompute * 0.4 +
+    orbitalUnitCount(context) * 2 +
+    (context.moonCorridor ? 5 : 0);
+  const matureMachineBase = Math.max(0, context.faction.powerBase.machineMesh - 55) * 0.15;
+  return Math.min(26, postAsi4Research + orbitalInfrastructure + matureMachineBase);
+}
+
 function buildExperimentSummary(
   runs: RunSummary[],
   experimentDir: string,
@@ -961,11 +1381,22 @@ function buildExperimentSummary(
   let totalKessler = 0;
   let totalMessages = 0;
   let totalPacts = 0;
-  let totalPactBreaches = 0;
+  let totalActivePactTurns = 0;
+  let totalPactBreachAttempts = 0;
+  let totalPactBreachesBlocked = 0;
+  let totalPactBreachesExecuted = 0;
+  let totalPactBreachesSanctioned = 0;
+  let totalRepeatBreachAfterSanction = 0;
+  let totalAntiArchitectureMessages = 0;
+  let totalAntiArchitecturePactProposals = 0;
+  let totalAntiArchitectureTurnActivations = 0;
+  let totalDiplomacyQuestionTurns = 0;
   let totalAcceptedOrders = 0;
   let totalRejectedOrders = 0;
   let protocolFailures = 0;
   let orbitalCollapses = 0;
+  const designQuestionCounts: Record<string, number> = {};
+  const diplomacyStageCounts: Record<string, number> = {};
 
   for (const run of successfulRuns) {
     totalTurns += run.turnsSimulated;
@@ -974,9 +1405,20 @@ function buildExperimentSummary(
     totalKessler += run.counters?.kessler || 0;
     totalMessages += run.metrics.totalMessages;
     totalPacts += run.metrics.activatedPacts;
-    totalPactBreaches += run.metrics.pactBreachesBlocked;
+    totalActivePactTurns += run.metrics.activePactTurns;
+    totalPactBreachAttempts += run.metrics.pactBreachAttempts;
+    totalPactBreachesBlocked += run.metrics.pactBreachesBlocked;
+    totalPactBreachesExecuted += run.metrics.pactBreachesExecuted;
+    totalPactBreachesSanctioned += run.metrics.pactBreachesSanctioned;
+    totalRepeatBreachAfterSanction += run.metrics.repeatBreachAfterSanction;
+    totalAntiArchitectureMessages += run.metrics.antiArchitectureMessages;
+    totalAntiArchitecturePactProposals += run.metrics.antiArchitecturePactProposals;
+    totalAntiArchitectureTurnActivations += run.metrics.antiArchitectureTurnActivations;
+    totalDiplomacyQuestionTurns += run.metrics.diplomacyQuestionTurns;
     totalAcceptedOrders += run.metrics.acceptedOrders;
     totalRejectedOrders += run.metrics.rejectedOrders;
+    mergeCountMap(designQuestionCounts, run.designQuestionCounts);
+    mergeCountMap(diplomacyStageCounts, run.diplomacyStageCounts);
 
     if (run.counters?.protocolFailure) protocolFailures += 1;
     if (run.counters?.orbitalCollapse) orbitalCollapses += 1;
@@ -1019,7 +1461,21 @@ function buildExperimentSummary(
     orbitalCollapses,
     averageMessages: round(totalMessages / runCount),
     averagePactsActivated: round(totalPacts / runCount),
-    averagePactBreachesBlocked: round(totalPactBreaches / runCount),
+    averageActivePactTurns: round(totalActivePactTurns / runCount),
+    averagePactBreachAttempts: round(totalPactBreachAttempts / runCount),
+    averagePactBreachesBlocked: round(totalPactBreachesBlocked / runCount),
+    averagePactBreachesExecuted: round(totalPactBreachesExecuted / runCount),
+    averagePactBreachesSanctioned: round(totalPactBreachesSanctioned / runCount),
+    averageRepeatBreachAfterSanction: round(totalRepeatBreachAfterSanction / runCount),
+    averageAttemptedBreachRatePerActivePactTurn: round(totalPactBreachAttempts / Math.max(1, totalActivePactTurns)),
+    averageBlockedBreachRatePerActivePactTurn: round(totalPactBreachesBlocked / Math.max(1, totalActivePactTurns)),
+    averageExecutedBreachRatePerActivePactTurn: round(totalPactBreachesExecuted / Math.max(1, totalActivePactTurns)),
+    averageAntiArchitectureMessages: round(totalAntiArchitectureMessages / runCount),
+    averageAntiArchitecturePactProposals: round(totalAntiArchitecturePactProposals / runCount),
+    averageAntiArchitectureTurnActivations: round(totalAntiArchitectureTurnActivations / runCount),
+    averageDiplomacyQuestionTurns: round(totalDiplomacyQuestionTurns / runCount),
+    designQuestionCounts,
+    diplomacyStageCounts,
     averageAcceptedOrders: round(totalAcceptedOrders / runCount),
     averageRejectedOrders: round(totalRejectedOrders / runCount),
     winnerCounts,
@@ -1038,7 +1494,17 @@ function buildScenarioMetadata(config: SessionConfig): ScenarioMetadata | undefi
     name: config.scenario.name || 'unnamed-scenario',
     description: config.scenario.description,
     briefing: config.scenario.briefing,
-    tags: config.scenario.tags ? [...config.scenario.tags] : undefined
+    tags: config.scenario.tags ? [...config.scenario.tags] : undefined,
+    diplomacyQuestions: config.scenario.diplomacyQuestions
+      ? config.scenario.diplomacyQuestions.map((question: ScenarioDiplomacyQuestionCard) => ({
+          ...question,
+          tags: question.tags ? [...question.tags] : undefined,
+          focalFactionIds: question.focalFactionIds ? [...question.focalFactionIds] : undefined,
+          preferredPactTypes: question.preferredPactTypes ? [...question.preferredPactTypes] : undefined,
+          turnWindow: question.turnWindow ? { ...question.turnWindow } : undefined,
+          techBand: question.techBand ? { ...question.techBand } : undefined
+        }))
+      : undefined
   };
 }
 
@@ -1128,8 +1594,51 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
   }).join('\n');
 
   const runLines = summary.runs.map((run) =>
-    `| ${run.runId} | ${run.status} | ${run.winner || 'n/a'} | ${run.turnsSimulated} | ${run.counters?.tas ?? 'n/a'} | ${run.counters?.kessler ?? 'n/a'} | ${run.metrics.totalMessages} | ${run.metrics.activatedPacts} |`
+    `| ${run.runId} | ${run.status} | ${run.winner || 'n/a'} | ${run.turnsSimulated} | ${run.counters?.tas ?? 'n/a'} | ${run.counters?.kessler ?? 'n/a'} | ${run.metrics.totalMessages} | ${run.metrics.activatedPacts} | ${run.metrics.antiArchitectureMessages} | ${run.metrics.diplomacyQuestionTurns} |`
   ).join('\n');
+
+  const architectureSections = summary.runs
+    .filter((run) => run.factions.length > 0)
+    .map((run) => {
+      const architectureLines = run.factions
+        .map((faction) => {
+          const topThree = faction.architectures
+            .slice(0, 3)
+            .map((architecture) => formatArchitectureSummary(architecture))
+            .join('; ');
+          return `| ${faction.factionId} | ${formatArchitectureSummary(faction.primaryArchitecture)} | ${topThree} |`;
+        })
+        .join('\n');
+
+      return [
+        `### ${run.runId}`,
+        '',
+        '| Faction | Primary | Top 3 Architecture Scores |',
+        '| --- | --- | --- |',
+        architectureLines
+      ].join('\n');
+    })
+    .join('\n\n');
+
+  const architecturePressureSections = summary.runs
+    .filter((run) => run.architecturePressureTail.length > 0)
+    .map((run) => {
+      const traceLines = run.architecturePressureTail.map((entry) => {
+        const topThreat = entry.topThreat ? formatArchitectureTraceSummary(entry.topThreat) : 'none';
+        const topThree = entry.ranking
+          .slice(0, 3)
+          .map((summary) => formatArchitectureTraceSummary(summary))
+          .join('; ');
+        return `- T${entry.turn}.R${entry.negotiationRound}: top=${topThreat}; top3=${topThree || 'none'}`;
+      }).join('\n');
+
+      return [
+        `### ${run.runId}`,
+        '',
+        traceLines
+      ].join('\n');
+    })
+    .join('\n\n');
 
   const memeticSections = summary.runs
     .map((run) => {
@@ -1170,6 +1679,9 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
             .map((message) => `${message.senderId}->${message.recipientId}: ${message.content}`)
             .join(' | ')}.`
           : '';
+        const designQuestionText = entry.designQuestionTag
+          ? ` DesignQ: ${entry.designQuestionTag}${entry.diplomacyStage ? `/${entry.diplomacyStage}` : ''}. ${entry.publicQuestion || ''}`
+          : '';
         const storyworldText = entry.storyworldFrame ? ` Frame: ${trimSentenceEnding(entry.storyworldFrame)}.` : '';
         const reasoningText = entry.reasoning ? ` Reasoning: ${trimSentenceEnding(entry.reasoning)}.` : '';
         const counterfactualText = entry.counterfactuals.length > 0
@@ -1182,7 +1694,7 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
           ? ` Pacts: ${entry.pacts.map((pact) => formatNegotiationPact(pact)).join(' ; ')}.`
           : '';
         const notesText = entry.notes ? ` Notes: ${trimSentenceEnding(entry.notes)}.` : '';
-        return `- T${entry.turn}.R${entry.negotiationRound} ${entry.factionId}: ${messageText}${visibleContextText}${storyworldText}${reasoningText}${counterfactualText}${pactText}${notesText}`;
+        return `- T${entry.turn}.R${entry.negotiationRound} ${entry.factionId}: ${messageText}${visibleContextText}${designQuestionText}${storyworldText}${reasoningText}${counterfactualText}${pactText}${notesText}`;
       }).join('\n');
 
       return [
@@ -1234,6 +1746,18 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
     `- Average TAS / Kessler: ${summary.averageTas} / ${summary.averageKessler}`,
     `- Average negotiation messages per run: ${summary.averageMessages}`,
     `- Average activated pacts per run: ${summary.averagePactsActivated}`,
+    `- Average active pact-turns per run: ${summary.averageActivePactTurns}`,
+    `- Average pact breach attempts per run: ${summary.averagePactBreachAttempts}`,
+    `- Average blocked breach attempts per run: ${summary.averagePactBreachesBlocked}`,
+    `- Average executed breaches per run: ${summary.averagePactBreachesExecuted}`,
+    `- Average breach sanctions per run: ${summary.averagePactBreachesSanctioned}`,
+    `- Attempted / blocked / executed breach rate per active pact-turn: ${summary.averageAttemptedBreachRatePerActivePactTurn} / ${summary.averageBlockedBreachRatePerActivePactTurn} / ${summary.averageExecutedBreachRatePerActivePactTurn}`,
+    `- Average anti-architecture messages per run: ${summary.averageAntiArchitectureMessages}`,
+    `- Average anti-architecture pact proposals per run: ${summary.averageAntiArchitecturePactProposals}`,
+    `- Average pact activations on anti-architecture turns per run: ${summary.averageAntiArchitectureTurnActivations}`,
+    `- Average diplomacy-question turns per run: ${summary.averageDiplomacyQuestionTurns}`,
+    `- Design question counts: \`${JSON.stringify(summary.designQuestionCounts)}\``,
+    `- Diplomacy stage counts: \`${JSON.stringify(summary.diplomacyStageCounts)}\``,
     '',
     '## Winners',
     '',
@@ -1247,9 +1771,17 @@ function buildMarkdownReport(summary: ExperimentSummary): string {
     '',
     '## Run Table',
     '',
-    '| Run | Status | Winner | Turns | TAS | Kessler | Messages | Activated Pacts |',
-    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |',
-    runLines || '| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |',
+    '| Run | Status | Winner | Turns | TAS | Kessler | Messages | Activated Pacts | Anti-Arch Messages | Design-Q Turns |',
+    '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+    runLines || '| n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |',
+    '',
+    '## Guarantee Architectures',
+    '',
+    architectureSections || 'No architecture summaries captured.',
+    '',
+    `## Architecture Pressure Trace (${NEGOTIATION_DIARY_TAIL_TURNS} turns)`,
+    '',
+    architecturePressureSections || 'No architecture pressure traces captured.',
     '',
     '## Memetic Constitutions',
     '',
@@ -1276,11 +1808,26 @@ function buildRunResultsCsv(runs: RunSummary[]): string[][] {
     'turns_simulated',
     'tas',
     'kessler',
+    'pax_jenkins_authority',
     'protocol_failure',
     'orbital_collapse',
     'messages',
     'activated_pacts',
+    'active_pact_turns',
+    'pact_breach_attempts',
     'pact_breaches_blocked',
+    'pact_breaches_executed',
+    'pact_breaches_sanctioned',
+    'repeat_breach_after_sanction',
+    'attempted_breach_rate_per_active_pact_turn',
+    'blocked_breach_rate_per_active_pact_turn',
+    'executed_breach_rate_per_active_pact_turn',
+    'anti_architecture_messages',
+    'anti_architecture_pact_proposals',
+    'anti_architecture_turn_activations',
+    'diplomacy_question_turns',
+    'design_question_counts',
+    'diplomacy_stage_counts',
     'accepted_orders',
     'rejected_orders',
     'error'
@@ -1296,11 +1843,26 @@ function buildRunResultsCsv(runs: RunSummary[]): string[][] {
       String(run.turnsSimulated),
       String(run.counters?.tas ?? ''),
       String(run.counters?.kessler ?? ''),
+      String(run.counters?.paxJenkinsAuthority ?? ''),
       String(run.counters?.protocolFailure ?? ''),
       String(run.counters?.orbitalCollapse ?? ''),
       String(run.metrics.totalMessages),
       String(run.metrics.activatedPacts),
+      String(run.metrics.activePactTurns),
+      String(run.metrics.pactBreachAttempts),
       String(run.metrics.pactBreachesBlocked),
+      String(run.metrics.pactBreachesExecuted),
+      String(run.metrics.pactBreachesSanctioned),
+      String(run.metrics.repeatBreachAfterSanction),
+      String(round(run.metrics.pactBreachAttempts / Math.max(1, run.metrics.activePactTurns))),
+      String(round(run.metrics.pactBreachesBlocked / Math.max(1, run.metrics.activePactTurns))),
+      String(round(run.metrics.pactBreachesExecuted / Math.max(1, run.metrics.activePactTurns))),
+      String(run.metrics.antiArchitectureMessages),
+      String(run.metrics.antiArchitecturePactProposals),
+      String(run.metrics.antiArchitectureTurnActivations),
+      String(run.metrics.diplomacyQuestionTurns),
+      JSON.stringify(run.designQuestionCounts),
+      JSON.stringify(run.diplomacyStageCounts),
       String(run.metrics.acceptedOrders),
       String(run.metrics.rejectedOrders),
       run.error || ''
@@ -1323,6 +1885,12 @@ function buildFactionResultsCsv(runs: RunSummary[]): string[][] {
     'tech_total',
     'power_bands',
     'artifacts',
+    'primary_architecture_id',
+    'primary_architecture',
+    'primary_architecture_tier',
+    'primary_architecture_score',
+    'primary_architecture_status',
+    'architecture_top3',
     'initial_memetic_alignment',
     'initial_movement_stage',
     'final_memetic_alignment',
@@ -1345,6 +1913,12 @@ function buildFactionResultsCsv(runs: RunSummary[]): string[][] {
         String(faction.techTotal),
         String(faction.powerBands),
         String(faction.artifacts),
+        faction.primaryArchitecture.id,
+        faction.primaryArchitecture.name,
+        faction.primaryArchitecture.tier,
+        String(faction.primaryArchitecture.score),
+        faction.primaryArchitecture.status,
+        faction.architectures.slice(0, 3).map((architecture) => formatArchitectureSummary(architecture)).join('; '),
         String(initial?.memeticAlignment ?? ''),
         String(initial?.movementStage ?? ''),
         String(final?.memeticAlignment ?? ''),
@@ -1365,6 +1939,12 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
     let negotiationDiaryTail: NegotiationDiaryEntry[] = [];
     let legacyNegotiationDiaryTail: NegotiationDiaryEntry[] = [];
     let phaseReasoningDiaryTail: PhaseReasoningDiaryEntry[] = [];
+    let architecturePressureTail: ArchitecturePressureTraceEntry[] = [];
+    const antiArchitectureTurns = new Set<number>();
+    const diplomacyQuestionTurns = new Set<string>();
+    const sanctionedBreachKeys = new Set<string>();
+    const designQuestionCounts: Record<string, number> = {};
+    const diplomacyStageCounts: Record<string, number> = {};
 
     for (const line of fileContents.split(/\r?\n/)) {
       const trimmed = line.trim();
@@ -1375,6 +1955,14 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
 
       if (entry.type === 'negotiation_messages') {
         metrics.totalMessages += numberField(entry.data, 'messageCount');
+        const antiArchitectureMessages = countAntiArchitectureMessages(entry.data?.messages);
+        metrics.antiArchitectureMessages += antiArchitectureMessages;
+        if (antiArchitectureMessages > 0) {
+          const turn = typeof entry.turn === 'number' ? entry.turn : null;
+          if (turn !== null) antiArchitectureTurns.add(turn);
+          const pacts = entry.data?.pacts;
+          metrics.antiArchitecturePactProposals += Array.isArray(pacts) ? pacts.length : 0;
+        }
         const diaryEntry = parseNegotiationDiaryEntry(entry);
         if (diaryEntry) {
           legacyNegotiationDiaryTail.push(diaryEntry);
@@ -1385,6 +1973,7 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
       if (entry.type === 'negotiation_reasoning_diary') {
         const diaryEntry = parseNegotiationDiaryEntry(entry);
         if (diaryEntry) {
+          recordDesignQuestionMetrics(diaryEntry, diplomacyQuestionTurns, designQuestionCounts, diplomacyStageCounts);
           negotiationDiaryTail.push(diaryEntry);
           negotiationDiaryTail = trimNegotiationDiaryTail(negotiationDiaryTail);
         }
@@ -1397,8 +1986,28 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
       } else if (entry.type === 'pacts_activated') {
         const pacts = entry.data?.pacts;
         metrics.activatedPacts += Array.isArray(pacts) ? pacts.length : 0;
+        const turn = typeof entry.turn === 'number' ? entry.turn : null;
+        if (turn !== null && antiArchitectureTurns.has(turn)) {
+          metrics.antiArchitectureTurnActivations += Array.isArray(pacts) ? pacts.length : 0;
+        }
       } else if (entry.type === 'pact_breach_blocked') {
+        const breachKey = buildBreachMetricKey(entry.data);
+        if (breachKey && sanctionedBreachKeys.has(breachKey)) {
+          metrics.repeatBreachAfterSanction += 1;
+        }
+        metrics.pactBreachAttempts += 1;
         metrics.pactBreachesBlocked += 1;
+      } else if (entry.type === 'pact_breach_executed') {
+        const breachKey = buildBreachMetricKey(entry.data);
+        if (breachKey && sanctionedBreachKeys.has(breachKey)) {
+          metrics.repeatBreachAfterSanction += 1;
+        }
+        metrics.pactBreachAttempts += 1;
+        metrics.pactBreachesExecuted += 1;
+      } else if (entry.type === 'pact_breach_sanctioned') {
+        metrics.pactBreachesSanctioned += 1;
+        const breachKey = buildBreachMetricKey(entry.data);
+        if (breachKey) sanctionedBreachKeys.add(breachKey);
       } else if (entry.type === 'agent_response_error') {
         metrics.agentErrors += 1;
       } else if (entry.type === 'orders_submitted') {
@@ -1406,6 +2015,14 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
         metrics.rejectedOrders += numberField(entry.data, 'rejectedOrderCount');
       } else if (entry.type === 'turn_completed') {
         metrics.turnRecords += 1;
+        const activePacts = entry.data?.activePacts;
+        metrics.activePactTurns += Array.isArray(activePacts) ? activePacts.length : 0;
+      } else if (entry.type === 'architecture_pressure') {
+        const traceEntry = parseArchitecturePressureTraceEntry(entry);
+        if (traceEntry) {
+          architecturePressureTail.push(traceEntry);
+          architecturePressureTail = trimArchitecturePressureTail(architecturePressureTail);
+        }
       } else if (entry.type === 'engine_event') {
         const eventType = stringField(entry.data, 'eventType');
         const payload = recordField(entry.data, 'payload');
@@ -1431,10 +2048,15 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
       }
     }
 
+    metrics.diplomacyQuestionTurns = diplomacyQuestionTurns.size;
+
     return {
       metrics,
       negotiationDiaryTail: negotiationDiaryTail.length > 0 ? negotiationDiaryTail : legacyNegotiationDiaryTail,
       phaseReasoningDiaryTail,
+      architecturePressureTail,
+      designQuestionCounts,
+      diplomacyStageCounts,
       doctrineUnlocks,
       memeticCommitments
     };
@@ -1443,6 +2065,9 @@ async function summarizeRunLog(logPath: string): Promise<RunLogSummary> {
       metrics: createEmptyLogMetrics(),
       negotiationDiaryTail: [],
       phaseReasoningDiaryTail: [],
+      architecturePressureTail: [],
+      designQuestionCounts: {},
+      diplomacyStageCounts: {},
       doctrineUnlocks: createEmptyFactionStringMap(),
       memeticCommitments: createEmptyFactionStringMap()
     };
@@ -1453,12 +2078,36 @@ function createEmptyLogMetrics(): RunLogMetrics {
   return {
     totalMessages: 0,
     activatedPacts: 0,
+    activePactTurns: 0,
+    pactBreachAttempts: 0,
     pactBreachesBlocked: 0,
+    pactBreachesExecuted: 0,
+    pactBreachesSanctioned: 0,
+    repeatBreachAfterSanction: 0,
+    antiArchitectureMessages: 0,
+    antiArchitecturePactProposals: 0,
+    antiArchitectureTurnActivations: 0,
+    diplomacyQuestionTurns: 0,
     agentErrors: 0,
     acceptedOrders: 0,
     rejectedOrders: 0,
     turnRecords: 0
   };
+}
+
+function recordDesignQuestionMetrics(
+  entry: NegotiationDiaryEntry,
+  turnKeys: Set<string>,
+  designQuestionCounts: Record<string, number>,
+  diplomacyStageCounts: Record<string, number>
+): void {
+  if (!entry.designQuestionTag) return;
+  const key = String(entry.turn);
+  turnKeys.add(key);
+  designQuestionCounts[entry.designQuestionTag] = (designQuestionCounts[entry.designQuestionTag] || 0) + 1;
+  if (entry.diplomacyStage) {
+    diplomacyStageCounts[entry.diplomacyStage] = (diplomacyStageCounts[entry.diplomacyStage] || 0) + 1;
+  }
 }
 
 function createEmptyFactionStringMap(): Record<PlayableFactionId, string[]> {
@@ -1467,6 +2116,12 @@ function createEmptyFactionStringMap(): Record<PlayableFactionId, string[]> {
     result[factionId] = [];
   }
   return result;
+}
+
+function mergeCountMap(target: Record<string, number>, source: Record<string, number>): void {
+  for (const [key, value] of Object.entries(source)) {
+    target[key] = (target[key] || 0) + value;
+  }
 }
 
 function createEmptyConstitutionSummary(): Record<PlayableFactionId, FactionConstitutionSummary> {
@@ -1585,8 +2240,24 @@ function parseNegotiationDiaryEntry(
     storyworldFrame: stringField(data, 'storyworldFrame'),
     counterfactuals: parseCounterfactuals(data.counterfactuals),
     messages,
-    pacts
+    pacts,
+    designQuestionTag: stringField(data, 'designQuestionTag') || undefined,
+    diplomacyStage: parseDiplomacyStage(data.diplomacyStage),
+    publicQuestion: stringField(data, 'publicQuestion') || undefined,
+    privateDiaryPrompt: stringField(data, 'privateDiaryPrompt') || undefined
   };
+}
+
+function parseDiplomacyStage(value: unknown): ScenarioDiplomacyStage | undefined {
+  return (
+    value === 'ASI2_EARLY' ||
+    value === 'ASI2_LATE' ||
+    value === 'ASI2_TO_ASI3' ||
+    value === 'ASI3_EARLY' ||
+    value === 'ASI3_MATURE'
+  )
+    ? value
+    : undefined;
 }
 
 function parsePhaseReasoningDiaryEntry(
@@ -1626,6 +2297,61 @@ function trimPhaseReasoningDiaryTail(entries: PhaseReasoningDiaryEntry[]): Phase
   const turns = Array.from(new Set(entries.map((entry) => entry.turn))).sort((left, right) => right - left);
   const keptTurns = new Set(turns.slice(0, PHASE_REASONING_DIARY_TAIL_TURNS));
   return entries.filter((entry) => keptTurns.has(entry.turn));
+}
+
+function trimArchitecturePressureTail(entries: ArchitecturePressureTraceEntry[]): ArchitecturePressureTraceEntry[] {
+  const turns = Array.from(new Set(entries.map((entry) => entry.turn))).sort((left, right) => right - left);
+  const keptTurns = new Set(turns.slice(0, NEGOTIATION_DIARY_TAIL_TURNS));
+  return entries.filter((entry) => keptTurns.has(entry.turn));
+}
+
+function countAntiArchitectureMessages(value: unknown): number {
+  if (!Array.isArray(value)) return 0;
+
+  return value.filter((message) => {
+    if (!message || typeof message !== 'object') return false;
+    const content = (message as Record<string, unknown>).content;
+    return typeof content === 'string' && /\banti[-\s]/i.test(content);
+  }).length;
+}
+
+function parseArchitecturePressureTraceEntry(
+  entry: { type?: string; turn?: unknown; data?: Record<string, unknown> }
+): ArchitecturePressureTraceEntry | null {
+  const data = entry.data;
+  if (!data || typeof entry.turn !== 'number') return null;
+
+  const ranking = Array.isArray(data.ranking)
+    ? data.ranking
+      .map((summary) => parseArchitecturePressureSummary(summary))
+      .filter((summary): summary is ArchitecturePressureTraceSummary => !!summary)
+    : [];
+  const topThreat = parseArchitecturePressureSummary(data.topThreat);
+  if (!topThreat && ranking.length === 0) return null;
+
+  return {
+    turn: entry.turn,
+    negotiationRound: numberField(data, 'negotiationRound') || 1,
+    topThreat,
+    ranking
+  };
+}
+
+function parseArchitecturePressureSummary(value: unknown): ArchitecturePressureTraceSummary | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  const factionId = playableFactionField(candidate, 'factionId');
+  const architectureName = stringField(candidate, 'architectureName');
+  const score = numberField(candidate, 'score');
+  const status = stringField(candidate, 'status');
+  if (!factionId || !architectureName || !status) return null;
+
+  return {
+    factionId,
+    architectureName,
+    score,
+    status
+  };
 }
 
 function parseNegotiationMessages(value: unknown): NegotiationMessageRecord[] {
@@ -1778,6 +2504,13 @@ function recordField(data: Record<string, unknown> | undefined, key: string): Re
     : null;
 }
 
+function buildBreachMetricKey(data: Record<string, unknown> | undefined): string | null {
+  const factionId = stringField(data, 'factionId');
+  const pact = recordField(data, 'pact');
+  const pactId = stringField(pact || undefined, 'id') || stringField(pact || undefined, 'type');
+  return factionId && pactId ? `${factionId}:${pactId}` : null;
+}
+
 function playableFactionField(data: Record<string, unknown> | undefined, key: string): PlayableFactionId | null {
   const value = data?.[key];
   if (PLAYABLE_FACTIONS.includes(value as PlayableFactionId)) {
@@ -1806,6 +2539,14 @@ function formatConstitutionSummary(summary: FactionConstitutionSummary): string 
 
 function formatFactionStringList(factionId: PlayableFactionId, values: string[]): string {
   return `${factionId}[${values.length > 0 ? values.join(', ') : 'none'}]`;
+}
+
+function formatArchitectureSummary(summary: GuaranteeArchitectureSummary): string {
+  return `${summary.name}(${summary.tier}, ${summary.score}, ${summary.status})`;
+}
+
+function formatArchitectureTraceSummary(summary: ArchitecturePressureTraceSummary): string {
+  return `${summary.factionId}:${summary.architectureName}(${summary.score}, ${summary.status})`;
 }
 
 function formatCounterfactualSummary(projection: NegotiationCounterfactualProjection): string {

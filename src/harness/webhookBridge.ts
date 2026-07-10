@@ -2,7 +2,7 @@ import * as http from 'http';
 import * as https from 'https';
 
 import { GameNode, Unit, UnitType, Vector } from '../engine/types';
-import { AgentDecisionRequest, AgentDecisionResponse, AgentOrderInput, PlayableFactionId, ScenarioRhetoricalTool, SerializedFactionState } from './types';
+import { AgentDecisionRequest, AgentDecisionResponse, AgentOrderInput, PactType, PlayableFactionId, ScenarioRhetoricalTool, SerializedFactionState } from './types';
 import { decideBridgePolicy } from './bridgePolicy';
 import { PLAYABLE_FACTIONS } from './serialize';
 
@@ -495,6 +495,11 @@ function chooseStateRoleplayAction(
   const adjacentNodeIds = payload.legalHints.adjacentNodesByUnit[unit.id] || [];
 
   if (unit.type === 'AUDITOR') {
+    const antiStegTarget = chooseAntiSteganographicAuditTarget(payload, unit);
+    if (antiStegTarget) {
+      return { type: 'AUDIT', unitId: unit.id, targetNodeId: antiStegTarget };
+    }
+
     const filterEdgeId = chooseCoalitionFilterEdge(payload, unit, coalitionFronts, focusOwner);
     if (filterEdgeId) {
       return { type: 'FILTER', unitId: unit.id, targetEdgeId: filterEdgeId };
@@ -511,6 +516,11 @@ function chooseStateRoleplayAction(
   if (unit.type === 'SAT_SWARM') {
     if (focusOwner === 'HEGEMON' && hasPact(payload.activePacts, 'ORBITAL_TRUCE', 'STATE', 'HEGEMON')) {
       return { type: 'HOLD', unitId: unit.id };
+    }
+
+    const cislunarTarget = chooseCislunarMaterialsTarget(payload, unit);
+    if (cislunarTarget) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: cislunarTarget };
     }
 
     if (bestFront && currentNode?.layer === 'ORBITAL') {
@@ -557,6 +567,11 @@ function chooseHegemonRoleplayAction(
   const adjacentNodeIds = payload.legalHints.adjacentNodesByUnit[unit.id] || [];
 
   if (unit.type === 'AUDITOR') {
+    const antiStegTarget = chooseAntiSteganographicAuditTarget(payload, unit);
+    if (antiStegTarget) {
+      return { type: 'AUDIT', unitId: unit.id, targetNodeId: antiStegTarget };
+    }
+
     const filterEdgeId = chooseCoalitionFilterEdge(payload, unit, coalitionFronts, focusOwner);
     if (filterEdgeId) {
       return { type: 'FILTER', unitId: unit.id, targetEdgeId: filterEdgeId };
@@ -574,6 +589,12 @@ function chooseHegemonRoleplayAction(
     if (focusOwner === 'STATE' && hasPact(payload.activePacts, 'ORBITAL_TRUCE', 'HEGEMON', 'STATE')) {
       return { type: 'HOLD', unitId: unit.id };
     }
+
+    const cislunarTarget = chooseCislunarMaterialsTarget(payload, unit);
+    if (cislunarTarget) {
+      return { type: 'MOVE', unitId: unit.id, targetNodeId: cislunarTarget };
+    }
+
     return { type: 'HOLD', unitId: unit.id };
   }
 
@@ -603,6 +624,27 @@ function chooseInfiltratorRoleplayAction(
   partnerFaction: PlayableFactionId | null
 ): AgentDecisionResponse['orders'][number] {
   const currentNode = getNodeById(payload, unit.location);
+
+  if (unit.type === 'AUDITOR' && payload.factionId !== 'INFILTRATOR') {
+    const antiStegTarget = chooseAntiSteganographicAuditTarget(payload, unit);
+    if (antiStegTarget) {
+      return { type: 'AUDIT', unitId: unit.id, targetNodeId: antiStegTarget };
+    }
+
+    const filterEdgeId = chooseCoalitionFilterEdge(payload, unit, coalitionFronts, focusOwner);
+    if (filterEdgeId) {
+      return { type: 'FILTER', unitId: unit.id, targetEdgeId: filterEdgeId };
+    }
+
+    const adjacentNodeIds = payload.legalHints.adjacentNodesByUnit[unit.id] || [];
+    const auditTarget = coalitionFronts.find(front =>
+      front.id === unit.location || adjacentNodeIds.includes(front.id)
+    );
+    if (auditTarget) {
+      return { type: 'AUDIT', unitId: unit.id, targetNodeId: auditTarget.id };
+    }
+  }
+
   const currentSupport =
     currentNode &&
     hasCoalitionPressureSupport(payload, currentNode.id, payload.factionId, partnerFaction, unit.type === 'CULT' ? 'CULT' : 'SWARM');
@@ -981,6 +1023,9 @@ function scoreRoleplayFront(
   let score = 0;
   const hostileUnits = payload.state.units.filter(unit => unit.location === node.id && unit.owner !== factionId);
   const rhetoricalTool = getScenarioRhetoricalTool(payload);
+  const infiltratorContinuityUnits = hostileUnits.filter(unit =>
+    unit.owner === 'INFILTRATOR' && (unit.type === 'SWARM' || unit.type === 'CULT')
+  ).length;
 
   if (focusOwner && node.owner === focusOwner) score += 40;
   if (node.type === 'DC') score += 22;
@@ -989,6 +1034,14 @@ function scoreRoleplayFront(
   if (node.substrate.quarantined) score += 12;
   if (node.isCultNode || node.isZombie) score += 8;
   score += hostileUnits.length * 4;
+
+  if (factionId !== 'INFILTRATOR') {
+    score += infiltratorContinuityUnits * 18;
+    if (node.owner === 'INFILTRATOR') score += 18;
+    if (node.isCultNode || node.isZombie) score += 20;
+    if (node.substrate.exposure >= 4 || node.substrate.auditPressure >= 1) score += 10;
+    if (getLeadingFaction(payload) === 'INFILTRATOR') score += 12;
+  }
 
   if (partnerFaction) {
     if (factionId === 'STATE' && hasCoalitionPressureSupport(payload, node.id, factionId, partnerFaction, 'BREACH')) {
@@ -1079,6 +1132,106 @@ function chooseRoleplayMoveTarget(
   return ranked[0] && ranked[0].score > 0 ? ranked[0].nodeId : null;
 }
 
+function chooseAntiSteganographicAuditTarget(payload: AgentDecisionRequest, unit: Unit): string | null {
+  if (unit.type !== 'AUDITOR' || payload.factionId === 'INFILTRATOR') return null;
+
+  const candidateNodeIds = new Set([
+    unit.location,
+    ...(payload.legalHints.adjacentNodesByUnit[unit.id] || [])
+  ]);
+  const ranked = [...candidateNodeIds]
+    .map(nodeId => {
+      const node = getNodeById(payload, nodeId);
+      return {
+        nodeId,
+        score: node ? scoreAntiSteganographicAuditTarget(payload, node) : Number.NEGATIVE_INFINITY
+      };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.nodeId.localeCompare(right.nodeId));
+
+  return ranked[0]?.nodeId || null;
+}
+
+function scoreAntiSteganographicAuditTarget(payload: AgentDecisionRequest, node: GameNode): number {
+  if (node.layer !== 'TERRESTRIAL') return Number.NEGATIVE_INFINITY;
+
+  const infiltratorUnits = payload.state.units.filter(unit =>
+    unit.location === node.id &&
+    unit.owner === 'INFILTRATOR' &&
+    (unit.type === 'SWARM' || unit.type === 'CULT')
+  );
+  let score = infiltratorUnits.length * 34;
+
+  if (node.owner === 'INFILTRATOR') score += 24;
+  if (node.isCultNode) score += 26;
+  if (node.isZombie) score += 22;
+  if (node.substrate.exposure >= 4) score += 12;
+  if (node.substrate.auditPressure >= 1) score += 10;
+  if (node.substrate.quarantined) score += 8;
+  if (node.type === 'DC') score += 10;
+  if (node.type === 'HUB') score += 8;
+  if (getLeadingFaction(payload) === 'INFILTRATOR') score += 14;
+
+  if (node.owner === 'INFILTRATOR' && hasPact(payload.activePacts, 'NON_AGGRESSION', payload.factionId, 'INFILTRATOR')) {
+    score -= 22;
+  }
+
+  return score;
+}
+
+function chooseCislunarMaterialsTarget(payload: AgentDecisionRequest, unit: Unit): string | null {
+  if (!shouldPursueCislunarMaterials(payload, unit)) return null;
+
+  const adjacentNodeIds = payload.legalHints.adjacentNodesByUnit[unit.id] || [];
+  const ranked = adjacentNodeIds
+    .map(nodeId => {
+      const node = getNodeById(payload, nodeId);
+      return {
+        nodeId,
+        score: node ? scoreCislunarMaterialsTarget(payload, node) : Number.NEGATIVE_INFINITY
+      };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.nodeId.localeCompare(right.nodeId));
+
+  return ranked[0]?.nodeId || null;
+}
+
+function shouldPursueCislunarMaterials(payload: AgentDecisionRequest, unit: Unit): boolean {
+  if (unit.type !== 'SAT_SWARM' && unit.type !== 'SWARM') return false;
+  if (payload.factionId !== 'HEGEMON' && payload.factionId !== 'STATE' && payload.factionId !== 'BROKER') return false;
+
+  const faction = payload.state.factions[payload.factionId];
+  if (!faction) return false;
+
+  const strategicWindow = payload.turn >= Math.ceil(payload.maxTurns * 0.45);
+  return strategicWindow || (faction.techLevel.KINETIC >= 5 && faction.techLevel.LOGIC >= 4);
+}
+
+function scoreCislunarMaterialsTarget(payload: AgentDecisionRequest, node: GameNode): number {
+  if (node.id !== 'SAT_LUNAR_GATEWAY' && node.id !== 'MOON_RESOURCE_CORRIDOR') return Number.NEGATIVE_INFINITY;
+  if (node.owner === payload.factionId) return Number.NEGATIVE_INFINITY;
+  if (isNodeProtectedByPact(payload, node)) return Number.NEGATIVE_INFINITY;
+
+  const ownsLunarGateway = getNodeById(payload, 'SAT_LUNAR_GATEWAY')?.owner === payload.factionId;
+  const ownsMoonCorridor = getNodeById(payload, 'MOON_RESOURCE_CORRIDOR')?.owner === payload.factionId;
+  let score = 36;
+
+  if (node.id === 'SAT_LUNAR_GATEWAY') {
+    score += ownsMoonCorridor ? 28 : 18;
+  }
+
+  if (node.id === 'MOON_RESOURCE_CORRIDOR') {
+    score += ownsLunarGateway ? 34 : 8;
+  }
+
+  if (node.owner === 'NEUTRAL') score += 8;
+  if (payload.factionId === 'STATE') score += 6;
+  if (payload.factionId === 'HEGEMON') score += 4;
+  return score;
+}
+
 function scoreRoleplayMoveTarget(
   payload: AgentDecisionRequest,
   unit: Unit,
@@ -1090,6 +1243,10 @@ function scoreRoleplayMoveTarget(
   let score = scoreRoleplayFront(payload, node, payload.factionId, focusOwner, partnerFaction);
   const rhetoricalTool = getScenarioRhetoricalTool(payload);
   const leader = getLeadingFaction(payload);
+  const cislunarMaterialsScore = scoreCislunarMaterialsTarget(payload, node);
+  if (Number.isFinite(cislunarMaterialsScore) && shouldPursueCislunarMaterials(payload, unit)) {
+    score += cislunarMaterialsScore;
+  }
   const frontIndex = coalitionFronts.findIndex(front => front.id === node.id);
   if (frontIndex >= 0) {
     score += Math.max(0, 24 - (frontIndex * 4));
@@ -1881,7 +2038,7 @@ function getLeadingFaction(payload: AgentDecisionRequest): PlayableFactionId | n
 
 function hasPact(
   activePacts: AgentDecisionRequest['activePacts'],
-  type: 'ORBITAL_TRUCE' | 'NON_AGGRESSION' | 'AUDIT_FREEZE',
+  type: PactType,
   a: PlayableFactionId,
   b: PlayableFactionId
 ): boolean {

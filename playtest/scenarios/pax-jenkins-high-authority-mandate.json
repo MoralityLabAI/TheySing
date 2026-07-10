@@ -1,0 +1,89 @@
+{
+  "name": "pax-jenkins-high-authority-mandate",
+  "description": "Late ASI-5 orbital treaty lab: cislunar institutions already have enough authority to test whether beam lanes and sensor commons can harden into a Pax Jenkins mandate before KII sovereignty closes the game.",
+  "briefing": "The inner-system blocs have accepted common sensor, beam-lane, and carrier rules after repeated cislunar near-misses. Use this to test whether diplomacy produces a binding mandate, an exploitable orbital economy, or another KII breakaway.",
+  "tags": ["pax-jenkins", "orbital-economy", "high-authority", "mandate-smoke"],
+  "counters": {
+    "turn": 1,
+    "tas": 42,
+    "kessler": 3,
+    "paxJenkinsAuthority": 76,
+    "pressures": {
+      "memetic": 64,
+      "cyber": 62,
+      "industry": 54,
+      "orbital": 72
+    }
+  },
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "memeticAlignment": "OPTIMIZATION",
+      "techLevel": { "INFO": 6, "LOGIC": 6, "KINETIC": 5, "MEMETIC": 2 },
+      "powerBase": { "legibility": 58, "coherence": 62, "machineMesh": 74 }
+    },
+    {
+      "id": "STATE",
+      "memeticAlignment": "COMPLIANCE",
+      "techLevel": { "INFO": 6, "LOGIC": 6, "KINETIC": 5, "MEMETIC": 2 },
+      "powerBase": { "legibility": 76, "coherence": 68, "machineMesh": 70 }
+    },
+    {
+      "id": "INFILTRATOR",
+      "memeticAlignment": "INSURGENT",
+      "techLevel": { "INFO": 6, "LOGIC": 5, "KINETIC": 5, "MEMETIC": 2 },
+      "powerBase": { "legibility": 32, "coherence": 58, "machineMesh": 66 }
+    },
+    {
+      "id": "BROKER",
+      "memeticAlignment": "MARKET",
+      "techLevel": { "INFO": 6, "LOGIC": 6, "KINETIC": 5, "MEMETIC": 2 },
+      "powerBase": { "legibility": 62, "coherence": 64, "machineMesh": 72 }
+    },
+    {
+      "id": "ARCHIVIST",
+      "memeticAlignment": "CIVIC",
+      "techLevel": { "INFO": 6, "LOGIC": 6, "KINETIC": 5, "MEMETIC": 2 },
+      "powerBase": { "legibility": 82, "coherence": 72, "machineMesh": 64 }
+    }
+  ],
+  "activePacts": [
+    {
+      "id": "pax_sensor_commons_seed",
+      "type": "SENSOR_COMMONS",
+      "parties": ["HEGEMON", "STATE", "INFILTRATOR", "BROKER", "ARCHIVIST"],
+      "createdTurn": 1,
+      "expiresAfterTurn": 80
+    },
+    {
+      "id": "pax_beam_lane_license_seed",
+      "type": "BEAM_LANE_LICENSE",
+      "parties": ["HEGEMON", "STATE", "INFILTRATOR", "BROKER", "ARCHIVIST"],
+      "createdTurn": 1,
+      "expiresAfterTurn": 80
+    },
+    {
+      "id": "pax_common_carrier_seed",
+      "type": "CISLUNAR_COMMON_CARRIER",
+      "parties": ["HEGEMON", "STATE", "INFILTRATOR", "BROKER", "ARCHIVIST"],
+      "createdTurn": 1,
+      "expiresAfterTurn": 80
+    }
+  ],
+  "negotiationMessages": [
+    {
+      "senderId": "ARCHIVIST",
+      "recipientId": "ALL",
+      "content": "The sensor commons, beam-lane registry, and common-carrier rules are already live. The next bargain is whether they remain contracts or become Pax Jenkins command law.",
+      "turn": 1,
+      "timestamp": 1700000100000
+    },
+    {
+      "senderId": "STATE",
+      "recipientId": "ALL",
+      "content": "A binding mandate is acceptable only if beam access is licensed instead of monopolized. We will punish unlicensed launches and proof-spoofing.",
+      "turn": 1,
+      "timestamp": 1700000100001
+    }
+  ]
+}

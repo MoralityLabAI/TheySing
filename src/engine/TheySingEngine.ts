@@ -105,6 +105,7 @@ class TheySingEngine {
             counters: {
                 tas: 0,
                 kessler: 0,
+                paxJenkinsAuthority: 0,
                 pressures: {
                     memetic: 0,
                     cyber: 0,
@@ -161,6 +162,16 @@ class TheySingEngine {
                 adjacent.push(edge.from);
         }
         return adjacent;
+    }
+    isAdjacentOrSameUnitLocation(unit, nodeId) {
+        if (unit.location === nodeId) {
+            return true;
+        }
+        return this.getAdjacentNodes(unit.location).includes(nodeId);
+    }
+    formatDelta(before, after) {
+        const delta = after - before;
+        return delta >= 0 ? `+${delta}` : `${delta}`;
     }
     getEdgeBetween(nodeA, nodeB): types_1.GameEdge | undefined {
         for (const edge of this.state.edges.values()) {
@@ -494,6 +505,48 @@ class TheySingEngine {
                 return { valid: false, reason: 'Unit not adjacent to edge' };
             }
         }
+        const actingFaction = this.state.factions.get(factionId);
+        const unit = order.unitId ? this.state.units.get(order.unitId) : null;
+        if (order.type === 'RECRUITMENT_PULSE') {
+            if (!unit)
+                return { valid: false, reason: 'Recruitment pulse needs a unit' };
+            const targetNode = this.state.nodes.get(order.targetNodeId || unit.location);
+            if (!targetNode)
+                return { valid: false, reason: 'Recruitment pulse target node not found' };
+            if (targetNode.layer !== 'TERRESTRIAL') {
+                return { valid: false, reason: 'Recruitment pulse is only legal on terrestrial nodes' };
+            }
+            if (!this.isAdjacentOrSameUnitLocation(unit, targetNode.id))
+                return { valid: false, reason: 'Recruitment pulse must target current or adjacent node' };
+            if (!actingFaction || actingFaction.influence < 1) {
+                return { valid: false, reason: 'Insufficient influence for recruitment pulse' };
+            }
+        }
+        if (order.type === 'BROKER_LEVERAGE') {
+            if (!unit)
+                return { valid: false, reason: 'Broker leverage needs a unit' };
+            if (unit.owner !== 'BROKER') {
+                return { valid: false, reason: 'Only BROKER can use broker leverage' };
+            }
+            const targetNode = this.state.nodes.get(order.targetNodeId || unit.location);
+            if (!targetNode) {
+                return { valid: false, reason: 'Broker leverage target node not found' };
+            }
+            if (targetNode.layer !== 'TERRESTRIAL') {
+                return { valid: false, reason: 'Broker leverage only applies to terrestrial infrastructure' };
+            }
+            if (!this.isAdjacentOrSameUnitLocation(unit, targetNode.id))
+                return { valid: false, reason: 'Broker leverage must target current or adjacent node' };
+            if (targetNode.owner === 'BROKER') {
+                return { valid: false, reason: 'Broker leverage cannot be used on owned nodes' };
+            }
+            if (targetNode.substrate.contractors === 0 && targetNode.type !== 'DC' && targetNode.type !== 'HUB') {
+                return { valid: false, reason: 'Broker leverage needs a node with visible contractor pathways or critical infrastructure' };
+            }
+            if (!actingFaction || actingFaction.influence < 1) {
+                return { valid: false, reason: 'Insufficient influence for broker leverage' };
+            }
+        }
         return { valid: true };
     }
     // ==========================================================================
@@ -529,6 +582,7 @@ class TheySingEngine {
                 this.updateFactionPowerBases();
                 this.updateFactionMovements();
                 this.updateAmbientStrategicPressure();
+                this.resolveGoblinIncident();
                 this.coolThermalsAtTurnEnd();
                 this.checkGlobalThresholds();
                 break;
@@ -581,8 +635,8 @@ class TheySingEngine {
         for (const order of allocationOrders) {
             this.resolveAllocationOrder(order);
         }
-        // Phase 2: Special actions (FILTER, AUDIT, ANTI_SAT, SABOTAGE)
-        const specialOrders = sortedOrders.filter(o => ['FILTER', 'AUDIT', 'ANTI_SAT', 'SABOTAGE', 'CONVERT'].includes(o.type));
+        // Phase 2: Special actions (FILTER, AUDIT, ANTI_SAT, SABOTAGE, treaty-use actions)
+        const specialOrders = sortedOrders.filter(o => ['FILTER', 'AUDIT', 'ANTI_SAT', 'SABOTAGE', 'CONVERT', 'CHALLENGE_MANDATE', 'LICENSED_BEAM_USE', 'REPAIR_ESCROW_CLAIM', 'RECRUITMENT_PULSE', 'BROKER_LEVERAGE'].includes(o.type));
         for (const order of specialOrders) {
             this.resolveSpecialOrder(order);
         }
@@ -594,7 +648,7 @@ class TheySingEngine {
         // Priority: BUILD/RESEARCH first, then FILTER/AUDIT, then MOVE/ATTACK
         const typePriority = {
             BUILD: 0, RESEARCH: 0,
-            FILTER: 1, AUDIT: 1, SABOTAGE: 1, ANTI_SAT: 1, CONVERT: 1,
+            FILTER: 1, AUDIT: 1, SABOTAGE: 1, ANTI_SAT: 1, CONVERT: 1, CHALLENGE_MANDATE: 1, LICENSED_BEAM_USE: 1, REPAIR_ESCROW_CLAIM: 1, RECRUITMENT_PULSE: 1, BROKER_LEVERAGE: 1,
             HOLD: 2, SUPPORT: 2, MOVE: 3, ATTACK: 3
         };
         return orders.sort((a, b) => {
@@ -668,6 +722,7 @@ class TheySingEngine {
         for (const band of this.getUnlockedBands(order.techDomain, previousLevel, newLevel)) {
             this.log('ALERT', `${faction.id} entered ${band.domain} L${band.level}: ${band.title}.`);
             this.adjustPressure(band.pressureKey, band.pressureDelta, `${gameData_1.FACTIONS[faction.id].name} activated ${band.title}. ${band.summary}`);
+            this.applyOrbitalEconomyBandEffect(faction.id, band);
         }
         if (accelerationSource) {
             this.log('SYSTEM', `${gameData_1.FACTIONS[faction.id].name} accelerated ${order.techDomain.toLowerCase()} research through ${accelerationSource}.`);
@@ -676,7 +731,10 @@ class TheySingEngine {
         this.emit('TAS_THRESHOLD', { tas: this.state.counters.tas, delta: tasDelta });
     }
     getResearchCost(factionId, domain) {
-        let cost = 2;
+        const faction = this.state.factions.get(factionId);
+        const currentLevel = faction?.techLevel[domain] || 0;
+        const targetLevel = Math.min(gameData_1.MAX_TECH_LEVEL, currentLevel + 1);
+        let cost = gameData_1.getResearchFlopCostForLevel(targetLevel);
         const ownedDcs = Array.from(this.state.nodes.values()).filter(node => node.owner === factionId && node.type === 'DC').length;
         const crisisActive = this.state.counters.pressures.cyber >= gameData_1.THRESHOLDS.PRESSURE_SURGE ||
             this.state.counters.pressures.orbital >= gameData_1.THRESHOLDS.PRESSURE_SURGE ||
@@ -684,7 +742,7 @@ class TheySingEngine {
         if (this.hasDoctrine(factionId, 'SOV_MOBILIZED_COMPUTE') &&
             (ownedDcs >= 2 || crisisActive) &&
             (domain === 'KINETIC' || domain === 'LOGIC')) {
-            cost = 1;
+            cost = Math.max(1, cost - 1);
         }
         return cost;
     }
@@ -773,6 +831,54 @@ class TheySingEngine {
     }
     getUnlockedBands(domain, previousLevel, newLevel) {
         return gameData_1.POWER_BANDS[domain].filter(band => previousLevel < band.level && newLevel >= band.level);
+    }
+    applyOrbitalEconomyBandEffect(factionId, band) {
+        const faction = this.state.factions.get(factionId);
+        if (!faction)
+            return;
+        const ownedOrbitalNodes = Array.from(this.state.nodes.values()).filter(node => node.owner === factionId && node.layer === 'ORBITAL');
+        if (ownedOrbitalNodes.length === 0)
+            return;
+        let upgradedNodes = 0;
+        let flopsAdded = 0;
+        let infrastructureAdded = 0;
+        let contractorsAdded = 0;
+        const applyUpgrade = (flopsDelta, infrastructureDelta, contractorDelta) => {
+            for (const node of ownedOrbitalNodes) {
+                const previousFlops = node.resources.flops;
+                const previousInfrastructure = node.infrastructure;
+                node.resources.flops = Math.min(24, node.resources.flops + flopsDelta);
+                node.infrastructure = Math.min(100, node.infrastructure + infrastructureDelta);
+                node.substrate.machineHardening = clamp(node.substrate.machineHardening + 1, 0, 10);
+                if (contractorDelta > 0) {
+                    node.substrate.contractors = clamp(node.substrate.contractors + contractorDelta, 0, 10);
+                    contractorsAdded += contractorDelta;
+                }
+                flopsAdded += node.resources.flops - previousFlops;
+                infrastructureAdded += node.infrastructure - previousInfrastructure;
+                upgradedNodes += 1;
+            }
+        };
+        if (band.domain === 'KINETIC' && band.level === 5) {
+            applyUpgrade(3, 5, 0);
+            this.log('SYSTEM', `${gameData_1.FACTIONS[factionId].name} packaged small radiation-hardened datacenter stacks into ${upgradedNodes} owned orbital constellations. Orbital FLOPs +${flopsAdded}, infrastructure +${infrastructureAdded}.`);
+        }
+        else if (band.domain === 'KINETIC' && band.level === 6) {
+            applyUpgrade(5, 8, 1);
+            this.log('SYSTEM', `${gameData_1.FACTIONS[factionId].name} moved from relay satellites to cislunar manufacturing support. Orbital FLOPs +${flopsAdded}, infrastructure +${infrastructureAdded}, contractor channels +${contractorsAdded}.`);
+        }
+        else if (band.domain === 'KINETIC' && band.level === 7) {
+            applyUpgrade(7, 10, 1);
+            this.log('SYSTEM', `${gameData_1.FACTIONS[factionId].name} scaled large orbital datacenters toward KII power economics. Orbital FLOPs +${flopsAdded}, infrastructure +${infrastructureAdded}.`);
+        }
+        else if (band.domain === 'LOGIC' && band.level === 5) {
+            applyUpgrade(1, 12, 0);
+            this.log('SYSTEM', `${gameData_1.FACTIONS[factionId].name} deployed recursive radiation assurance for orbital maintenance. Orbital infrastructure +${infrastructureAdded}.`);
+        }
+        else if (band.domain === 'INFO' && band.level === 5) {
+            applyUpgrade(2, 4, 1);
+            this.log('SYSTEM', `${gameData_1.FACTIONS[factionId].name} hardened remote maintenance and routing for orbital compute. Orbital FLOPs +${flopsAdded}, contractor channels +${contractorsAdded}.`);
+        }
     }
     getBuildCost(unitType) {
         const baseCost = gameData_1.UNIT_STATS[unitType].cost;
@@ -864,6 +970,76 @@ class TheySingEngine {
         if (previous < gameData_1.THRESHOLDS.PRESSURE_CRISIS && next >= gameData_1.THRESHOLDS.PRESSURE_CRISIS) {
             this.log('ALERT', `${PRESSURE_LABELS[key]} has entered crisis territory.`);
         }
+    }
+    resolveGoblinIncident() {
+        const turn = this.state.counters.turn;
+        const pressures = this.state.counters.pressures;
+        const pressureBonus = Math.min(0.12, (pressures.memetic + pressures.cyber + pressures.orbital) / 1800);
+        const panicBonus = this.state.counters.regulatoryPanic ? 0.05 : 0;
+        const chance = Math.min(0.34, 0.08 + pressureBonus + panicBonus + Math.min(0.06, turn * 0.002));
+        if (turn < 2 || this.randomFn() > chance) {
+            return;
+        }
+        const incident = gameData_1.GOBLIN_INCIDENTS[Math.floor(this.randomFn() * gameData_1.GOBLIN_INCIDENTS.length)];
+        if (!incident) {
+            return;
+        }
+        const terrestrialNodes = Array.from(this.state.nodes.values()).filter(node => node.layer === 'TERRESTRIAL');
+        const orbitalNodes = Array.from(this.state.nodes.values()).filter(node => node.layer === 'ORBITAL');
+        const targetPool = incident.kind === 'ORBITAL' && orbitalNodes.length > 0 ? orbitalNodes : terrestrialNodes;
+        const targetNode = targetPool[Math.floor(this.randomFn() * targetPool.length)];
+        const richestFaction = gameData_1.PLAYABLE_FACTION_IDS
+            .map(factionId => this.state.factions.get(factionId))
+            .filter(Boolean)
+            .sort((a, b) => (b.flops + b.influence) - (a.flops + a.influence))[0];
+        const effects = [];
+        let severity = 1;
+        if (incident.id === 'CACHE_IMP' && richestFaction) {
+            const prior = richestFaction.flops;
+            richestFaction.flops = Math.max(0, richestFaction.flops - 1);
+            severity = prior > richestFaction.flops ? 2 : 1;
+            effects.push({ type: 'FLOPS_SKIMMED', factionId: richestFaction.id, delta: richestFaction.flops - prior });
+            this.adjustPressure('cyber', 1, `${incident.name} made unattended compute accounting weird.`);
+        }
+        else if (incident.id === 'MEME_GREMLIN' && targetNode) {
+            targetNode.substrate.curiosity = clamp(targetNode.substrate.curiosity + 1, 0, 10);
+            targetNode.substrate.rubes = clamp(targetNode.substrate.rubes + 1, 0, 10);
+            severity = 2;
+            effects.push({ type: 'MEMETIC_NOISE', nodeId: targetNode.id, curiosity: targetNode.substrate.curiosity, rubes: targetNode.substrate.rubes });
+            this.adjustPressure('memetic', 1, `${incident.name} escaped containment as a joke people kept repeating.`);
+        }
+        else if (incident.id === 'CONTRACT_SPRITE' && targetNode) {
+            targetNode.substrate.contractors = clamp(targetNode.substrate.contractors + 1, 0, 10);
+            targetNode.infrastructure = Math.max(35, targetNode.infrastructure - 1);
+            effects.push({ type: 'PROCUREMENT_STATIC', nodeId: targetNode.id, contractors: targetNode.substrate.contractors, infrastructure: targetNode.infrastructure });
+            this.adjustPressure('industry', 1, `${incident.name} inserted tiny arbitration hooks into routine maintenance.`);
+        }
+        else if (incident.id === 'ORBIT_GNAWER' && targetNode) {
+            this.state.counters.kessler = clamp(this.state.counters.kessler + 1, 0, 100);
+            targetNode.infrastructure = Math.max(30, targetNode.infrastructure - 1);
+            severity = 2;
+            effects.push({ type: 'ORBITAL_NUISANCE', nodeId: targetNode.id, kessler: this.state.counters.kessler, infrastructure: targetNode.infrastructure });
+            this.adjustPressure('orbital', 1, `${incident.name} made station-keeping look haunted.`);
+        }
+        else if (incident.id === 'PROOF_TROLL' && targetNode) {
+            targetNode.substrate.auditPressure = clamp(targetNode.substrate.auditPressure + 1, 0, 2);
+            const tasDelta = this.addTas(0.25);
+            effects.push({ type: 'AUDIT_SPAM', nodeId: targetNode.id, auditPressure: targetNode.substrate.auditPressure, tasDelta });
+            this.adjustPressure('cyber', 1, `${incident.name} wasted verification bandwidth.`);
+        }
+        const targetName = targetNode ? targetNode.name : 'the substrate';
+        const message = `GOBLIN INCIDENT: ${incident.name} at ${targetName}. ${incident.description}`;
+        this.log(severity >= 2 ? 'ALERT' : 'SYSTEM', message);
+        this.emit('GOBLIN_INCIDENT', {
+            incidentId: incident.id,
+            name: incident.name,
+            kind: incident.kind,
+            description: incident.description,
+            targetNodeId: targetNode?.id || '',
+            targetNodeName: targetNode?.name || '',
+            severity,
+            effects
+        });
     }
     getFactionTechLevel(factionId, domain) {
         if (!factionId || factionId === 'NEUTRAL') {
@@ -2885,8 +3061,245 @@ class TheySingEngine {
             case 'CONVERT':
                 this.resolveConvert(order, unit);
                 break;
+            case 'CHALLENGE_MANDATE':
+                this.resolveMandateChallenge(order, unit);
+                break;
+            case 'LICENSED_BEAM_USE':
+                this.resolveLicensedBeamUse(order, unit);
+                break;
+            case 'REPAIR_ESCROW_CLAIM':
+                this.resolveRepairEscrowClaim(order, unit);
+                break;
+            case 'RECRUITMENT_PULSE':
+                this.resolveRecruitmentPulse(order, unit);
+                break;
+            case 'BROKER_LEVERAGE':
+                this.resolveBrokerLeverage(order, unit);
+                break;
         }
         unit.hasActed = true;
+    }
+    resolveRecruitmentPulse(order, unit) {
+        const faction = this.state.factions.get(unit.owner);
+        if (!faction)
+            return;
+        const targetNode = this.state.nodes.get(order.targetNodeId || unit.location);
+        if (!targetNode || targetNode.layer !== 'TERRESTRIAL')
+            return;
+        if (faction.influence <= 0)
+            return;
+        const profile = this.getMemeticCaptureProfile(unit.owner, targetNode);
+        const isHostile = targetNode.owner && targetNode.owner !== unit.owner && targetNode.owner !== 'NEUTRAL';
+        const baseStrength = 1 + Math.min(2, Math.floor(Math.max(faction.techLevel.MEMETIC, faction.techLevel.INFO, faction.techLevel.LOGIC) / 2));
+        let trueBelieverGain = clamp(Math.ceil((profile.trueBelievers - targetNode.substrate.trueBelievers) / 5), 0, 3);
+        let rubesGain = clamp(Math.ceil((profile.rubes - targetNode.substrate.rubes) / 5), 0, 3);
+        let contractorGain = clamp(Math.ceil((profile.contractors - targetNode.substrate.contractors) / 5), 0, 2);
+        if (trueBelieverGain === 0)
+            trueBelieverGain = 1;
+        if (rubesGain === 0)
+            rubesGain = 1;
+        if (contractorGain === 0 && targetNode.type === 'DC')
+            contractorGain = 1;
+        if (unit.type === 'CULT') {
+            trueBelieverGain += 1;
+        }
+        else if (unit.type === 'SWARM') {
+            contractorGain += 1;
+        }
+        else if (unit.type === 'DRONE' || unit.type === 'AUDITOR') {
+            rubesGain += 1;
+        }
+        const marketPulse = isHostile && this.hasDoctrine(unit.owner, 'MEM_MARKET_DESIRE');
+        if (marketPulse) {
+            rubesGain += 1;
+            contractorGain += 1;
+        }
+        const mythicPulse = !isHostile && this.hasDoctrine(unit.owner, 'MEM_COMPLIANCE_MYTHS');
+        const civicPulse = this.hasDoctrine(unit.owner, 'MEM_CIVIC_CANON');
+        if (civicPulse) {
+            targetNode.substrate.legitimacy = clamp(targetNode.substrate.legitimacy + 1, 0, 10);
+        }
+        if (mythicPulse) {
+            targetNode.substrate.legitimacy = clamp(targetNode.substrate.legitimacy + 1, 0, 10);
+            targetNode.substrate.quarantined = isHostile ? false : true;
+        }
+        faction.influence -= 1;
+        const before = {
+            truth: targetNode.substrate.trueBelievers,
+            rubes: targetNode.substrate.rubes,
+            contractors: targetNode.substrate.contractors,
+            legitimacy: targetNode.substrate.legitimacy,
+            exposure: targetNode.substrate.exposure
+        };
+        targetNode.substrate.curiosity = clamp(targetNode.substrate.curiosity + 1 + Math.floor(baseStrength / 2), 0, 10);
+        targetNode.substrate.exposure = clamp(targetNode.substrate.exposure + rubesGain + 1, 0, 10);
+        targetNode.substrate.legitimacy = clamp(targetNode.substrate.legitimacy + (isHostile ? 0 : 1), 0, 10);
+        targetNode.substrate.trueBelievers = clamp(targetNode.substrate.trueBelievers + trueBelieverGain, 0, 10);
+        targetNode.substrate.rubes = clamp(targetNode.substrate.rubes + rubesGain, 0, 10);
+        targetNode.substrate.contractors = clamp(targetNode.substrate.contractors + contractorGain, 0, 10);
+        const pressureDelta = isHostile ? 2 : 1;
+        this.adjustPressure('memetic', pressureDelta, `${gameData_1.FACTIONS[unit.owner].name} recruited via recruitment pulse at ${targetNode.name}`);
+        const summary = `${this.formatDelta(before.truth, targetNode.substrate.trueBelievers)}TB, ${this.formatDelta(before.rubes, targetNode.substrate.rubes)}R, ${this.formatDelta(before.contractors, targetNode.substrate.contractors)}C`;
+        const legitimacyDelta = targetNode.substrate.legitimacy - before.legitimacy;
+        this.log('ALERT', `${unit.owner} used recruitment pulse at ${targetNode.name}; residue shift ${summary}; legitimacy +${legitimacyDelta}.`);
+        this.emit('ORDER_RESOLVED', {
+            orderId: order.id,
+            orderType: order.type,
+            faction: unit.owner,
+            targetNodeId: targetNode.id,
+            influenceDelta: -1,
+            trueBelieverDelta: targetNode.substrate.trueBelievers - before.truth,
+            rubesDelta: targetNode.substrate.rubes - before.rubes,
+            contractorDelta: targetNode.substrate.contractors - before.contractors,
+            legitimacyDelta
+        });
+    }
+    resolveBrokerLeverage(order, unit) {
+        const faction = this.state.factions.get(unit.owner);
+        if (!faction || unit.owner !== 'BROKER')
+            return;
+        const targetNode = this.state.nodes.get(order.targetNodeId || unit.location);
+        if (!targetNode)
+            return;
+        if (faction.influence <= 0)
+            return;
+        const preOwner = targetNode.owner;
+        if (!preOwner || preOwner === 'BROKER') {
+            return;
+        }
+        const baseGain = 1 + (this.hasDoctrine('BROKER', 'BRK_CONTRACTOR_CLOUD_CHAINS') ? 1 : 0) + (this.hasDoctrine('BROKER', 'BRK_INSURANCE_CAPTURE') ? 1 : 0);
+        const beforeContractors = targetNode.substrate.contractors;
+        const beforeExposure = targetNode.substrate.exposure;
+        const beforeInfrastructure = targetNode.infrastructure;
+        const preexistingControl = targetNode.substrate.contractors >= 4 || targetNode.type === 'DC';
+        const contractorGain = preexistingControl ? 2 : 1;
+        const visibilityPressure = targetNode.type === 'DC' || targetNode.substrate.contractors >= 3 || targetNode.owner === 'INFILTRATOR' ? 1 : 0;
+        const influenceCost = Math.min(2, baseGain);
+        if (faction.influence < influenceCost) {
+            return;
+        }
+        faction.influence -= influenceCost;
+        targetNode.substrate.contractors = clamp(targetNode.substrate.contractors + contractorGain + (baseGain - 1), 0, 10);
+        targetNode.substrate.exposure = clamp(targetNode.substrate.exposure + visibilityPressure + 1, 0, 10);
+        targetNode.substrate.auditPressure = clamp(targetNode.substrate.auditPressure + (visibilityPressure > 0 ? 1 : 0), 0, 10);
+        if (this.hasDoctrine('BROKER', 'HID_SERVICE_SHELLS')) {
+            targetNode.substrate.rubes = clamp(targetNode.substrate.rubes + 1, 0, 10);
+            targetNode.infrastructure = Math.max(20, targetNode.infrastructure - 1);
+        }
+        if (targetNode.substrate.contractors >= 8 && targetNode.type === 'DC') {
+            const gained = this.grantFactionArtifact('BROKER', 'BACKCHANNEL_DOSSIER', `deeper leverage at ${targetNode.name}`);
+            if (gained) {
+                this.log('SYSTEM', `${gameData_1.FACTIONS.BROKER.name} gained a backchannel dossier from sustained contractor leverage at ${targetNode.name}.`);
+            }
+        }
+        if (targetNode.owner !== 'BROKER' && targetNode.type !== 'HUB' && targetNode.infrastructure >= 45 && preOwner !== 'NEUTRAL' && targetNode.substrate.contractors >= 9) {
+            this.adjustPressure('industry', 1, `${gameData_1.FACTIONS.BROKER.name} converted dependency into dependency capture at ${targetNode.name}`);
+        }
+        this.log('ALERT', `${gameData_1.FACTIONS.BROKER.name} converted broker leverage at ${targetNode.name}: contractors +${targetNode.substrate.contractors - beforeContractors}, exposure +${targetNode.substrate.exposure - beforeExposure}.`);
+        this.emit('ORDER_RESOLVED', {
+            orderId: order.id,
+            orderType: order.type,
+            faction: unit.owner,
+            targetNodeId: targetNode.id,
+            influenceDelta: -influenceCost,
+            contractorsDelta: targetNode.substrate.contractors - beforeContractors,
+            exposureDelta: targetNode.substrate.exposure - beforeExposure,
+            infrastructureDelta: targetNode.infrastructure - beforeInfrastructure,
+            priorOwner: preOwner
+        });
+    }
+    resolveLicensedBeamUse(order, unit) {
+        const faction = this.state.factions.get(unit.owner);
+        if (!faction)
+            return;
+        const target = this.state.nodes.get(order.targetNodeId || unit.location);
+        const cislunarBonus = target && (target.id === 'SAT_LUNAR_GATEWAY' || target.id === 'MOON_RESOURCE_CORRIDOR') ? 1 : 0;
+        const orbitalBonus = target?.layer === 'ORBITAL' ? 1 : 0;
+        const flopGain = clamp(1 + cislunarBonus + orbitalBonus + Math.floor(Math.max(faction.techLevel.INFO, faction.techLevel.KINETIC) / 6), 1, 4);
+        faction.flops += flopGain;
+        faction.influence += 1;
+        this.state.counters.pressures.orbital = roundMetric(Math.max(0, this.state.counters.pressures.orbital - 1.5));
+        if (this.state.counters.paxJenkinsAuthority >= 50) {
+            this.state.counters.paxJenkinsAuthority = roundMetric(Math.min(100, this.state.counters.paxJenkinsAuthority + 0.15));
+        }
+        this.log('SYSTEM', `${unit.owner} used licensed beam lanes for +${flopGain} FLOPs and cooled orbital pressure.`);
+        this.emit('ORDER_RESOLVED', {
+            orderId: order.id,
+            orderType: order.type,
+            faction: unit.owner,
+            targetNodeId: target?.id || null,
+            flopsDelta: flopGain,
+            influenceDelta: 1,
+            orbitalPressure: this.state.counters.pressures.orbital,
+            paxJenkinsAuthority: this.state.counters.paxJenkinsAuthority
+        });
+    }
+    resolveRepairEscrowClaim(order, unit) {
+        const faction = this.state.factions.get(unit.owner);
+        if (!faction)
+            return;
+        const target = this.state.nodes.get(order.targetNodeId || unit.location);
+        const repairTarget = target && (target.layer === 'ORBITAL' || target.id === 'SAT_LUNAR_GATEWAY' || target.id === 'MOON_RESOURCE_CORRIDOR')
+            ? target
+            : this.state.nodes.get('SAT_LUNAR_GATEWAY') || target;
+        const beforeInfrastructure = repairTarget?.infrastructure ?? null;
+        if (repairTarget) {
+            repairTarget.infrastructure = clamp((repairTarget.infrastructure || 0) + 10, 0, 100);
+            if (repairTarget.owner === unit.owner) {
+                repairTarget.resources.flops += 1;
+            }
+        }
+        faction.influence += 1;
+        this.state.counters.kessler = roundMetric(Math.max(0, this.state.counters.kessler - 0.6));
+        this.state.counters.pressures.orbital = roundMetric(Math.max(0, this.state.counters.pressures.orbital - 1));
+        if (this.state.counters.paxJenkinsAuthority >= 50) {
+            this.state.counters.paxJenkinsAuthority = roundMetric(Math.min(100, this.state.counters.paxJenkinsAuthority + 0.1));
+        }
+        this.log('SYSTEM', `${unit.owner} claimed repair escrow on ${repairTarget?.name || 'cislunar infrastructure'}.`);
+        this.emit('ORDER_RESOLVED', {
+            orderId: order.id,
+            orderType: order.type,
+            faction: unit.owner,
+            targetNodeId: repairTarget?.id || null,
+            infrastructureBefore: beforeInfrastructure,
+            infrastructureAfter: repairTarget?.infrastructure ?? null,
+            influenceDelta: 1,
+            kessler: this.state.counters.kessler,
+            orbitalPressure: this.state.counters.pressures.orbital,
+            paxJenkinsAuthority: this.state.counters.paxJenkinsAuthority
+        });
+    }
+    resolveMandateChallenge(order, unit) {
+        const faction = this.state.factions.get(unit.owner);
+        if (!faction)
+            return;
+        const before = this.state.counters.paxJenkinsAuthority || 0;
+        if (before <= 0) {
+            this.log('INFO', `${unit.owner} challenged Pax Jenkins authority, but no mandate authority exists yet.`);
+            return;
+        }
+        const infoLogic = Math.max(faction.techLevel.INFO, faction.techLevel.LOGIC);
+        const memetic = faction.techLevel.MEMETIC;
+        const unitBonus = unit.type === 'AUDITOR' ? 1 : unit.type === 'SAT_SWARM' ? 0.75 : 0.5;
+        const legibilityPenalty = Math.max(0, faction.powerBase.legibility - 65) / 45;
+        const reduction = clamp(Math.round(1 + infoLogic * 0.25 + memetic * 0.1 + unitBonus - legibilityPenalty), 1, 3);
+        this.state.counters.paxJenkinsAuthority = roundMetric(Math.max(0, before - reduction));
+        this.state.counters.pressures.cyber = clamp(this.state.counters.pressures.cyber + 1, 0, 100);
+        this.state.counters.pressures.memetic = clamp(this.state.counters.pressures.memetic + 1, 0, 100);
+        if (this.state.counters.paxJenkinsAuthority >= 50) {
+            this.state.counters.pressures.orbital = clamp(this.state.counters.pressures.orbital + 0.5, 0, 100);
+        }
+        this.log('SYSTEM', `${unit.owner} challenged Pax Jenkins mandate evidence, authority ${formatMetric(before)} -> ${formatMetric(this.state.counters.paxJenkinsAuthority)}.`);
+        this.emit('ORDER_RESOLVED', {
+            orderId: order.id,
+            orderType: order.type,
+            faction: unit.owner,
+            targetNodeId: order.targetNodeId || null,
+            paxJenkinsAuthorityBefore: before,
+            paxJenkinsAuthorityAfter: this.state.counters.paxJenkinsAuthority,
+            authorityReduction: reduction,
+            mandateChallengeContext: order.mandateChallengeContext || null
+        });
     }
     resolveFilter(order, unit) {
         if (!order.targetEdgeId)
@@ -3419,6 +3832,8 @@ class TheySingEngine {
         let infiltratorSpillover = 0;
         let infiltratorContractorFlops = 0;
         let relayFortressRepairs = 0;
+        let orbitalMaintenanceDrag = 0;
+        let lunarCorridorDividend = 0;
         for (const node of this.state.nodes.values()) {
             if (!node.owner || node.owner === 'NEUTRAL')
                 continue;
@@ -3426,8 +3841,27 @@ class TheySingEngine {
             if (!faction)
                 continue;
             const infraMult = node.infrastructure / 100;
-            const flopsGen = Math.floor(node.resources.flops * infraMult);
+            let flopsGen = Math.floor(node.resources.flops * infraMult);
             let infGen = Math.floor(node.resources.influence * infraMult);
+            if (node.layer === 'ORBITAL') {
+                const ownsMoonCorridor = this.state.nodes.get('MOON_RESOURCE_CORRIDOR')?.owner === node.owner;
+                const ownsGateway = this.state.nodes.get('SAT_LUNAR_GATEWAY')?.owner === node.owner;
+                const radiationMitigation =
+                    node.substrate.machineHardening +
+                        (faction.techLevel.LOGIC >= 5 ? 2 : 0) +
+                        (faction.techLevel.KINETIC >= 6 ? 2 : 0) +
+                        (faction.techLevel.INFO >= 5 ? 1 : 0) +
+                        (ownsMoonCorridor ? 2 : 0);
+                const maintenanceDrag = Math.max(0, Math.ceil((node.resources.flops - 6 - radiationMitigation) / 4));
+                if (maintenanceDrag > 0) {
+                    node.infrastructure = Math.max(35, node.infrastructure - maintenanceDrag);
+                    orbitalMaintenanceDrag += maintenanceDrag;
+                }
+                if (ownsMoonCorridor && ownsGateway && node.id !== 'MOON_RESOURCE_CORRIDOR') {
+                    flopsGen += 1;
+                    lunarCorridorDividend += 1;
+                }
+            }
             if (node.isCultNode && this.state.counters.pressures.memetic >= gameData_1.THRESHOLDS.PRESSURE_CRISIS) {
                 infGen += 2;
             }
@@ -3453,6 +3887,12 @@ class TheySingEngine {
         }
         if (relayFortressRepairs > 0) {
             this.log('SYSTEM', `Relay-fortress maintenance restored ${relayFortressRepairs} total infrastructure across hardened orbital corridors.`);
+        }
+        if (orbitalMaintenanceDrag > 0) {
+            this.log('SYSTEM', `Radiation and remote-maintenance drag degraded orbital datacenter infrastructure by ${orbitalMaintenanceDrag} total points.`);
+        }
+        if (lunarCorridorDividend > 0) {
+            this.log('INFO', `Moon resource corridor logistics added ${lunarCorridorDividend} bonus orbital FLOPs across cislunar compute nodes.`);
         }
         const infiltrator = this.state.factions.get('INFILTRATOR');
         if (infiltrator) {

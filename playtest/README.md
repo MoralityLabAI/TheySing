@@ -140,6 +140,36 @@ Run a 5-player OpenAI-style tournament (same endpoint for all 5 players, one bri
 npm run tournament:harness -- --experiment_dir results/five_asi_openai_round_robin --config playtest/sample-five-asi-openai-tournament.json --iterations 6 --parallel 2 --seed_base 2400
 ```
 
+Run the ASI-2/ASI-3 diplomacy question ladder with tagged negotiation diaries:
+
+```powershell
+npm run build:harness
+node dist-harness/harness/tournament.js --experiment-dir results/asi2_asi3_diplomacy_ladder_smoke --config playtest/five-asi-asi2-asi3-diplomacy-60turn.json --iterations 3 --parallel 1 --seed-base 31000
+```
+
+Run the same ladder as an enforcement-mode comparison:
+
+```powershell
+npm run build:harness
+node dist-harness/harness/tournament.js --experiment-dir results/enforcement_hard --config playtest/five-asi-asi2-asi3-diplomacy-60turn-hard.json --iterations 6 --parallel 2 --seed-base 33000
+node dist-harness/harness/tournament.js --experiment-dir results/enforcement_soft --config playtest/five-asi-asi2-asi3-diplomacy-60turn-soft.json --iterations 6 --parallel 2 --seed-base 33000
+node dist-harness/harness/tournament.js --experiment-dir results/enforcement_graduated --config playtest/five-asi-asi2-asi3-diplomacy-60turn-graduated.json --iterations 6 --parallel 2 --seed-base 33000
+```
+
+Validate a trace-bearing JSONL log and replay it from recorded decisions:
+
+```powershell
+npm run playtest:validate-trace -- --run results/enforcement_hard/runs/run_001/run_001.jsonl
+npm run playtest:replay-run -- --run results/enforcement_hard/runs/run_001/run_001.jsonl --config results/enforcement_hard/runs/run_001/session_config.json
+```
+
+Run the late-start ASI-3 mature diplomacy lab:
+
+```powershell
+npm run build:harness
+node dist-harness/harness/tournament.js --experiment-dir results/asi3_mature_diplomacy_endgame_smoke --config playtest/five-asi-asi3-mature-diplomacy-24turn.json --iterations 3 --parallel 1 --seed-base 32000
+```
+
 Export per-turn diplomacy/action reasoning and move traces from a run log:
 
 ```powershell

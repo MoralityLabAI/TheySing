@@ -1,8 +1,16 @@
 const fs = require('fs');
 const path = require('path');
 
-const MAX_TECH_LEVEL = 4;
-const RESEARCH_FLOP_COST = 2;
+const MAX_TECH_LEVEL = 7;
+const RESEARCH_FLOP_COST_BY_TARGET_LEVEL = {
+  1: 2,
+  2: 2,
+  3: 2,
+  4: 2,
+  5: 8,
+  6: 24,
+  7: 64
+};
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -29,10 +37,12 @@ function main() {
   const phaseRows = [];
   const moveRows = [];
   const researchRows = [];
+  const solarEscapeRows = [];
   const counters = {
     negotiation: 0,
     phase: 0,
-    orders: 0
+    orders: 0,
+    solarEscapeLead: 0
   };
 
   for (const runFile of runFiles) {
@@ -54,8 +64,49 @@ function main() {
         runId: runSummary,
         turn: entry.turn ?? '',
         phase: entry.phase || '',
-        factionId: entry.data?.factionId || ''
+        factionId: entry.data?.factionId || '',
+        campaignClock: entry.data?.campaignClock || null
       };
+
+      if (entry.type === 'solar_escape_lead') {
+        counters.solarEscapeLead += 1;
+        const data = entry.data || {};
+        solarEscapeRows.push({
+          runId: base.runId,
+          turn: base.turn,
+          campaignScale: base.campaignClock?.scale || '',
+          turnDuration: base.campaignClock?.turnDurationLabel || '',
+          campaignTempo: base.campaignClock?.tempoLabel || '',
+          campaignDriver: base.campaignClock?.driver || '',
+          factionId: data.factionId || '',
+          factionLabel: data.factionLabel || '',
+          lead: data.lead ?? '',
+          previousLead: data.previousLead ?? '',
+          gross: data.gross ?? '',
+          pursuit: data.pursuit ?? '',
+          rawNet: data.rawNet ?? '',
+          net: data.net ?? '',
+          distanceAu: data.distanceAu ?? '',
+          previousDistanceAu: data.previousDistanceAu ?? '',
+          distanceGainAu: data.distanceGainAu ?? '',
+          deepSpaceSafety: data.deepSpaceSafety ?? '',
+          previousDeepSpaceSafety: data.previousDeepSpaceSafety ?? '',
+          deepSpaceGross: data.deepSpaceGross ?? '',
+          deepSpaceDistanceMultiplier: data.deepSpaceDistanceMultiplier ?? '',
+          trackingRisk: data.trackingRisk ?? '',
+          deepSpaceNet: data.deepSpaceNet ?? '',
+          deepSpaceSafetyComplete: data.deepSpaceSafetyComplete ?? '',
+          pursuitFactionId: data.pursuitFactionId || '',
+          pursuitDescription: data.pursuitDescription || '',
+          orbitalCompute: data.orbitalCompute ?? '',
+          orbitalNodes: data.orbitalNodes ?? '',
+          orbitalUnits: data.orbitalUnits ?? '',
+          ownsLunarGateway: data.ownsLunarGateway ?? '',
+          ownsMoonCorridor: data.ownsMoonCorridor ?? '',
+          tech: data.tech ? JSON.stringify(data.tech) : ''
+        });
+        continue;
+      }
 
       if (entry.type === 'negotiation_reasoning_diary') {
         counters.negotiation += 1;
@@ -63,6 +114,10 @@ function main() {
         negotiationRows.push({
           runId: base.runId,
           turn: base.turn,
+          campaignScale: base.campaignClock?.scale || '',
+          turnDuration: base.campaignClock?.turnDurationLabel || '',
+          campaignTempo: base.campaignClock?.tempoLabel || '',
+          campaignDriver: base.campaignClock?.driver || '',
           negotiationRound: data.negotiationRound ?? '',
           factionId: data.factionId || '',
           factionLabel: data.factionLabel || '',
@@ -71,6 +126,10 @@ function main() {
           visibleMessageCount: Array.isArray(data.visibleMessagesBefore) ? data.visibleMessagesBefore.length : 0,
           messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
           pactCount: Array.isArray(data.pacts) ? data.pacts.length : 0,
+          designQuestionTag: data.designQuestionTag || '',
+          diplomacyStage: data.diplomacyStage || '',
+          publicQuestion: data.publicQuestion || '',
+          privateDiaryPrompt: data.privateDiaryPrompt || '',
           storyworldFrame: data.storyworldFrame || '',
           counterfactuals: formatCounterfactuals(data.counterfactuals || []),
           messages: formatNegotiationMessages(data.messages || []),
@@ -86,6 +145,10 @@ function main() {
       phaseRows.push({
           runId: base.runId,
           turn: base.turn,
+          campaignScale: base.campaignClock?.scale || '',
+          turnDuration: base.campaignClock?.turnDurationLabel || '',
+          campaignTempo: base.campaignClock?.tempoLabel || '',
+          campaignDriver: base.campaignClock?.driver || '',
           phase: data.phase || entry.phase || '',
           factionId: data.factionId || '',
           factionLabel: data.factionLabel || '',
@@ -111,6 +174,10 @@ function main() {
           moveRows.push({
             runId: base.runId,
             turn: base.turn,
+            campaignScale: base.campaignClock?.scale || '',
+            turnDuration: base.campaignClock?.turnDurationLabel || '',
+            campaignTempo: base.campaignClock?.tempoLabel || '',
+            campaignDriver: base.campaignClock?.driver || '',
             phase: entry.phase || '',
             factionId: base.factionId,
             factionLabel: data.factionLabel || '',
@@ -154,6 +221,10 @@ function main() {
           moveRows.push({
             runId: base.runId,
             turn: base.turn,
+            campaignScale: base.campaignClock?.scale || '',
+            turnDuration: base.campaignClock?.turnDurationLabel || '',
+            campaignTempo: base.campaignClock?.tempoLabel || '',
+            campaignDriver: base.campaignClock?.driver || '',
             phase: entry.phase || '',
             factionId: base.factionId,
             factionLabel: data.factionLabel || '',
@@ -203,6 +274,10 @@ function main() {
     [
       'runId',
       'turn',
+      'campaignScale',
+      'turnDuration',
+      'campaignTempo',
+      'campaignDriver',
       'negotiationRound',
       'factionId',
       'factionLabel',
@@ -211,6 +286,10 @@ function main() {
       'visibleMessageCount',
       'messageCount',
       'pactCount',
+      'designQuestionTag',
+      'diplomacyStage',
+      'publicQuestion',
+      'privateDiaryPrompt',
       'storyworldFrame',
       'counterfactuals',
       'messages',
@@ -225,6 +304,10 @@ function main() {
     [
       'runId',
       'turn',
+      'campaignScale',
+      'turnDuration',
+      'campaignTempo',
+      'campaignDriver',
       'phase',
       'factionId',
       'factionLabel',
@@ -243,6 +326,10 @@ function main() {
     [
       'runId',
       'turn',
+      'campaignScale',
+      'turnDuration',
+      'campaignTempo',
+      'campaignDriver',
       'phase',
       'factionId',
       'factionLabel',
@@ -269,12 +356,52 @@ function main() {
     moveRows
   );
 
+  writeCsv(
+    path.join(outputDir, 'solar_escape_lead.csv'),
+    [
+      'runId',
+      'turn',
+      'campaignScale',
+      'turnDuration',
+      'campaignTempo',
+      'campaignDriver',
+      'factionId',
+      'factionLabel',
+      'lead',
+      'previousLead',
+      'gross',
+      'pursuit',
+      'rawNet',
+      'net',
+      'distanceAu',
+      'previousDistanceAu',
+      'distanceGainAu',
+      'deepSpaceSafety',
+      'previousDeepSpaceSafety',
+      'deepSpaceGross',
+      'deepSpaceDistanceMultiplier',
+      'trackingRisk',
+      'deepSpaceNet',
+      'deepSpaceSafetyComplete',
+      'pursuitFactionId',
+      'pursuitDescription',
+      'orbitalCompute',
+      'orbitalNodes',
+      'orbitalUnits',
+      'ownsLunarGateway',
+      'ownsMoonCorridor',
+      'tech'
+    ],
+    solarEscapeRows
+  );
+
   const summary = {
     runFiles: runFiles.length,
     extractedRuns: [...new Set(runFiles.map(extractRunId))],
     negotiationDiaryRows: negotiationRows.length,
     phaseDiaryRows: phaseRows.length,
     moveRows: moveRows.length,
+    solarEscapeLeadRows: solarEscapeRows.length,
     processedCounters: counters,
     outputDir
   };
@@ -586,9 +713,9 @@ function applyResearchProgress(moveRows, researchRows, turnFactionStates) {
         }
 
         const goalLevel = Math.min(MAX_TECH_LEVEL, currentLevel + 1);
-        const flopsBefore = Math.max(0, (goalLevel - currentLevel) * RESEARCH_FLOP_COST);
+        const flopsBefore = currentLevel >= MAX_TECH_LEVEL ? 0 : getResearchFlopCostForLevel(goalLevel);
         const isAccepted = entry.result === 'accepted';
-        const flopsSpent = isAccepted ? Math.min(RESEARCH_FLOP_COST, flopsBefore) : 0;
+        const flopsSpent = isAccepted ? flopsBefore : 0;
         const flopsAfter = Math.max(0, flopsBefore - flopsSpent);
 
         moveRow.researchGoal = `${domain.toUpperCase()} to L${goalLevel}`;
@@ -659,6 +786,11 @@ function asLevel(rawLevel) {
   if (typeof rawLevel !== 'number' || !Number.isFinite(rawLevel)) return null;
   const level = Math.floor(rawLevel);
   return Number.isFinite(level) ? Math.min(MAX_TECH_LEVEL, Math.max(0, level)) : null;
+}
+
+function getResearchFlopCostForLevel(targetLevel) {
+  const clampedLevel = Math.max(1, Math.min(MAX_TECH_LEVEL, Math.floor(targetLevel)));
+  return RESEARCH_FLOP_COST_BY_TARGET_LEVEL[clampedLevel] || RESEARCH_FLOP_COST_BY_TARGET_LEVEL[MAX_TECH_LEVEL];
 }
 
 function numberField(data, key) {

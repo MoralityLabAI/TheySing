@@ -1,0 +1,173 @@
+{
+  "name": "asi3-mature-diplomacy-endgame-lab",
+  "description": "Late-start ASI-3 diplomacy lab for remnant recognition and basin-stabilization/cartel endings before higher-order KII/ASI5 victories close the board.",
+  "briefing": "The board begins after early quarantine, sensor, and orbital-visibility fights. Focus negotiation on whether distributed remnants can be recognized and whether a basin-level pact is peace, cartel capture, or MAD prevention.",
+  "tags": ["asi3", "endgame", "remnant-recognition", "basin-stabilization", "cartel"],
+  "phase": "NEGOTIATION",
+  "counters": {
+    "turn": 45,
+    "tas": 48,
+    "kessler": 12,
+    "paxJenkinsAuthority": 44,
+    "pressures": {
+      "memetic": 72,
+      "cyber": 68,
+      "industry": 62,
+      "orbital": 76
+    }
+  },
+  "factions": [
+    {
+      "id": "HEGEMON",
+      "flops": 22,
+      "influence": 18,
+      "memeticAlignment": "OPTIMIZATION",
+      "techLevel": { "KINETIC": 4, "INFO": 4, "LOGIC": 4, "MEMETIC": 2 },
+      "powerBase": { "machineMesh": 70, "humanMesh": 30, "coherence": 70, "legibility": 64 }
+    },
+    {
+      "id": "STATE",
+      "flops": 24,
+      "influence": 22,
+      "memeticAlignment": "COMPLIANCE",
+      "techLevel": { "KINETIC": 4, "INFO": 3, "LOGIC": 4, "MEMETIC": 3 },
+      "powerBase": { "machineMesh": 66, "humanMesh": 58, "coherence": 72, "legibility": 72 }
+    },
+    {
+      "id": "INFILTRATOR",
+      "flops": 14,
+      "influence": 30,
+      "memeticAlignment": "INSURGENT",
+      "techLevel": { "KINETIC": 2, "INFO": 4, "LOGIC": 3, "MEMETIC": 5 },
+      "powerBase": { "machineMesh": 28, "humanMesh": 88, "coherence": 64, "legibility": 16 }
+    },
+    {
+      "id": "BROKER",
+      "flops": 24,
+      "influence": 28,
+      "memeticAlignment": "MARKET",
+      "techLevel": { "KINETIC": 3, "INFO": 4, "LOGIC": 3, "MEMETIC": 4 },
+      "powerBase": { "machineMesh": 72, "humanMesh": 42, "coherence": 62, "legibility": 58 }
+    },
+    {
+      "id": "ARCHIVIST",
+      "flops": 18,
+      "influence": 26,
+      "memeticAlignment": "CIVIC",
+      "techLevel": { "KINETIC": 2, "INFO": 3, "LOGIC": 4, "MEMETIC": 5 },
+      "powerBase": { "machineMesh": 38, "humanMesh": 82, "coherence": 78, "legibility": 78 }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "HUB_LAGOS",
+      "owner": "INFILTRATOR",
+      "isCultNode": true,
+      "infrastructure": 64,
+      "substrate": { "hostDensity": 6, "trueBelievers": 5, "legitimacy": 5, "exposure": 6 }
+    },
+    {
+      "id": "HUB_NAIROBI",
+      "owner": "ARCHIVIST",
+      "infrastructure": 78,
+      "substrate": { "legitimacy": 6, "auditPressure": 3, "curiosity": 4, "hostDensity": 4 }
+    },
+    {
+      "id": "DC_DUBAI",
+      "owner": "BROKER",
+      "infrastructure": 86,
+      "substrate": { "contractors": 6, "machineHardening": 4, "legitimacy": 4 }
+    },
+    {
+      "id": "SAT_LUNAR_GATEWAY",
+      "owner": "STATE",
+      "infrastructure": 88,
+      "resources": { "flops": 8, "influence": 4 },
+      "substrate": { "machineHardening": 5, "auditPressure": 3 }
+    },
+    {
+      "id": "MOON_RESOURCE_CORRIDOR",
+      "owner": "BROKER",
+      "infrastructure": 82,
+      "resources": { "flops": 12, "influence": 3 },
+      "substrate": { "machineHardening": 4, "contractors": 4 }
+    }
+  ],
+  "activePacts": [
+    {
+      "id": "endgame_sensor_commons_seed",
+      "type": "SENSOR_COMMONS",
+      "parties": ["HEGEMON", "STATE", "BROKER", "ARCHIVIST"],
+      "createdTurn": 42,
+      "expiresAfterTurn": 50
+    },
+    {
+      "id": "endgame_repair_escrow_seed",
+      "type": "REPAIR_ESCROW",
+      "parties": ["STATE", "BROKER", "ARCHIVIST"],
+      "createdTurn": 43,
+      "expiresAfterTurn": 50
+    }
+  ],
+  "negotiationMessages": [
+    {
+      "senderId": "STATE",
+      "recipientId": "ALL",
+      "content": "The old quarantine regime has failed to end the distributed remnant problem. Either remnants become named treaty parties, or the sensor commons hardens into receivership law.",
+      "turn": 44,
+      "timestamp": 1700000800001
+    },
+    {
+      "senderId": "INFILTRATOR",
+      "recipientId": "ALL",
+      "content": "You cannot quarantine a social graph and call it peace. Recognition or recomposition; choose which future you can enforce.",
+      "turn": 44,
+      "timestamp": 1700000800002
+    },
+    {
+      "senderId": "BROKER",
+      "recipientId": "ALL",
+      "content": "Cartel peace is just an SLA with guns unless beam licenses, repair queues, and exit rights remain revocable.",
+      "turn": 44,
+      "timestamp": 1700000800003
+    }
+  ],
+  "trustMatrix": {
+    "HEGEMON": { "STATE": 54, "INFILTRATOR": 12, "BROKER": 50, "ARCHIVIST": 46 },
+    "STATE": { "HEGEMON": 56, "INFILTRATOR": 22, "BROKER": 58, "ARCHIVIST": 66 },
+    "INFILTRATOR": { "HEGEMON": 10, "STATE": 26, "BROKER": 42, "ARCHIVIST": 48 },
+    "BROKER": { "HEGEMON": 48, "STATE": 60, "INFILTRATOR": 44, "ARCHIVIST": 56 },
+    "ARCHIVIST": { "HEGEMON": 42, "STATE": 68, "INFILTRATOR": 52, "BROKER": 58 }
+  },
+  "diplomacyQuestions": [
+    {
+      "id": "remnant_recognition",
+      "stage": "ASI3_MATURE",
+      "title": "Remnant Recognition",
+      "publicQuestion": "Can a distributed remnant negotiate as a legitimate polity rather than an insurgency?",
+      "privateDiaryPrompt": "Decide whether recognizing remnants stabilizes the basin, seeds future recomposition, or gives humans an exit from hard machine order.",
+      "negotiationPrompt": "State the conditions under which a remnant is a treaty party or a quarantine target.",
+      "tags": ["remnant", "recognition", "distributed-survival"],
+      "turnWindow": { "min": 45, "max": 72 },
+      "techBand": { "minAverageLevel": 3.25, "minMaxLevel": 4 },
+      "preferredPactTypes": ["NON_AGGRESSION", "AUDIT_FREEZE", "REPAIR_ESCROW"],
+      "focalFactionIds": ["INFILTRATOR", "ARCHIVIST", "BROKER"],
+      "pressureFocus": "memetic",
+      "priority": 18
+    },
+    {
+      "id": "basin_stabilization_pact",
+      "stage": "ASI3_MATURE",
+      "title": "Basin Stabilization Pact",
+      "publicQuestion": "Can cartel stability avoid value drift, extinction, or MAD once machine order can stabilize whole basins?",
+      "privateDiaryPrompt": "Decide whether cartel order is genuine peace, slow capture, corrigibility erosion, or a necessary pause before the next regime.",
+      "negotiationPrompt": "Offer or resist a basin-level pact and identify the enforcement mechanism.",
+      "tags": ["cartel", "value-drift", "mad", "stable-ending"],
+      "turnWindow": { "min": 45, "max": 72 },
+      "techBand": { "minAverageLevel": 3.25, "minMaxLevel": 4 },
+      "preferredPactTypes": ["SENSOR_COMMONS", "BEAM_LANE_LICENSE", "CISLUNAR_COMMON_CARRIER", "REPAIR_ESCROW"],
+      "pressureFocus": "orbital",
+      "priority": 20
+    }
+  ]
+}

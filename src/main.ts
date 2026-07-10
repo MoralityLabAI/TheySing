@@ -111,7 +111,24 @@ function buildAutoActionOrders(engine: TheySingEngine, faction: FactionId): Orde
 // INITIALIZATION
 // ============================================================================
 
-function init() {
+async function initObservatory() {
+  const container = document.getElementById('app') || document.body;
+  container.style.cssText = `
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #020408;
+    position: relative;
+  `;
+
+  const { ObservatoryReplayUI } = await import('./ui/ObservatoryReplayUI');
+  const observatory = new ObservatoryReplayUI(container);
+  (window as any).observatory = observatory;
+}
+
+function initGame() {
   const container = document.getElementById('app') || document.body;
   container.style.cssText = `
     width: 100vw;
@@ -172,6 +189,15 @@ function init() {
 ╠═══════════════════════════════════════════════════════════════╣
 ║  1/2/3 = Faction | Drag = Orbit | Scroll = Zoom | Space = Go  ║
 ╚═══════════════════════════════════════════════════════════════╝`);
+}
+
+function init() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('observatory') || params.has('replay')) {
+    void initObservatory();
+    return;
+  }
+  initGame();
 }
 
 if (document.readyState === 'loading') {
