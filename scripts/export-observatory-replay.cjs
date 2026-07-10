@@ -3,6 +3,10 @@ const path = require('path');
 
 const MAX_TECH_LEVEL = 7;
 const RESEARCH_DOMAINS = ['KINETIC', 'INFO', 'LOGIC', 'MEMETIC'];
+const FACTION_LABELS = {
+  CONVENOR: 'Polycentric Convenor',
+  CANTOR: 'Semantic Cantor'
+};
 const RESEARCH_FLOP_COST_BY_TARGET_LEVEL = {
   1: 2,
   2: 2,
@@ -162,7 +166,7 @@ function ingestEntry(bucket, entry, runId, researchProgress, boardState) {
       runId,
       kind: 'NEGOTIATION',
       factionId: data.factionId || '',
-      factionLabel: data.factionLabel || data.factionId || '',
+      factionLabel: labelFaction(data.factionId, data.factionLabel),
       reasoning: data.reasoning || '',
       notes: data.notes || '',
       storyworldFrame: data.storyworldFrame || '',
@@ -193,7 +197,7 @@ function ingestEntry(bucket, entry, runId, researchProgress, boardState) {
       kind: 'PHASE',
       phase: data.phase || entry.phase || '',
       factionId: data.factionId || '',
-      factionLabel: data.factionLabel || data.factionId || '',
+      factionLabel: labelFaction(data.factionId, data.factionLabel),
       reasoning: data.reasoning || '',
       notes: data.notes || '',
       requestedOrderCount: asArray(data.requestedOrders).length,
@@ -219,7 +223,7 @@ function ingestEntry(bucket, entry, runId, researchProgress, boardState) {
         sequence,
         runId,
         factionId: data.factionId || order.faction || '',
-        factionLabel: data.factionLabel || data.factionId || order.faction || '',
+        factionLabel: labelFaction(data.factionId || order.faction, data.factionLabel),
         accepted: item.accepted,
         reason: item.reason,
         type: order.type || '',
@@ -252,7 +256,7 @@ function ingestEntry(bucket, entry, runId, researchProgress, boardState) {
       pursuit: data.pursuit ?? 0,
       pursuitFactionId: data.pursuitFactionId || ''
     };
-    bucket.events.push(event(entry, runId, 'SOLAR_ESCAPE', `${data.factionLabel || factionId} lead ${data.lead ?? 0}, distance ${data.distanceAu ?? 0} AU.`));
+    bucket.events.push(event(entry, runId, 'SOLAR_ESCAPE', `${labelFaction(factionId, data.factionLabel)} lead ${data.lead ?? 0}, distance ${data.distanceAu ?? 0} AU.`));
     return;
   }
 
@@ -282,7 +286,7 @@ function ingestEntry(bucket, entry, runId, researchProgress, boardState) {
   if (entry.type === 'architecture_pressure') {
     bucket.strategicTracks.architecturePressure = {
       topThreat: data.topThreat || null,
-      ranking: asArray(data.ranking).slice(0, 5)
+      ranking: asArray(data.ranking)
     };
     bucket.events.push(event(entry, runId, 'ARCHITECTURE_PRESSURE', formatTopThreat(data.topThreat)));
     return;
@@ -1300,7 +1304,12 @@ function inferFactions(turn) {
 
 function formatTopThreat(topThreat) {
   if (!topThreat) return 'Architecture pressure updated.';
-  return `Top architecture pressure: ${topThreat.factionId || topThreat.faction || 'unknown'} ${topThreat.label || topThreat.primaryArchitecture || ''}`.trim();
+  const factionId = topThreat.factionId || topThreat.faction || '';
+  return `Top architecture pressure: ${labelFaction(factionId) || 'unknown'} ${topThreat.label || topThreat.primaryArchitecture || ''}`.trim();
+}
+
+function labelFaction(factionId, fallbackLabel = '') {
+  return FACTION_LABELS[factionId] || fallbackLabel || factionId || '';
 }
 
 function summarizeGoblinImpact(payload) {

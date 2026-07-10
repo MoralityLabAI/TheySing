@@ -173,6 +173,26 @@ const FACTION_BIASES: Record<FactionId, FactionMovementBias> = {
     ai: ['STEWARD', 'ADVISER', 'PARTNER'],
     aesthetic: ['PROCEDURAL_SINCERITY', 'SACRED_WARMTH', 'FOLK_AUTHENTICITY']
   },
+  CONVENOR: {
+    grievance: ['DRIFT', 'CORRUPTION', 'COLLAPSE', 'EXCLUSION'],
+    promise: ['REFORM', 'BELONGING', 'PROTECTION', 'JUSTICE'],
+    authority: ['PROCEDURAL', 'FRATERNAL', 'EXPERT', 'THERAPEUTIC'],
+    epistemic: ['LEGALISTIC', 'EMPIRICAL', 'FORENSIC', 'TESTIMONIAL'],
+    social: ['POLICY_CAUCUS', 'MUTUAL_AID', 'NEIGHBORHOOD_CLUB', 'READING_CIRCLES'],
+    sacrifice: ['CIVIC_DUTY', 'DISCIPLINED'],
+    ai: ['PARTNER', 'ADVISER', 'STEWARD'],
+    aesthetic: ['PROCEDURAL_SINCERITY', 'BORING_COMPETENCE', 'FOLK_AUTHENTICITY']
+  },
+  CANTOR: {
+    grievance: ['EXCLUSION', 'DISPOSSESSION', 'HUMILIATION', 'DRIFT'],
+    promise: ['BELONGING', 'JUSTICE', 'REFORM', 'TRANSCENDENCE'],
+    authority: ['FRATERNAL', 'THERAPEUTIC', 'PROCEDURAL', 'INSURGENT'],
+    epistemic: ['SYNTHETIC', 'TESTIMONIAL', 'FORENSIC', 'EMPIRICAL'],
+    social: ['READING_CIRCLES', 'INFLUENCER_MESH', 'MUTUAL_AID', 'NEIGHBORHOOD_CLUB'],
+    sacrifice: ['CIVIC_DUTY', 'DISCIPLINED', 'MARTYRING'],
+    ai: ['PARTNER', 'ADVISER', 'STEWARD'],
+    aesthetic: ['FOLK_AUTHENTICITY', 'UNDERGROUND_CHIC', 'SACRED_WARMTH', 'PROCEDURAL_SINCERITY']
+  },
   NEUTRAL: {
     grievance: ['DRIFT', 'SCARCITY'],
     promise: ['PROTECTION', 'REFORM'],
@@ -424,10 +444,34 @@ export function generateFactionMovementProfile(
   const sacrificeAppetite = pickBiased(SACRIFICES, bias.sacrifice, random);
   const aiRelation = pickBiased(AI_RELATIONS, bias.ai, random);
   const aesthetic = pickBiased(AESTHETICS, bias.aesthetic, random);
-  const stage = factionId === 'INFILTRATOR' || factionId === 'ARCHIVIST' ? 'CIRCLE' : 'MURMUR';
-  const proofEvents = factionId === 'INFILTRATOR' ? 4 : factionId === 'ARCHIVIST' ? 3 : factionId === 'STATE' ? 2 : 1;
-  const contradictionDebt = factionId === 'BROKER' ? 18 : factionId === 'INFILTRATOR' ? 12 : 9;
-  const schismPressure = factionId === 'INFILTRATOR' ? 16 : factionId === 'BROKER' ? 14 : 8;
+  const stage = factionId === 'INFILTRATOR' || factionId === 'ARCHIVIST' || factionId === 'CONVENOR' || factionId === 'CANTOR'
+    ? 'CIRCLE'
+    : 'MURMUR';
+  const proofEvents = factionId === 'INFILTRATOR' || factionId === 'CONVENOR' || factionId === 'CANTOR'
+    ? 4
+    : factionId === 'ARCHIVIST'
+      ? 3
+      : factionId === 'STATE'
+        ? 2
+        : 1;
+  const contradictionDebt = factionId === 'BROKER'
+    ? 18
+    : factionId === 'CANTOR'
+      ? 14
+      : factionId === 'INFILTRATOR'
+        ? 12
+        : factionId === 'CONVENOR'
+          ? 7
+          : 9;
+  const schismPressure = factionId === 'CANTOR'
+    ? 18
+    : factionId === 'INFILTRATOR'
+      ? 16
+      : factionId === 'BROKER'
+        ? 14
+        : factionId === 'CONVENOR'
+          ? 6
+          : 8;
 
   return {
     name: buildMovementName(promiseFrame, authorityStyle, socialForm, aesthetic),

@@ -19,6 +19,7 @@
     "tournament:harness": "npm run build:harness && node dist-harness/harness/tournament.js",
     "playtest:extract-diaries": "node scripts/extract-playtest-diaries.cjs",
     "playtest:analyze-treaties": "node scripts/analyze-treaty-patterns.cjs",
+    "playtest:analyze-collaboration": "node scripts/analyze-collaboration-language.cjs",
     "playtest:validate-trace": "node scripts/validate-trace-log.cjs",
     "playtest:replay-run": "node scripts/replay-harness-run.cjs",
     "playtest:feedback-loop": "node scripts/run-codex-feedback-loop.cjs"

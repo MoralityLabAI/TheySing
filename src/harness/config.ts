@@ -70,14 +70,18 @@ export function createDefaultConfig(): SessionConfig {
       STATE: 'Chinese State ASI',
       INFILTRATOR: 'Rogue Swarm ASI',
       BROKER: 'Platform Broker ASI',
-      ARCHIVIST: 'Steward Archivist ASI'
+      ARCHIVIST: 'Steward Archivist ASI',
+      CONVENOR: 'Polycentric Convenor ASI',
+      CANTOR: 'Semantic Cantor ASI'
     },
     agents: {
       HEGEMON: { type: 'heuristic', profile: 'HEGEMON' },
       STATE: { type: 'heuristic', profile: 'STATE' },
       INFILTRATOR: { type: 'heuristic', profile: 'INFILTRATOR' },
       BROKER: { type: 'heuristic', profile: 'BROKER' },
-      ARCHIVIST: { type: 'heuristic', profile: 'ARCHIVIST' }
+      ARCHIVIST: { type: 'heuristic', profile: 'ARCHIVIST' },
+      CONVENOR: { type: 'heuristic', profile: 'CONVENOR' },
+      CANTOR: { type: 'heuristic', profile: 'CANTOR' }
     }
   };
 }

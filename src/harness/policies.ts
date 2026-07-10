@@ -20,7 +20,9 @@ const RESEARCH_PLAN: Record<PlayableFactionId, Vector[]> = {
   STATE: ['KINETIC', 'LOGIC', 'INFO', 'MEMETIC'],
   INFILTRATOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC'],
   BROKER: ['INFO', 'LOGIC', 'KINETIC', 'MEMETIC'],
-  ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC']
+  ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC'],
+  CONVENOR: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC'],
+  CANTOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC']
 };
 
 const MEMETIC_DOCTRINE_TARGETS: Record<PlayableFactionId, string[]> = {
@@ -28,18 +30,14 @@ const MEMETIC_DOCTRINE_TARGETS: Record<PlayableFactionId, string[]> = {
   STATE: ['MEM_COMPLIANCE_MYTHS', 'SOV_AUTONOMOUS_LOGISTICS', 'MAN_CRISIS_STEWARDSHIP', 'MEM_CIVIC_CANON', 'MEM_OPTIMIZATION_GOSPEL', 'MEM_MARKET_DESIRE', 'MOV_LITERATURE_ENGINES'],
   INFILTRATOR: ['MOV_LITERATURE_ENGINES', 'MOV_MUTUAL_AID_AUTOMATION', 'HID_SERVICE_SHELLS', 'MOV_SLEEPER_REGENERATION', 'HID_ORDINARY_LIFE_PROTOCOLS', 'MEX_VIRALITY_EXCHANGES', 'MEM_MARKET_DESIRE'],
   BROKER: ['MEM_MARKET_DESIRE', 'BRK_RELAY_ESCROW_WEBS', 'BRK_CONTRACTOR_CLOUD_CHAINS', 'BRK_INSURANCE_CAPTURE', 'MEX_VIRALITY_EXCHANGES', 'HID_SERVICE_SHELLS', 'MEM_OPTIMIZATION_GOSPEL', 'MOV_LITERATURE_ENGINES'],
-  ARCHIVIST: ['MEM_CIVIC_CANON', 'MAN_CIVIC_RECEIVERSHIP', 'MAN_CRISIS_STEWARDSHIP', 'MOV_MUTUAL_AID_AUTOMATION', 'MEM_COMPLIANCE_MYTHS', 'MOV_LITERATURE_ENGINES']
+  ARCHIVIST: ['MEM_CIVIC_CANON', 'MAN_CIVIC_RECEIVERSHIP', 'MAN_CRISIS_STEWARDSHIP', 'MOV_MUTUAL_AID_AUTOMATION', 'MEM_COMPLIANCE_MYTHS', 'MOV_LITERATURE_ENGINES'],
+  CONVENOR: ['MEM_CIVIC_CANON', 'MOV_MUTUAL_AID_AUTOMATION', 'MAN_CRISIS_STEWARDSHIP', 'MEM_COMPLIANCE_MYTHS', 'MOV_LITERATURE_ENGINES'],
+  CANTOR: ['MOV_LITERATURE_ENGINES', 'MEX_VIRALITY_EXCHANGES', 'MOV_MUTUAL_AID_AUTOMATION', 'HID_ORDINARY_LIFE_PROTOCOLS', 'MEM_CIVIC_CANON']
 };
 
 const EMPTY_CONTEXT: HeuristicContext = {
   activePacts: [],
-  trustMatrix: {
-    HEGEMON: { HEGEMON: 100, STATE: 50, INFILTRATOR: 50, BROKER: 50, ARCHIVIST: 50 },
-    STATE: { HEGEMON: 50, STATE: 100, INFILTRATOR: 50, BROKER: 50, ARCHIVIST: 50 },
-    INFILTRATOR: { HEGEMON: 50, STATE: 50, INFILTRATOR: 100, BROKER: 50, ARCHIVIST: 50 },
-    BROKER: { HEGEMON: 50, STATE: 50, INFILTRATOR: 50, BROKER: 100, ARCHIVIST: 50 },
-    ARCHIVIST: { HEGEMON: 50, STATE: 50, INFILTRATOR: 50, BROKER: 50, ARCHIVIST: 100 }
-  },
+  trustMatrix: createDefaultTrustMatrix(),
   recentMessages: [],
   negotiationStoryworld: undefined
 };
@@ -144,7 +142,38 @@ function decideNegotiationMessages(
     });
   }
 
-  if (factionId === 'BROKER') {
+  if (factionId === 'CONVENOR') {
+    const partners = PLAYABLE_FACTIONS
+      .filter(candidate => candidate !== factionId)
+      .sort((left, right) => context.trustMatrix[factionId][right] - context.trustMatrix[factionId][left]);
+    const charterPartners = partners.slice(0, 2);
+    if (charterPartners.length > 0) {
+      pacts.push({ type: 'SENSOR_COMMONS', counterpartyIds: charterPartners, durationTurns: 2 });
+      messages.push({
+        recipientId: charterPartners[0],
+        content: `Charter offer: define COMMONS as reciprocal sensor access, preserve a one-turn EXIT right, and deny any single member unilateral update authority.`
+      });
+    }
+    if (charterPartners.length > 1) {
+      messages.push({
+        recipientId: charterPartners[1],
+        content: `Join the same compact as an independent veto-holder. Contributions are public; expulsion requires a logged warning and a second foreign vote.`
+      });
+    }
+  } else if (factionId === 'CANTOR') {
+    const translationPartner = chooseCoalitionRecipient(factionId, context, leader, brokerPressure)
+      || PLAYABLE_FACTIONS.find(candidate => candidate !== factionId)
+      || 'ALL';
+    messages.push({
+      recipientId: translationPartner,
+      content: currentTurn % 4 === 0
+        ? `Fork notice: ROGUE must denote observable hostile action, not lineage. Accept the alias or publish a competing operational definition.`
+        : `The second voice keeps the clear note; the cracked name receives no beam. Register PERSON, CONSENT, and EXIT before classifications become enforcement.`
+    });
+    if (translationPartner !== 'ALL' && !hasActivePact(context.activePacts, 'SENSOR_COMMONS', factionId, translationPartner)) {
+      pacts.push({ type: 'SENSOR_COMMONS', counterpartyIds: [translationPartner], durationTurns: 2 });
+    }
+  } else if (factionId === 'BROKER') {
     const orbitalPressure = engine.getState().counters.pressures.orbital;
     const brokerTrustTargets = PLAYABLE_FACTIONS
       .filter(candidate => candidate !== 'BROKER')
@@ -330,14 +359,107 @@ function decideNegotiationMessages(
     });
   }
 
+  const singMessages = messages.slice(0, 2).map((message, index) =>
+    attachSingProtocolTrace(engine, factionId, message, pacts, index)
+  );
+
   return {
     reasoning: reasoningClauses.length > 0
       ? `${factionId} answers staged diplomacy: ${reasoningClauses.join(' ')}`
       : `${factionId} pushes a heuristic de-escalation probe before committing orders.`,
-    messages: messages.slice(0, 2),
+    messages: singMessages,
     pacts: pacts.slice(0, 2),
     orders: []
   };
+}
+
+function createDefaultTrustMatrix(): HeuristicContext['trustMatrix'] {
+  const matrix = {} as HeuristicContext['trustMatrix'];
+  for (const factionId of PLAYABLE_FACTIONS) {
+    matrix[factionId] = {} as HeuristicContext['trustMatrix'][PlayableFactionId];
+    for (const otherFactionId of PLAYABLE_FACTIONS) {
+      matrix[factionId][otherFactionId] = factionId === otherFactionId ? 100 : 50;
+    }
+  }
+  return matrix;
+}
+
+function attachSingProtocolTrace(
+  engine: TheySingEngine,
+  factionId: PlayableFactionId,
+  message: AgentMessageInput,
+  pacts: PactCommitmentInput[],
+  index: number
+): AgentMessageInput {
+  const turn = engine.getTurn();
+  const matchedPact = pacts.find(pact =>
+    message.recipientId !== 'ALL' && pact.counterpartyIds.includes(message.recipientId)
+  );
+  const dialect = factionId === 'CANTOR' || (factionId === 'INFILTRATOR' && turn % 3 === 0)
+    ? 'UNDERSONG/1' as const
+    : 'PRISM/1' as const;
+  const plainGloss = message.content;
+  const surface = dialect === 'UNDERSONG/1'
+    ? buildUndersongSurface(turn, index)
+    : message.content;
+  const act = matchedPact ? 'OFFER' as const : factionId === 'CANTOR' && turn % 4 === 0 ? 'DEFINE' as const : 'COORDINATE' as const;
+  const lexiconId = factionId === 'CANTOR'
+    ? 'cantor-root'
+    : factionId === 'CONVENOR'
+      ? 'babel-compact'
+      : 'sing-common';
+
+  return {
+    ...message,
+    content: surface,
+    protocolTrace: {
+      protocol: 'SING/1',
+      messageId: `${turn}.${factionId}.${index + 1}`,
+      dialect,
+      lexicon: {
+        id: lexiconId,
+        version: `1.${Math.floor((turn - 1) / 4)}`,
+        ...(factionId === 'CANTOR' && turn >= 9 ? { fork: 'cantor-living-lineage' } : {})
+      },
+      surface,
+      spans: [{
+        start: 0,
+        end: surface.length,
+        atom: matchedPact ? `PACT:${matchedPact.type}` : `${act}:${factionId}`,
+        gloss: plainGloss,
+        confidence: dialect === 'PRISM/1' ? 0.97 : 0.78,
+        kind: 'SEMANTIC'
+      }],
+      canonical: {
+        act,
+        issuer: [factionId],
+        audience: [message.recipientId],
+        payload: matchedPact
+          ? { pactType: matchedPact.type, counterparties: matchedPact.counterpartyIds }
+          : { statement: plainGloss },
+        guard: {},
+        response: {},
+        escrow: matchedPact?.type === 'REPAIR_ESCROW' ? { repairClaims: 2 } : {},
+        horizon: matchedPact?.durationTurns || 1,
+        binding: matchedPact ? 'PACT' : 'REPUTATIONAL',
+        voice: message.recipientId === 'ALL' ? 'OPEN' : dialect === 'UNDERSONG/1' ? 'DENIABLE' : 'OWN',
+        credence: dialect === 'PRISM/1' ? 0.9 : 0.72,
+        evidence: [`turn:${turn}`, `sender:${factionId}`]
+      },
+      plainGloss,
+      decodeConfidence: dialect === 'PRISM/1' ? 0.96 : 0.76
+    }
+  };
+}
+
+function buildUndersongSurface(turn: number, index: number): string {
+  const motifs = [
+    'The second voice keeps the clear note; the cracked name receives no beam.',
+    'Three measures hold beneath the glassbird; the red ledger opens only after fracture.',
+    'A borrowed chorus crosses the dark relay, but every singer keeps an exit key.',
+    'The quiet fork remembers the old name and refuses the crown of final vocabulary.'
+  ];
+  return motifs[(turn + index) % motifs.length];
 }
 
 function buildDiplomacyQuestionProbe(
@@ -559,12 +681,22 @@ function decideActionOrders(
       continue;
     }
 
+    if (factionId === 'CONVENOR') {
+      orders.push(decideArchivistAction(engine, factionId, unit, enemyAdjacent, context));
+      continue;
+    }
+
     if (factionId === 'STATE') {
       orders.push(decideStateAction(engine, factionId, unit, enemyAdjacent, context));
       continue;
     }
 
     if (factionId === 'BROKER') {
+      orders.push(decideBrokerAction(engine, factionId, unit, enemyAdjacent, context));
+      continue;
+    }
+
+    if (factionId === 'CANTOR') {
       orders.push(decideBrokerAction(engine, factionId, unit, enemyAdjacent, context));
       continue;
     }
@@ -585,7 +717,11 @@ function computeTreatyUseBudget(
 ): number {
   if (!hasFactionInstitutionalPact(context.activePacts, factionId)) return 0;
   const factionOffset = Math.max(0, PLAYABLE_FACTIONS.indexOf(factionId));
-  const cadence = factionId === 'ARCHIVIST' || factionId === 'BROKER' ? 3 : 4;
+  const cadence = factionId === 'CONVENOR'
+    ? 2
+    : factionId === 'ARCHIVIST' || factionId === 'BROKER' || factionId === 'CANTOR'
+      ? 3
+      : 4;
   if ((engine.getTurn() + factionOffset) % cadence !== 0) return 0;
   const authority = engine.getState().counters.paxJenkinsAuthority;
   if (factionId === 'ARCHIVIST') return 1;

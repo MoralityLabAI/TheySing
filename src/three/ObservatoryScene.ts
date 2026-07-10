@@ -172,7 +172,19 @@ const FACTION_COLORS: Record<string, number> = {
   STATE: 0x55a8ff,
   BROKER: 0xf5b94a,
   ARCHIVIST: 0xe8edf5,
+  CONVENOR: 0x2de2e6,
+  CANTOR: 0xff77c8,
   ALL: 0xffffff
+};
+
+const FACTION_LABELS: Record<string, string> = {
+  HEGEMON: 'Orbital Throne',
+  INFILTRATOR: 'Memetic Swarm',
+  STATE: 'Sovereign Stack',
+  BROKER: 'Cislunar Broker',
+  ARCHIVIST: 'Steward Archivist',
+  CONVENOR: 'Polycentric Convenor',
+  CANTOR: 'Semantic Cantor'
 };
 
 const ORBITAL_POSITIONS: Record<string, [number, number, number]> = {
@@ -181,6 +193,8 @@ const ORBITAL_POSITIONS: Record<string, [number, number, number]> = {
   STATE: [0.8, -3.6, 0.2],
   BROKER: [-3.6, -1.1, 0.5],
   ARCHIVIST: [2.4, 2.7, -0.2],
+  CONVENOR: [-0.25, 3.85, 0.65],
+  CANTOR: [3.05, -2.35, -0.65],
   ALL: [0, 0, 0]
 };
 
@@ -738,7 +752,7 @@ export class ObservatoryScene {
       beacon.position.set(...position);
       beacon.userData.selectable = true;
       beacon.userData.evidence = {
-        title: `${factionId} orbital signature`,
+        title: `${labelFaction(factionId)} orbital signature`,
         category: 'FACTION_BEACON',
         subgenre: 'ANOMALY',
         summary: 'Persistent ASI signature. The replay will attach orders, treaties, and diary contradictions as turns advance.',
@@ -836,7 +850,7 @@ export class ObservatoryScene {
       title: `${techDomain} research`,
       category: 'RESEARCH',
       subgenre: techDomain === 'MEMETIC' ? 'MEMETIC' : techDomain === 'KINETIC' ? 'KINETIC' : techDomain === 'INFO' ? 'CYBER' : 'LOGIC',
-      summary: `${factionId} advanced ${techDomain}. Research changes the visual grammar of later orders.`,
+      summary: `${labelFaction(factionId)} advanced ${techDomain}. Research changes the visual grammar of later orders.`,
       factionIds: [factionId],
       turn: turn.turn,
       phase: turn.phase
@@ -1160,7 +1174,7 @@ export class ObservatoryScene {
       title: 'Solar escape vector',
       category: 'SOLAR_ESCAPE',
       subgenre: 'ORBITAL',
-      summary: `${factionId} is opening distance or lead toward deep-space breakout.`,
+      summary: `${labelFaction(factionId)} is opening distance or lead toward deep-space breakout.`,
       factionIds: [factionId],
       turn: turn.turn,
       phase: turn.phase
@@ -1467,6 +1481,10 @@ function inferSubgenre(category: string, summary: string): string {
   if (haystack.includes('CYBER') || haystack.includes('INFO')) return 'CYBER';
   if (haystack.includes('RESEARCH') || haystack.includes('CORRIG')) return 'LOGIC';
   return 'ANOMALY';
+}
+
+function labelFaction(factionId: string): string {
+  return FACTION_LABELS[factionId] || factionId;
 }
 
 function subgenreForUnit(unitType: string): string {

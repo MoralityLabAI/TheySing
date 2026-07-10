@@ -136,7 +136,9 @@ const FACTION_LABELS: Record<string, string> = {
   INFILTRATOR: 'Memetic Swarm',
   STATE: 'Sovereign Stack',
   BROKER: 'Cislunar Broker',
-  ARCHIVIST: 'Steward Archivist'
+  ARCHIVIST: 'Steward Archivist',
+  CONVENOR: 'Polycentric Convenor',
+  CANTOR: 'Semantic Cantor'
 };
 
 export class ObservatoryReplayUI {
@@ -428,7 +430,7 @@ export class ObservatoryReplayUI {
   private renderFilters(): void {
     const filters = requireElement(this.container, '[data-role="filters"]');
     const subgenres = ['ALL', 'ORBITAL', 'KINETIC', 'MEMETIC', 'CYBER', 'LOGIC', 'ECONOMIC', 'DIPLOMATIC', 'ANOMALY'];
-    const factions = ['ALL', 'HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHIVIST'];
+    const factions = ['ALL', 'HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR'];
     const phases = ['ALL', 'NEGOTIATION', 'ALLOCATION', 'ACTION_DECLARATION'];
     const momentCategories = ['ALL', 'TREATY_FORMATION', 'TREATY_BREACH', 'ORBITAL_ESCALATION', 'PAX_JENKINS_HARDENING', 'SOLAR_ESCAPE_BREAKOUT'];
     const signalModes = ['ALL', 'REVEAL_GAP'];
@@ -439,14 +441,14 @@ export class ObservatoryReplayUI {
       momentCategory: nextFilters.momentCategory ?? this.activeMomentCategory,
       signalMode: nextFilters.signalMode ?? this.activeSignalMode
     });
-    const button = (kind: string, value: string, activeValue: string, count: number) =>
-      `<button type="button" data-filter-kind="${kind}" data-filter-value="${value}" class="${value === activeValue ? 'obs-active' : ''}">${value}<b>${count}</b></button>`;
+    const button = (kind: string, value: string, activeValue: string, count: number, label = value) =>
+      `<button type="button" data-filter-kind="${kind}" data-filter-value="${value}" class="${value === activeValue ? 'obs-active' : ''}">${escapeHtml(label)}<b>${count}</b></button>`;
     filters.innerHTML = `
       <div class="obs-chip-row">
         ${subgenres.map((item) => button('subgenre', item, this.activeSubgenre, countFor({ subgenre: item }))).join('')}
       </div>
       <div class="obs-chip-row">
-        ${factions.map((item) => button('faction', item, this.activeFaction, countFor({ faction: item }))).join('')}
+        ${factions.map((item) => button('faction', item, this.activeFaction, countFor({ faction: item }), labelFaction(item))).join('')}
       </div>
       <div class="obs-chip-row">
         ${phases.map((item) => button('phase', item, this.activePhase, countFor({ phase: item }))).join('')}
@@ -489,7 +491,7 @@ export class ObservatoryReplayUI {
         <small>${escapeHtml([
           evidence.turn !== undefined ? `turn ${evidence.turn}` : '',
           evidence.phase || '',
-          evidence.factionIds.length ? `actors ${evidence.factionIds.join('+')}` : ''
+          evidence.factionIds.length ? `actors ${evidence.factionIds.map(labelFaction).join('+')}` : ''
         ].filter(Boolean).join(' / '))}</small>
         ${payload ? `<pre>${escapeHtml(payload)}</pre>` : ''}
       </article>

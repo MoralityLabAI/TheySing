@@ -5,7 +5,7 @@ const path = require('path');
 const { HeadlessPlaytestSession } = require('../dist-harness/harness/HeadlessPlaytestSession');
 const { loadSessionConfigFromPath } = require('../dist-harness/harness/config');
 
-const PLAYABLE_FACTIONS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST'];
+const PLAYABLE_FACTIONS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR'];
 const INSTITUTIONAL_PACT_TYPES = new Set(['SENSOR_COMMONS', 'BEAM_LANE_LICENSE', 'REPAIR_ESCROW', 'CISLUNAR_COMMON_CARRIER']);
 
 async function main() {

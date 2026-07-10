@@ -17,7 +17,9 @@ const RESEARCH_PRIORITIES: Record<PlayableFactionId, Vector[]> = {
   STATE: ['KINETIC', 'LOGIC', 'INFO', 'MEMETIC'],
   INFILTRATOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC'],
   BROKER: ['INFO', 'LOGIC', 'KINETIC', 'MEMETIC'],
-  ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC']
+  ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC'],
+  CONVENOR: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC'],
+  CANTOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC']
 };
 
 const BUILD_PRIORITIES: Record<PlayableFactionId, UnitType[]> = {
@@ -25,7 +27,9 @@ const BUILD_PRIORITIES: Record<PlayableFactionId, UnitType[]> = {
   STATE: ['SAT_SWARM', 'DRONE', 'AUDITOR'],
   INFILTRATOR: ['CULT', 'SWARM'],
   BROKER: ['AUDITOR', 'SWARM', 'DRONE'],
-  ARCHIVIST: ['CULT', 'AUDITOR', 'SWARM']
+  ARCHIVIST: ['CULT', 'AUDITOR', 'SWARM'],
+  CONVENOR: ['AUDITOR', 'CULT', 'SWARM'],
+  CANTOR: ['AUDITOR', 'SWARM', 'CULT']
 };
 
 export function decideBridgePolicy(payload: AgentDecisionRequest): AgentDecisionResponse {

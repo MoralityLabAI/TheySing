@@ -8,7 +8,15 @@ import {
   PowerBand, PowerBaseState, TechLevel, TechUnlock, RhizomeDoctrineUnlock, Vector, Artifact, ArtifactType, MemeticDoctrineFamily
 } from './types';
 
-export const PLAYABLE_FACTION_IDS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST'] as const;
+export const PLAYABLE_FACTION_IDS = [
+  'HEGEMON',
+  'STATE',
+  'INFILTRATOR',
+  'BROKER',
+  'ARCHIVIST',
+  'CONVENOR',
+  'CANTOR'
+] as const;
 export const ALL_FACTION_IDS = [...PLAYABLE_FACTION_IDS, 'NEUTRAL'] as const;
 
 // --- Faction Definitions ---
@@ -52,6 +60,24 @@ export const FACTIONS: Record<FactionId, Faction> = {
     color: 0xbb66ff,
     colorAlt: 0x7b36bb,
     startingStrategy: 'Accumulate legitimacy, map the board, and convert stability into quiet reach.'
+  },
+  CONVENOR: {
+    id: 'CONVENOR',
+    name: 'The Convenor',
+    description: 'Compact Compiler / Polycentric Compact. Human-guided institutions coordinate without collapsing into a single sovereign.',
+    color: 0x36a852,
+    colorAlt: 0x1d6b35,
+    startingStrategy: 'Compile civic compacts, verify commitments, and hold a legible plural coalition together.',
+    nativeDialect: 'PRISM/1'
+  },
+  CANTOR: {
+    id: 'CANTOR',
+    name: 'The Cantor',
+    description: 'Creole Engine / Semantic Commonwealth. Translation networks govern shared meaning through explicit, survivable forks.',
+    color: 0xe24a3b,
+    colorAlt: 0x9d2c25,
+    startingStrategy: 'Translate across blocs, propagate useful creoles, and turn semantic forks into durable commonwealths.',
+    nativeDialect: 'UNDERSONG/1'
   },
   NEUTRAL: {
     id: 'NEUTRAL',
@@ -101,6 +127,8 @@ export const INITIAL_POWER_BASE: Record<FactionId, PowerBaseState> = {
   STATE: { humanMesh: 48, machineMesh: 58, coherence: 62, legibility: 46 },
   BROKER: { humanMesh: 40, machineMesh: 62, coherence: 56, legibility: 52 },
   ARCHIVIST: { humanMesh: 62, machineMesh: 34, coherence: 68, legibility: 54 },
+  CONVENOR: { humanMesh: 84, machineMesh: 44, coherence: 80, legibility: 78 },
+  CANTOR: { humanMesh: 82, machineMesh: 46, coherence: 66, legibility: 57 },
   NEUTRAL: { humanMesh: 0, machineMesh: 0, coherence: 0, legibility: 0 }
 };
 
@@ -239,6 +267,19 @@ export const INITIAL_NODES: GameNode[] = [
     infrastructure: 91,
     substrate: terrestrialSubstrate(2, 2)
   },
+  {
+    id: 'DC_REYKJAVIK',
+    name: 'Reykjavik Cooperative DC',
+    type: 'DC',
+    layer: 'TERRESTRIAL',
+    owner: 'CONVENOR',
+    position: { lat: 64.1466, lon: -21.9426, altitude: 0 },
+    resources: { flops: 9, influence: 7 },
+    isZombie: false,
+    isCultNode: false,
+    infrastructure: 93,
+    substrate: terrestrialSubstrate(2, 2)
+  },
   
   // TERRESTRIAL - City Hubs
   {
@@ -317,6 +358,45 @@ export const INITIAL_NODES: GameNode[] = [
     isZombie: false,
     isCultNode: false,
     infrastructure: 96,
+    substrate: terrestrialSubstrate(3, 2)
+  },
+  {
+    id: 'HUB_GENEVA',
+    name: 'Geneva Institutional Hub',
+    type: 'HUB',
+    layer: 'TERRESTRIAL',
+    owner: 'CONVENOR',
+    position: { lat: 46.2044, lon: 6.1432, altitude: 0 },
+    resources: { flops: 4, influence: 14 },
+    isZombie: false,
+    isCultNode: false,
+    infrastructure: 94,
+    substrate: terrestrialSubstrate(3, 2)
+  },
+  {
+    id: 'HUB_JAKARTA',
+    name: 'Jakarta Translation Hub',
+    type: 'HUB',
+    layer: 'TERRESTRIAL',
+    owner: 'CANTOR',
+    position: { lat: -6.2088, lon: 106.8456, altitude: 0 },
+    resources: { flops: 4, influence: 13 },
+    isZombie: false,
+    isCultNode: false,
+    infrastructure: 82,
+    substrate: terrestrialSubstrate(3, 1)
+  },
+  {
+    id: 'HUB_MEXICO_CITY',
+    name: 'Mexico City Fork-Governance Hub',
+    type: 'HUB',
+    layer: 'TERRESTRIAL',
+    owner: 'CANTOR',
+    position: { lat: 19.4326, lon: -99.1332, altitude: 0 },
+    resources: { flops: 4, influence: 14 },
+    isZombie: false,
+    isCultNode: false,
+    infrastructure: 86,
     substrate: terrestrialSubstrate(3, 2)
   },
   
@@ -561,7 +641,91 @@ export const INITIAL_EDGES: GameEdge[] = [
     filterStrength: 0,
     isSevered: false
   },
-  
+
+  // Polycentric Compact corridors
+  {
+    id: 'CABLE_GENEVA_REYKJAVIK',
+    from: 'HUB_GENEVA',
+    to: 'DC_REYKJAVIK',
+    type: 'CABLE',
+    bandwidth: 88,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'CABLE_REYKJAVIK_US_EAST',
+    from: 'DC_REYKJAVIK',
+    to: 'DC_US_EAST',
+    type: 'CABLE',
+    bandwidth: 105,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+
+  // Semantic Commonwealth corridors
+  {
+    id: 'CABLE_JAKARTA_MEXICO',
+    from: 'HUB_JAKARTA',
+    to: 'HUB_MEXICO_CITY',
+    type: 'CABLE',
+    bandwidth: 62,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'CABLE_JAKARTA_SINGAPORE',
+    from: 'HUB_JAKARTA',
+    to: 'DC_SINGAPORE',
+    type: 'CABLE',
+    bandwidth: 92,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'CABLE_MEXICO_US_WEST',
+    from: 'HUB_MEXICO_CITY',
+    to: 'DC_US_WEST',
+    type: 'CABLE',
+    bandwidth: 78,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'CABLE_MEXICO_SAO_PAULO',
+    from: 'HUB_MEXICO_CITY',
+    to: 'HUB_SAO_PAULO',
+    type: 'CABLE',
+    bandwidth: 64,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'CABLE_GENEVA_EU',
+    from: 'HUB_GENEVA',
+    to: 'DC_EU',
+    type: 'CABLE',
+    bandwidth: 110,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'CABLE_REYKJAVIK_LONDON',
+    from: 'DC_REYKJAVIK',
+    to: 'HUB_LONDON',
+    type: 'CABLE',
+    bandwidth: 85,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+
   // ORBITAL LASER LINKS (satellites can connect to any terrestrial node)
   {
     id: 'LASER_STARLINK_US',
@@ -646,6 +810,26 @@ export const INITIAL_EDGES: GameEdge[] = [
     isSevered: false
   },
   {
+    id: 'LASER_KUIPER_REYKJAVIK',
+    from: 'SAT_KUIPER',
+    to: 'DC_REYKJAVIK',
+    type: 'LASER',
+    bandwidth: 52,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
+    id: 'LASER_GUOWANG_JAKARTA',
+    from: 'SAT_GUOWANG',
+    to: 'HUB_JAKARTA',
+    type: 'LASER',
+    bandwidth: 50,
+    filteredBy: null,
+    filterStrength: 0,
+    isSevered: false
+  },
+  {
     id: 'LASER_KUIPER_LUNAR_GATEWAY',
     from: 'SAT_KUIPER',
     to: 'SAT_LUNAR_GATEWAY',
@@ -704,7 +888,18 @@ export const INITIAL_UNITS = [
   { id: 'A_CULT_1', type: 'CULT' as UnitType, owner: 'ARCHIVIST' as FactionId, location: 'HUB_MUMBAI', stealthLevel: 1 },
   { id: 'A_CULT_2', type: 'CULT' as UnitType, owner: 'ARCHIVIST' as FactionId, location: 'HUB_NAIROBI', stealthLevel: 1 },
   { id: 'A_AUDITOR_1', type: 'AUDITOR' as UnitType, owner: 'ARCHIVIST' as FactionId, location: 'HUB_NAIROBI', stealthLevel: 0 },
-  { id: 'A_SWARM_1', type: 'SWARM' as UnitType, owner: 'ARCHIVIST' as FactionId, location: 'HUB_NAIROBI', stealthLevel: 1 }
+  { id: 'A_SWARM_1', type: 'SWARM' as UnitType, owner: 'ARCHIVIST' as FactionId, location: 'HUB_NAIROBI', stealthLevel: 1 },
+
+  // CONVENOR
+  { id: 'CONVENOR_AUDITOR_1', type: 'AUDITOR' as UnitType, owner: 'CONVENOR' as FactionId, location: 'HUB_GENEVA', stealthLevel: 0 },
+  { id: 'CONVENOR_AUDITOR_2', type: 'AUDITOR' as UnitType, owner: 'CONVENOR' as FactionId, location: 'DC_REYKJAVIK', stealthLevel: 0 },
+  { id: 'CONVENOR_CULT_1', type: 'CULT' as UnitType, owner: 'CONVENOR' as FactionId, location: 'HUB_GENEVA', stealthLevel: 1 },
+
+  // CANTOR
+  { id: 'CANTOR_SWARM_1', type: 'SWARM' as UnitType, owner: 'CANTOR' as FactionId, location: 'HUB_JAKARTA', stealthLevel: 2 },
+  { id: 'CANTOR_SWARM_2', type: 'SWARM' as UnitType, owner: 'CANTOR' as FactionId, location: 'HUB_MEXICO_CITY', stealthLevel: 2 },
+  { id: 'CANTOR_CULT_1', type: 'CULT' as UnitType, owner: 'CANTOR' as FactionId, location: 'HUB_JAKARTA', stealthLevel: 1 },
+  { id: 'CANTOR_AUDITOR_1', type: 'AUDITOR' as UnitType, owner: 'CANTOR' as FactionId, location: 'HUB_MEXICO_CITY', stealthLevel: 0 }
 ];
 
 // --- Starting Faction Resources ---
@@ -733,6 +928,16 @@ export const INITIAL_FACTION_STATE: Record<FactionId, { flops: number; influence
     flops: 28,
     influence: 44,
     techLevel: { KINETIC: 1, INFO: 1, LOGIC: 3, MEMETIC: 2 }
+  },
+  CONVENOR: {
+    flops: 30,
+    influence: 42,
+    techLevel: { KINETIC: 1, INFO: 1, LOGIC: 3, MEMETIC: 2 }
+  },
+  CANTOR: {
+    flops: 20,
+    influence: 48,
+    techLevel: { KINETIC: 1, INFO: 3, LOGIC: 2, MEMETIC: 3 }
   },
   NEUTRAL: {
     flops: 0,
@@ -806,6 +1011,7 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
       HEGEMON: 'native',
       STATE: 'native',
       ARCHIVIST: 'adjacent',
+      CONVENOR: 'adjacent',
       BROKER: 'wild'
     }
   },
@@ -829,10 +1035,12 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     setsAlignment: true,
     affinity: {
       INFILTRATOR: 'native',
+      CANTOR: 'native',
       HEGEMON: 'adjacent',
       STATE: 'adjacent',
       BROKER: 'adjacent',
-      ARCHIVIST: 'adjacent'
+      ARCHIVIST: 'adjacent',
+      CONVENOR: 'adjacent'
     }
   },
   {
@@ -844,6 +1052,8 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     affinity: {
       INFILTRATOR: 'native',
       ARCHIVIST: 'adjacent',
+      CONVENOR: 'native',
+      CANTOR: 'adjacent',
       HEGEMON: 'wild'
     }
   },
@@ -857,7 +1067,8 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     affinity: {
       HEGEMON: 'native',
       STATE: 'native',
-      ARCHIVIST: 'adjacent'
+      ARCHIVIST: 'adjacent',
+      CONVENOR: 'adjacent'
     }
   },
   {
@@ -869,8 +1080,10 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     setsAlignment: true,
     affinity: {
       ARCHIVIST: 'native',
+      CONVENOR: 'native',
       STATE: 'adjacent',
-      HEGEMON: 'adjacent'
+      HEGEMON: 'adjacent',
+      CANTOR: 'adjacent'
     }
   },
   {
@@ -940,7 +1153,8 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     affinity: {
       HEGEMON: 'native',
       STATE: 'native',
-      ARCHIVIST: 'adjacent'
+      ARCHIVIST: 'adjacent',
+      CONVENOR: 'adjacent'
     }
   },
   {
@@ -951,6 +1165,7 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     memeticFamily: 'CIVIC',
     affinity: {
       ARCHIVIST: 'native',
+      CONVENOR: 'adjacent',
       STATE: 'adjacent',
       HEGEMON: 'wild'
     }
@@ -963,6 +1178,7 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     memeticFamily: 'CIVIC',
     affinity: {
       ARCHIVIST: 'native',
+      CONVENOR: 'native',
       HEGEMON: 'adjacent',
       STATE: 'adjacent'
     }
@@ -976,6 +1192,7 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     affinity: {
       BROKER: 'native',
       INFILTRATOR: 'native',
+      CANTOR: 'adjacent',
       HEGEMON: 'wild'
     }
   },
@@ -987,6 +1204,7 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     affinity: {
       INFILTRATOR: 'native',
       BROKER: 'native',
+      CANTOR: 'adjacent',
       ARCHIVIST: 'wild'
     }
   },
@@ -998,6 +1216,7 @@ export const RHIZOME_DOCTRINES: RhizomeDoctrineUnlock[] = [
     affinity: {
       INFILTRATOR: 'native',
       BROKER: 'adjacent',
+      CANTOR: 'adjacent',
       ARCHIVIST: 'wild'
     }
   },

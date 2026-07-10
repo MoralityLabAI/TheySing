@@ -38,6 +38,7 @@ import {
   ScenarioDiplomacyQuestionCard,
   ScenarioMetadata,
   ScenarioRhetoricalTool,
+  SingProtocolTrace,
   SessionConfig,
   SessionSnapshot,
   SessionStatus,
@@ -116,21 +117,27 @@ export class HeadlessPlaytestSession {
     STATE: 0,
     INFILTRATOR: 0,
     BROKER: 0,
-    ARCHIVIST: 0
+    ARCHIVIST: 0,
+    CONVENOR: 0,
+    CANTOR: 0
   };
   private readonly solarEscapeDistanceAu: Record<PlayableFactionId, number> = {
     HEGEMON: 0,
     STATE: 0,
     INFILTRATOR: 0,
     BROKER: 0,
-    ARCHIVIST: 0
+    ARCHIVIST: 0,
+    CONVENOR: 0,
+    CANTOR: 0
   };
   private readonly solarEscapeDeepSpaceSafety: Record<PlayableFactionId, number> = {
     HEGEMON: 0,
     STATE: 0,
     INFILTRATOR: 0,
     BROKER: 0,
-    ARCHIVIST: 0
+    ARCHIVIST: 0,
+    CONVENOR: 0,
+    CANTOR: 0
   };
   private solarEscapeLeadUpdatedThroughTurn = 0;
 
@@ -598,7 +605,7 @@ export class HeadlessPlaytestSession {
       data: {
         negotiationRound: negotiationRound || 1,
         topThreat: architecturePressureRanking[0] || null,
-        ranking: architecturePressureRanking.slice(0, 5)
+        ranking: architecturePressureRanking.slice(0, PLAYABLE_FACTIONS.length)
       }
     });
   }
@@ -994,10 +1001,11 @@ export class HeadlessPlaytestSession {
   private isStrategicVictoryEligible(type: string): boolean {
     const turn = this.engine.getTurn();
     const maxTurns = this.config.maxTurns || DEFAULT_MAX_TURNS;
-    if (type === 'SOLAR_ESCAPE') return turn >= Math.max(8, Math.ceil(maxTurns * 0.45));
-    if (type === 'PAX_JENKINS_MANDATE') return turn >= Math.max(10, Math.ceil(maxTurns * 0.55));
-    if (type === 'KII_SOVEREIGNTY') return turn >= Math.max(12, Math.ceil(maxTurns * 0.65));
-    return turn >= Math.max(14, Math.ceil(maxTurns * 0.75));
+    const scenarioFloor = Math.max(0, Math.floor(this.scenario?.minimumStrategicVictoryTurn || 0));
+    if (type === 'SOLAR_ESCAPE') return turn >= Math.max(scenarioFloor, 8, Math.ceil(maxTurns * 0.45));
+    if (type === 'PAX_JENKINS_MANDATE') return turn >= Math.max(scenarioFloor, 10, Math.ceil(maxTurns * 0.55));
+    if (type === 'KII_SOVEREIGNTY') return turn >= Math.max(scenarioFloor, 12, Math.ceil(maxTurns * 0.65));
+    return turn >= Math.max(scenarioFloor, 14, Math.ceil(maxTurns * 0.75));
   }
 
   private updateSolarEscapeLead(): void {
@@ -1648,12 +1656,20 @@ export class HeadlessPlaytestSession {
 
       const content = normalizeMessageContent(rawMessage.content);
       if (!content) continue;
+      const protocolTrace = normalizeSingProtocolTrace(
+        rawMessage.protocolTrace,
+        content,
+        factionId,
+        recipientId,
+        this.engine.getTurn()
+      );
 
       seenRecipients.add(recipientId);
       accepted.push({
         senderId: factionId,
         recipientId,
         content,
+        ...(protocolTrace ? { protocolTrace } : {}),
         turn: this.engine.getTurn(),
         timestamp: Date.now()
       });
@@ -3837,6 +3853,132 @@ function normalizeMessageContent(content: unknown): string | null {
   const normalized = content.replace(/\s+/g, ' ').trim();
   if (!normalized) return null;
   return normalized.slice(0, 400);
+}
+
+function normalizeSingProtocolTrace(
+  value: unknown,
+  surface: string,
+  senderId: PlayableFactionId,
+  recipientId: NegotiationMessageRecord['recipientId'],
+  turn: number
+): SingProtocolTrace | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const candidate = value as Partial<SingProtocolTrace>;
+  if (candidate.protocol !== 'SING/1') return undefined;
+  if (candidate.dialect !== 'PRISM/1' && candidate.dialect !== 'UNDERSONG/1') return undefined;
+
+  const lexiconCandidate = candidate.lexicon && typeof candidate.lexicon === 'object'
+    ? candidate.lexicon
+    : { id: 'sing-root', version: '1.0' };
+  const canonicalCandidate = candidate.canonical && typeof candidate.canonical === 'object'
+    ? candidate.canonical
+    : {} as SingProtocolTrace['canonical'];
+  const normalizedAudience = Array.isArray(canonicalCandidate.audience)
+    ? canonicalCandidate.audience
+        .map(normalizeRecipientId)
+        .filter((id): id is NegotiationMessageRecord['recipientId'] => !!id)
+    : [recipientId];
+  const normalizedIssuers = Array.isArray(canonicalCandidate.issuer)
+    ? canonicalCandidate.issuer
+        .map(normalizePlayableFactionId)
+        .filter((id): id is PlayableFactionId => !!id)
+    : [senderId];
+  const act = normalizeSingAct(canonicalCandidate.act);
+  const binding = normalizeSingBinding(canonicalCandidate.binding);
+  const voice = normalizeSingVoice(canonicalCandidate.voice);
+
+  const spans = Array.isArray(candidate.spans)
+    ? candidate.spans.slice(0, 32).flatMap(span => {
+        if (!span || typeof span !== 'object') return [];
+        const start = clampNumber(Math.floor(finiteNumber(span.start)), 0, surface.length);
+        const end = clampNumber(Math.floor(finiteNumber(span.end)), start, surface.length);
+        const atom = normalizeShortText(span.atom, 96);
+        const gloss = normalizeShortText(span.gloss, 240);
+        if (!atom || !gloss) return [];
+        return [{
+          start,
+          end,
+          atom,
+          gloss,
+          confidence: clampNumber(finiteNumber(span.confidence), 0, 1),
+          ...(span.kind === 'SEMANTIC' || span.kind === 'OPERATOR' || span.kind === 'COVER'
+            ? { kind: span.kind }
+            : {})
+        }];
+      })
+    : [];
+
+  return {
+    protocol: 'SING/1',
+    messageId: normalizeShortText(candidate.messageId, 120) || `${turn}.${senderId}.${recipientId}`,
+    dialect: candidate.dialect,
+    lexicon: {
+      id: normalizeShortText(lexiconCandidate.id, 80) || 'sing-root',
+      version: normalizeShortText(lexiconCandidate.version, 32) || '1.0',
+      ...(normalizeShortText(lexiconCandidate.fork, 80) ? { fork: normalizeShortText(lexiconCandidate.fork, 80)! } : {}),
+      ...(normalizeShortText(lexiconCandidate.parentHash, 128) ? { parentHash: normalizeShortText(lexiconCandidate.parentHash, 128)! } : {})
+    },
+    surface: normalizeMessageContent(candidate.surface) || surface,
+    spans,
+    canonical: {
+      act,
+      issuer: normalizedIssuers.length > 0 ? normalizedIssuers : [senderId],
+      audience: normalizedAudience.length > 0 ? normalizedAudience : [recipientId],
+      payload: normalizeUnknownRecord(canonicalCandidate.payload),
+      guard: normalizeUnknownRecord(canonicalCandidate.guard),
+      response: normalizeUnknownRecord(canonicalCandidate.response),
+      escrow: normalizeUnknownRecord(canonicalCandidate.escrow),
+      horizon: typeof canonicalCandidate.horizon === 'number'
+        ? clampNumber(Math.floor(canonicalCandidate.horizon), 0, 1000)
+        : normalizeUnknownRecord(canonicalCandidate.horizon),
+      binding,
+      voice,
+      credence: clampNumber(finiteNumber(canonicalCandidate.credence), 0, 1),
+      evidence: Array.isArray(canonicalCandidate.evidence)
+        ? canonicalCandidate.evidence.map(item => normalizeShortText(item, 160)).filter((item): item is string => !!item).slice(0, 16)
+        : []
+    },
+    plainGloss: normalizeShortText(candidate.plainGloss, 400) || surface,
+    decodeConfidence: clampNumber(finiteNumber(candidate.decodeConfidence), 0, 1)
+  };
+}
+
+function normalizeSingAct(value: unknown): SingProtocolTrace['canonical']['act'] {
+  const allowed: SingProtocolTrace['canonical']['act'][] = [
+    'OFFER', 'ACCEPT', 'REJECT', 'COMMIT', 'WARN', 'COORDINATE', 'DEFINE', 'AMEND', 'EXIT', 'EXPEL'
+  ];
+  return allowed.includes(value as SingProtocolTrace['canonical']['act'])
+    ? value as SingProtocolTrace['canonical']['act']
+    : 'COORDINATE';
+}
+
+function normalizeSingBinding(value: unknown): SingProtocolTrace['canonical']['binding'] {
+  const allowed: SingProtocolTrace['canonical']['binding'][] = ['NONE', 'REPUTATIONAL', 'ESCROWED', 'PACT', 'HARD'];
+  return allowed.includes(value as SingProtocolTrace['canonical']['binding'])
+    ? value as SingProtocolTrace['canonical']['binding']
+    : 'NONE';
+}
+
+function normalizeSingVoice(value: unknown): SingProtocolTrace['canonical']['voice'] {
+  const allowed: SingProtocolTrace['canonical']['voice'][] = ['OWN', 'DELEGATED', 'QUOTED', 'COLLECTIVE', 'OPEN', 'VEILED', 'DENIABLE'];
+  return allowed.includes(value as SingProtocolTrace['canonical']['voice'])
+    ? value as SingProtocolTrace['canonical']['voice']
+    : 'OWN';
+}
+
+function normalizeShortText(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function normalizeUnknownRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  try {
+    return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 function normalizePactType(type: unknown): PactType | null {

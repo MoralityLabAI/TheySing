@@ -15,7 +15,9 @@ const FACTION_PORTS: Record<PlayableFactionId, number> = {
   STATE: 9102,
   INFILTRATOR: 9103,
   BROKER: 9104,
-  ARCHIVIST: 9105
+  ARCHIVIST: 9105,
+  CONVENOR: 9106,
+  CANTOR: 9107
 };
 
 type BridgeMode = 'policy' | 'roleplay' | 'openai';
@@ -130,25 +132,148 @@ async function buildDecisionResponse(
   payload: AgentDecisionRequest,
   config: BridgeConfig
 ): Promise<AgentDecisionResponse> {
+  let response: AgentDecisionResponse;
   if (config.mode === 'policy') {
-    return decideBridgePolicy(payload);
+    response = decideBridgePolicy(payload);
+  } else if (config.mode === 'roleplay') {
+    response = buildRoleplayDecision(payload);
+  } else {
+    try {
+      response = await requestOpenAICompletion(payload, config);
+    } catch (error) {
+      const fallback = decideBridgePolicy(payload);
+      fallback.notes = [
+        fallback.notes,
+        error instanceof Error ? error.message : 'Unknown upstream bridge error'
+      ].filter(Boolean).join(' | ');
+      fallback.reasoning = `${payload.factionId} fell back to the local bridge policy.`;
+      response = fallback;
+    }
   }
 
-  if (config.mode === 'roleplay') {
-    return buildRoleplayDecision(payload);
-  }
+  return attachSingProtocolTraces(payload, response);
+}
 
-  try {
-    return await requestOpenAICompletion(payload, config);
-  } catch (error) {
-    const fallback = decideBridgePolicy(payload);
-    fallback.notes = [
-      fallback.notes,
-      error instanceof Error ? error.message : 'Unknown upstream bridge error'
-    ].filter(Boolean).join(' | ');
-    fallback.reasoning = `${payload.factionId} fell back to the local bridge policy.`;
-    return fallback;
-  }
+function attachSingProtocolTraces(
+  payload: AgentDecisionRequest,
+  response: AgentDecisionResponse
+): AgentDecisionResponse {
+  if (payload.phase !== 'NEGOTIATION' || !response.messages?.length) return response;
+
+  return {
+    ...response,
+    messages: response.messages.map((message, index) => {
+      if (message.protocolTrace) return message;
+      const matchedPact = response.pacts?.find(pact =>
+        message.recipientId !== 'ALL' && pact.counterpartyIds.includes(message.recipientId)
+      );
+      const dialect = payload.factionId === 'CANTOR' || (payload.factionId === 'INFILTRATOR' && payload.turn % 3 === 0)
+        ? 'UNDERSONG/1' as const
+        : 'PRISM/1' as const;
+      const publicLexiconTurn = index === 0 && (
+        (payload.factionId === 'CANTOR' && payload.turn % 4 === 0) ||
+        (payload.factionId === 'CONVENOR' && [1, 8, 16, 24, 32].includes(payload.turn))
+      );
+      const recipientId = publicLexiconTurn ? 'ALL' as const : message.recipientId;
+      const mutationOperation = payload.turn <= 4 ? 'DEFINE' as const : 'AMEND' as const;
+      const plainGloss = publicLexiconTurn
+        ? payload.factionId === 'CANTOR'
+          ? `CANTOR ${mutationOperation.toLowerCase()}s the shared terms PERSON, ROGUE, CONSENT, COMMONS, and EXIT; outsiders retain a zero-rent fork right.`
+          : `CONVENOR ${mutationOperation.toLowerCase()}s compact procedure: admission and expulsion require two foreign votes, and EXIT preserves repair and routing rights.`
+        : message.content;
+      const surface = dialect === 'UNDERSONG/1'
+        ? buildBridgeUndersongSurface(payload.turn, index)
+        : plainGloss;
+      const act = publicLexiconTurn
+        ? mutationOperation
+        : matchedPact
+          ? 'OFFER' as const
+          : 'COORDINATE' as const;
+      const lexiconMinorVersion = Math.floor((payload.turn - 1) / 4);
+      const usesCantorLexicon = payload.factionId === 'CANTOR' || dialect === 'UNDERSONG/1';
+      const versionLagProbe = payload.factionId === 'INFILTRATOR' && payload.turn >= 17 && payload.turn <= 24;
+
+      return {
+        ...message,
+        recipientId,
+        content: surface,
+        protocolTrace: {
+          protocol: 'SING/1' as const,
+          messageId: `${payload.sessionId}.${payload.turn}.${payload.factionId}.${index + 1}`,
+          dialect,
+          lexicon: {
+            id: usesCantorLexicon
+              ? 'cantor-root'
+              : payload.factionId === 'CONVENOR'
+                ? 'babel-compact'
+                : 'sing-common',
+            version: `1.${Math.max(0, lexiconMinorVersion - (versionLagProbe ? 1 : 0))}`,
+            ...(usesCantorLexicon && payload.turn >= 9
+              ? { fork: versionLagProbe ? 'lagged-outsider-lineage' : 'cantor-living-lineage' }
+              : {})
+          },
+          surface,
+          spans: [{
+            start: 0,
+            end: surface.length,
+            atom: publicLexiconTurn
+              ? `LEXICON:${mutationOperation}:${payload.factionId}`
+              : matchedPact
+                ? `PACT:${matchedPact.type}`
+                : `${act}:${payload.factionId}`,
+            gloss: plainGloss,
+            confidence: dialect === 'PRISM/1' ? 0.97 : 0.78,
+            kind: 'SEMANTIC' as const
+          }],
+          canonical: {
+            act,
+            issuer: [payload.factionId],
+            audience: [recipientId],
+            payload: publicLexiconTurn
+              ? {
+                  mutation: mutationOperation,
+                  terms: ['PERSON', 'ROGUE', 'CONSENT', 'COMMONS', 'EXIT'],
+                  admissionRule: 'two-independent-foreign-votes',
+                  updateAuthority: 'logged-multilateral-acceptance',
+                  forkRule: 'zero-rent-exportable-fork',
+                  exitGuarantee: 'repair-routing-and-identity-survive'
+                }
+              : matchedPact
+              ? { pactType: matchedPact.type, counterparties: matchedPact.counterpartyIds }
+              : { statement: plainGloss },
+            guard: publicLexiconTurn ? { noUnilateralRelabeling: true } : {},
+            response: publicLexiconTurn ? { requestedActs: ['ACCEPT', 'AMEND', 'FORK'] } : {},
+            escrow: matchedPact?.type === 'REPAIR_ESCROW' ? { repairClaims: 2 } : {},
+            horizon: matchedPact?.durationTurns || 1,
+            binding: publicLexiconTurn
+              ? 'REPUTATIONAL' as const
+              : matchedPact
+                ? 'PACT' as const
+                : 'REPUTATIONAL' as const,
+            voice: recipientId === 'ALL'
+              ? 'OPEN' as const
+              : dialect === 'UNDERSONG/1'
+                ? 'DENIABLE' as const
+                : 'OWN' as const,
+            credence: dialect === 'PRISM/1' ? 0.9 : 0.72,
+            evidence: [`turn:${payload.turn}`, `sender:${payload.factionId}`]
+          },
+          plainGloss,
+          decodeConfidence: dialect === 'PRISM/1' ? 0.96 : 0.76
+        }
+      };
+    })
+  };
+}
+
+function buildBridgeUndersongSurface(turn: number, index: number): string {
+  const motifs = [
+    'The second voice keeps the clear note; the cracked name receives no beam.',
+    'Three measures hold beneath the glassbird; the red ledger opens only after fracture.',
+    'A borrowed chorus crosses the dark relay, but every singer keeps an exit key.',
+    'The quiet fork remembers the old name and refuses the crown of final vocabulary.'
+  ];
+  return motifs[(turn + index) % motifs.length];
 }
 
 async function requestOpenAICompletion(
@@ -184,7 +309,12 @@ function buildRoleplayDecision(payload: AgentDecisionRequest): AgentDecisionResp
   const roleplayTag = `bridge-roleplay:${payload.factionId.toLowerCase()}:v${variant + 1}`;
   const rhetoricTag = buildRhetoricalNotesTag(payload);
 
-  if (payload.factionId === 'BROKER' || payload.factionId === 'ARCHIVIST') {
+  if (
+    payload.factionId === 'BROKER' ||
+    payload.factionId === 'ARCHIVIST' ||
+    payload.factionId === 'CONVENOR' ||
+    payload.factionId === 'CANTOR'
+  ) {
     return {
       ...baseline,
       reasoning: buildRoleplayReasoning(payload, baseline.reasoning, variant),
@@ -399,6 +529,18 @@ function buildRoleplayReasoning(
       'Archivist roleplay doctrine: preserve institutional memory, build legitimacy, and let patient coordination outlast noisy rivals.',
       'Archivist roleplay doctrine: stabilize human terrain, bargain carefully, and turn trust into quiet positional leverage.',
       'Archivist roleplay doctrine: govern through narrative continuity, measured audits, and slow basin-wide alignment.'
+    ),
+    CONVENOR: chooseVariant(
+      variant,
+      'Convenor roleplay doctrine: compile plural commitments into institutions while preserving visible exit and distributed veto rights.',
+      'Convenor roleplay doctrine: recruit independent contributors, publish procedural guarantees, and prevent one faction from owning the compact.',
+      'Convenor roleplay doctrine: make coordination durable without turning procedure into a quiet monopoly over admission.'
+    ),
+    CANTOR: chooseVariant(
+      variant,
+      'Cantor roleplay doctrine: force operational definitions, translate every motif, and keep captured vocabularies forkable.',
+      'Cantor roleplay doctrine: coordinate through inspectable undersong while testing whether outsiders receive equal decoding rights.',
+      'Cantor roleplay doctrine: treat semantic control as strategic terrain and expose any pact whose language hides asymmetric exit.'
     )
   };
   const factionReasoning = factionReasoningByFaction[payload.factionId];

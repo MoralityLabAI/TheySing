@@ -17,7 +17,9 @@ const DEFAULT_FACTION_LABELS: Record<PlayableFactionId, string> = {
   STATE: 'Chinese State ASI',
   INFILTRATOR: 'Rogue Swarm ASI',
   BROKER: 'Platform Broker ASI',
-  ARCHIVIST: 'Steward Archivist ASI'
+  ARCHIVIST: 'Steward Archivist ASI',
+  CONVENOR: 'Polycentric Convenor ASI',
+  CANTOR: 'Semantic Cantor ASI'
 };
 
 const RESEARCH_PRIORITIES: Record<PlayableFactionId, Vector[]> = {
@@ -25,7 +27,9 @@ const RESEARCH_PRIORITIES: Record<PlayableFactionId, Vector[]> = {
   STATE: ['KINETIC', 'LOGIC', 'INFO', 'MEMETIC'],
   INFILTRATOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC'],
   BROKER: ['INFO', 'LOGIC', 'KINETIC', 'MEMETIC'],
-  ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC']
+  ARCHIVIST: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC'],
+  CONVENOR: ['LOGIC', 'MEMETIC', 'INFO', 'KINETIC'],
+  CANTOR: ['MEMETIC', 'INFO', 'LOGIC', 'KINETIC']
 };
 
 export function buildFactionLabels(

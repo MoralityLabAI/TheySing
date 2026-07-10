@@ -1206,6 +1206,22 @@ function computeFactionStrategicScore(
         legibility * 3.45 +
         control.units * 4 -
         archivistThinClosurePenalty;
+    case 'CONVENOR':
+      return sharedBase +
+        influence * 2.6 +
+        humanMesh * 4.2 +
+        coherence * 4.8 +
+        legibility * 4.4 +
+        control.nodes * 24 +
+        control.units * 3;
+    case 'CANTOR':
+      return sharedBase +
+        influence * 2.8 +
+        humanMesh * 3.6 +
+        coherence * 3.2 +
+        legibility * 2.4 +
+        control.units * 5.5 +
+        techTotal * 4;
     default:
       return sharedBase + flops + influence;
   }

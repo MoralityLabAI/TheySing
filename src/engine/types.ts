@@ -4,8 +4,17 @@
 // ============================================================================
 
 // --- Faction System ---
-export type FactionId = 'HEGEMON' | 'INFILTRATOR' | 'STATE' | 'BROKER' | 'ARCHIVIST' | 'NEUTRAL';
+export type FactionId =
+  | 'HEGEMON'
+  | 'INFILTRATOR'
+  | 'STATE'
+  | 'BROKER'
+  | 'ARCHIVIST'
+  | 'CONVENOR'
+  | 'CANTOR'
+  | 'NEUTRAL';
 export type PlayableFactionId = Exclude<FactionId, 'NEUTRAL'>;
+export type SingDialect = 'PRISM/1' | 'UNDERSONG/1';
 
 export interface Faction {
   id: FactionId;
@@ -14,6 +23,7 @@ export interface Faction {
   color: number;
   colorAlt: number;
   startingStrategy: string;
+  nativeDialect?: SingDialect;
 }
 
 // --- Vector Combat System ---

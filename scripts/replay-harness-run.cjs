@@ -4,7 +4,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const DIST_SESSION = path.join(ROOT, 'dist-harness', 'harness', 'HeadlessPlaytestSession.js');
-const PLAYABLE_FACTIONS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST'];
+const PLAYABLE_FACTIONS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR'];
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -209,4 +209,3 @@ main().catch((error) => {
   console.error(error && error.stack ? error.stack : String(error));
   process.exitCode = 1;
 });
-

@@ -187,6 +187,9 @@ function buildScenarioMetadata(overlay: ScenarioOverlay): ScenarioMetadata | und
     description: overlay.description,
     briefing: overlay.briefing,
     tags: overlay.tags ? [...overlay.tags] : undefined,
+    minimumStrategicVictoryTurn: typeof overlay.minimumStrategicVictoryTurn === 'number'
+      ? Math.max(1, Math.floor(overlay.minimumStrategicVictoryTurn))
+      : undefined,
     diplomacyQuestions: overlay.diplomacyQuestions
       ? overlay.diplomacyQuestions.map(question => ({
           ...question,

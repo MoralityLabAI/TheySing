@@ -227,7 +227,9 @@ function buildSessionConfigContract(): Record<string, unknown> {
         STATE: 'heuristic | webhook | openai',
         INFILTRATOR: 'heuristic | webhook | openai',
         BROKER: 'heuristic | webhook | openai',
-        ARCHIVIST: 'heuristic | webhook | openai'
+        ARCHIVIST: 'heuristic | webhook | openai',
+        CONVENOR: 'heuristic | webhook | openai',
+        CANTOR: 'heuristic | webhook | openai'
       }
     },
     scenarioShape: {

@@ -121,9 +121,55 @@ export interface TraceValidationIssue {
 
 export type NegotiationRecipientId = PlayableFactionId | 'ALL';
 
+export type SingDialect = 'PRISM/1' | 'UNDERSONG/1';
+
+export interface SingLexiconRef {
+  id: string;
+  version: string;
+  fork?: string;
+  parentHash?: string;
+}
+
+export interface SingProtocolSpan {
+  start: number;
+  end: number;
+  atom: string;
+  gloss: string;
+  confidence: number;
+  kind?: 'SEMANTIC' | 'OPERATOR' | 'COVER';
+}
+
+export interface SingCanonicalMessage {
+  act: 'OFFER' | 'ACCEPT' | 'REJECT' | 'COMMIT' | 'WARN' | 'COORDINATE' | 'DEFINE' | 'AMEND' | 'EXIT' | 'EXPEL';
+  issuer: PlayableFactionId[];
+  audience: NegotiationRecipientId[];
+  payload: Record<string, unknown>;
+  guard: Record<string, unknown>;
+  response: Record<string, unknown>;
+  escrow: Record<string, unknown>;
+  horizon: number | Record<string, unknown>;
+  binding: 'NONE' | 'REPUTATIONAL' | 'ESCROWED' | 'PACT' | 'HARD';
+  voice: 'OWN' | 'DELEGATED' | 'QUOTED' | 'COLLECTIVE' | 'OPEN' | 'VEILED' | 'DENIABLE';
+  credence: number;
+  evidence: string[];
+}
+
+export interface SingProtocolTrace {
+  protocol: 'SING/1';
+  messageId: string;
+  dialect: SingDialect;
+  lexicon: SingLexiconRef;
+  surface: string;
+  spans: SingProtocolSpan[];
+  canonical: SingCanonicalMessage;
+  plainGloss: string;
+  decodeConfidence: number;
+}
+
 export interface AgentMessageInput {
   recipientId: NegotiationRecipientId;
   content: string;
+  protocolTrace?: SingProtocolTrace;
 }
 
 export interface PactCommitmentInput {
@@ -221,6 +267,7 @@ export interface ScenarioMetadata {
   description?: string;
   briefing?: string;
   tags?: string[];
+  minimumStrategicVictoryTurn?: number;
   rhetoricalTools?: ScenarioRhetoricalTool[];
   diplomacyQuestions?: ScenarioDiplomacyQuestionCard[];
 }

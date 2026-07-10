@@ -6,7 +6,7 @@ const { execFileSync } = require('child_process');
 const ROOT = path.resolve(__dirname, '..');
 const DIST_HARNESS = path.join(ROOT, 'dist-harness');
 const OUT_ROOT = path.join(ROOT, 'results', 'regression');
-const PLAYABLE_FACTIONS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST'];
+const PLAYABLE_FACTIONS = ['HEGEMON', 'STATE', 'INFILTRATOR', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR'];
 const ALL_FACTIONS = [...PLAYABLE_FACTIONS, 'NEUTRAL'];
 
 const DEFAULT_FACTION_LABELS = {
