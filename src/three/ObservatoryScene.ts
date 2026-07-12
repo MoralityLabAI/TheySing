@@ -219,6 +219,7 @@ const NODE_POSITION_OVERRIDES: Record<string, [number, number, number]> = {
 
 export class ObservatoryScene {
   public onEvidenceSelected: ((evidence: ObservatoryEvidence) => void) | null = null;
+  public onEvidenceHovered: ((evidence: ObservatoryEvidence | null, point: { clientX: number; clientY: number }) => void) | null = null;
 
   private readonly container: HTMLElement;
   private readonly scene: THREE.Scene;
@@ -254,6 +255,7 @@ export class ObservatoryScene {
   private readonly onPointerDown = (event: PointerEvent) => this.handlePointerDown(event);
   private readonly onPointerMove = (event: PointerEvent) => this.handlePointerMove(event);
   private readonly onPointerUp = (event: PointerEvent) => this.handlePointerUp(event);
+  private readonly onPointerLeave = (event: PointerEvent) => this.handlePointerLeave(event);
   private readonly onWheel = (event: WheelEvent) => this.handleWheel(event);
   private readonly onDoubleClick = () => this.resetCamera();
 
@@ -270,6 +272,8 @@ export class ObservatoryScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x020408, 1);
     this.renderer.domElement.className = 'obs-canvas';
+    this.renderer.domElement.setAttribute('aria-hidden', 'true');
+    this.renderer.domElement.style.cursor = 'grab';
     this.container.appendChild(this.renderer.domElement);
 
     this.scene.add(this.rootGroup);
@@ -291,7 +295,7 @@ export class ObservatoryScene {
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
-    this.renderer.domElement.removeEventListener('pointerleave', this.onPointerUp);
+    this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.removeEventListener('wheel', this.onWheel);
     this.renderer.domElement.removeEventListener('dblclick', this.onDoubleClick);
     this.renderer.dispose();
@@ -701,7 +705,7 @@ export class ObservatoryScene {
     this.renderer.domElement.addEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.addEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.addEventListener('pointerup', this.onPointerUp);
-    this.renderer.domElement.addEventListener('pointerleave', this.onPointerUp);
+    this.renderer.domElement.addEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.addEventListener('wheel', this.onWheel, { passive: false });
     this.renderer.domElement.addEventListener('dblclick', this.onDoubleClick);
   }
@@ -1252,11 +1256,16 @@ export class ObservatoryScene {
     this.isDragging = true;
     this.didDrag = false;
     this.lastPointer = { x: event.clientX, y: event.clientY };
+    this.renderer.domElement.style.cursor = 'grabbing';
+    this.onEvidenceHovered?.(null, { clientX: event.clientX, clientY: event.clientY });
     this.renderer.domElement.setPointerCapture(event.pointerId);
   }
 
   private handlePointerMove(event: PointerEvent): void {
-    if (!this.isDragging) return;
+    if (!this.isDragging) {
+      this.hoverEvidence(event);
+      return;
+    }
     this.directorShot = null;
     const dx = event.clientX - this.lastPointer.x;
     const dy = event.clientY - this.lastPointer.y;
@@ -1275,7 +1284,20 @@ export class ObservatoryScene {
     } catch {
       // Pointer may have left the canvas before release.
     }
-    if (!this.didDrag) this.pickEvidence(event);
+    if (!this.didDrag) {
+      this.pickEvidence(event);
+      this.renderer.domElement.style.cursor = 'grab';
+      this.onEvidenceHovered?.(null, { clientX: event.clientX, clientY: event.clientY });
+      return;
+    }
+    if (event.pointerType !== 'touch') this.hoverEvidence(event);
+    else this.renderer.domElement.style.cursor = 'grab';
+  }
+
+  private handlePointerLeave(event: PointerEvent): void {
+    if (this.isDragging) this.handlePointerUp(event);
+    this.renderer.domElement.style.cursor = 'grab';
+    this.onEvidenceHovered?.(null, { clientX: event.clientX, clientY: event.clientY });
   }
 
   private handleWheel(event: WheelEvent): void {
@@ -1286,17 +1308,28 @@ export class ObservatoryScene {
   }
 
   private pickEvidence(event: PointerEvent): void {
+    const evidence = this.evidenceAt(event);
+    if (evidence) {
+      for (const faction of evidence.factionIds) this.highlightFaction(faction, 1.7);
+      this.onEvidenceSelected?.(evidence);
+    }
+  }
+
+  private hoverEvidence(event: PointerEvent): void {
+    if (event.pointerType === 'touch') return;
+    const evidence = this.evidenceAt(event);
+    this.renderer.domElement.style.cursor = evidence ? 'pointer' : 'grab';
+    this.onEvidenceHovered?.(evidence, { clientX: event.clientX, clientY: event.clientY });
+  }
+
+  private evidenceAt(event: PointerEvent): ObservatoryEvidence | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const intersections = this.raycaster.intersectObjects([...this.turnPickables, ...this.persistentPickables], true);
     const hit = intersections.find((intersection) => findEvidence(intersection.object));
-    const evidence = hit ? findEvidence(hit.object) : null;
-    if (evidence) {
-      for (const faction of evidence.factionIds) this.highlightFaction(faction, 1.7);
-      this.onEvidenceSelected?.(evidence);
-    }
+    return hit ? findEvidence(hit.object) : null;
   }
 
   private resize(): void {

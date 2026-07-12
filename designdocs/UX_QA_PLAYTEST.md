@@ -23,10 +23,12 @@
 | P1 | Evidence mixed filters, protocol traces, research, events, board changes, and the anomaly archive into one continuous technical scroll. | The evidence drawer now uses `Now`, `Protocol`, `Research`, and `Archive` tabs with proper tab semantics. | Static progressive-disclosure contract and TypeScript build. |
 | P2 | Mobile offered one ambiguous evidence/diary toggle and had no way to reclaim the full globe. | Mobile uses the same explicit `Globe`, `Evidence`, and `Diary` modes; reset camera remains available beside replay controls. | Static responsive UX contract. |
 | P1 | The globe's colors, persistent beacons, effects, and logged locations were not explained or connected to the current-beat prose. | Current beats now show colored actors, signal progress, and location labels; selecting one focuses its logged node or edge. A compact key identifies all seven ASIs and four scene-signal forms: beacons, arcs, rings, and clusters. | Static globe-comprehension contract and TypeScript build. Headed visual confirmation remains pending. |
+| P1 | Scene-event effects had no hover affordance, contextual label, or keyboard/touch equivalent. | Mouse hover now changes the cursor and presents a bounded evidence tooltip. The bounded World key lists every logged scene-event effect on the current turn as an ordinary locate-and-inspect button, while the canvas is hidden from accessibility APIs as a duplicate visual surface. | Static pointer/accessibility contract, production-replay coverage audit, and TypeScript build. Headed visual confirmation remains pending. |
 
 ## Automated Gates
 
-- `npm run ci`: 16/16 checks pass.
+- `npm run ci`: 17/17 checks pass.
+- Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.
 - Replay live check: HTTP 200; correct cache policy; schema and evidence payload parse.
@@ -51,6 +53,8 @@ These flows require an actual browser viewport and remain the completion gate.
 11. Load a replay file and export a spectator clip.
 12. Open the World key, locate each ASI, and verify the matching beacon pulses without changing the replay turn.
 13. Select beats with node, edge, and orbital locations; confirm the camera visibly targets the corresponding scene signal.
+14. Hover beacons, arcs, rings, units, and anomalies; confirm the cursor and tooltip update without flicker, clipping, or stale content after dragging.
+15. Open the World key and operate every Visible now signal with keyboard only; confirm each targets the same object available through the canvas.
 
 ### Tablet And Mobile
 
@@ -62,6 +66,7 @@ These flows require an actual browser viewport and remain the completion gate.
 6. Rotate portrait/landscape and confirm the active panel remains usable.
 7. Test reduced-motion and keyboard navigation where supported.
 8. Open the World key and confirm it remains bounded, tappable, and does not trap access to the timeline or Globe mode.
+9. Tap each Visible now signal and confirm it focuses the scene and opens a dismissible evidence sheet without requiring hover.
 
 ### Legacy Game
 

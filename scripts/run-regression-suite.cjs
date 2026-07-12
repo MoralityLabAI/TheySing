@@ -42,6 +42,7 @@ async function main() {
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
+  await runTest('default observatory scene signals remain focusable', () => validateSceneAccessibilityCoverage(path.join(ROOT, 'public', 'observatory_replay.json')));
 
   const summary = {
     schema: 'theysing.regressionSuite.v1',
@@ -586,6 +587,7 @@ function validateObservatoryUxContract() {
   const main = fs.readFileSync(path.join(ROOT, 'src', 'main.ts'), 'utf8');
   const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.ts'), 'utf8');
   const css = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.css'), 'utf8');
+  const scene = fs.readFileSync(path.join(ROOT, 'src', 'three', 'ObservatoryScene.ts'), 'utf8');
   assert(html.includes("window.addEventListener('theysing:loading'"), 'Loading screen does not consume replay progress');
   assert(html.includes("window.addEventListener('theysing:ready'"), 'Loading screen does not wait for application readiness');
   assert(main.includes("new CustomEvent('theysing:ready')"), 'Legacy game does not signal readiness');
@@ -600,8 +602,16 @@ function validateObservatoryUxContract() {
   assert(ui.includes('Signal ${signalOrdinal + 1} of ${signalTurns.length}'), 'Current beat no longer exposes narrative signal progress');
   assert(ui.includes('this.scene.focusLocation(location, actors[0])'), 'Current beat no longer locates its logged globe event');
   assert(ui.includes('Globe signal forms'), 'Globe visual grammar is missing');
+  assert(ui.includes('Keyboard and touch scene index'), 'Globe scene effects have no non-hover index');
+  const sceneIndexSource = ui.match(/const visibleSignals = [\s\S]*?;\n  return `/)?.[0] || '';
+  assert(sceneIndexSource && !sceneIndexSource.includes('.slice('), 'Globe scene index silently caps keyboard/touch evidence');
+  assert(ui.includes('data-role="scene-tooltip"'), 'Globe evidence tooltip is missing');
+  assert(scene.includes('public onEvidenceHovered:'), 'Three.js evidence hover channel is missing');
+  assert(scene.includes("event.pointerType === 'touch'"), 'Globe hover handling does not distinguish touch input');
+  assert(scene.includes("setAttribute('aria-hidden', 'true')"), 'Canvas is exposed without equivalent keyboard semantics');
   assert(css.includes('.obs-shell .obs-faction-key'), 'Faction key presentation is missing');
   assert(css.includes('.obs-shell .obs-signal-key'), 'Signal legend presentation is missing');
+  assert(css.includes('.obs-shell .obs-visible-signals'), 'Keyboard/touch scene index presentation is missing');
   assert(ui.includes('private jumpToSignal(direction: -1 | 1)'), 'Narrative signal navigation is missing');
   assert(ui.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Default director mode ignores reduced-motion preference');
   assert(ui.includes("body.textContent = block.content"), 'Reduced-motion diary still uses staggered word timers');
@@ -663,6 +673,28 @@ function validateObservatoryReplayFile(filePath, options = {}) {
     }
   }
   return `validated ${path.relative(ROOT, filePath)}`;
+}
+
+function validateSceneAccessibilityCoverage(filePath) {
+  assert(fs.existsSync(filePath), `Replay file missing: ${path.relative(ROOT, filePath)}`);
+  const replay = readJson(filePath);
+  const nodeIds = new Set((replay.graph?.nodes || []).map((node) => node.nodeId).filter(Boolean));
+  const edgeIds = new Set((replay.graph?.edges || []).map((edge) => edge.edgeId).filter(Boolean));
+  const sceneEvents = (replay.turns || []).flatMap((turn) => turn.sceneEvents || []);
+  const focusable = sceneEvents.filter((event) => {
+    const location = event.location || {};
+    const hasResolvedLocation =
+      (location.nodeId && nodeIds.has(location.nodeId)) ||
+      (location.edgeId && edgeIds.has(location.edgeId)) ||
+      location.orbitShell ||
+      (Number.isFinite(location.lat) && Number.isFinite(location.lon));
+    return hasResolvedLocation || (event.actors?.length || 0) > 0;
+  }).length;
+  const maxSignalsPerTurn = Math.max(0, ...(replay.turns || []).map((turn) => (turn.sceneEvents || []).length));
+  const coverage = sceneEvents.length > 0 ? focusable / sceneEvents.length : 0;
+  assert(sceneEvents.length > 0, 'Default replay has no scene events for globe interaction');
+  assert(coverage >= 0.99, `Only ${(coverage * 100).toFixed(2)}% of scene signals can target a location or faction`);
+  return `sceneEvents=${sceneEvents.length}, focusable=${focusable}, maxPerTurn=${maxSignalsPerTurn}`;
 }
 
 function validateEngineState(engine) {

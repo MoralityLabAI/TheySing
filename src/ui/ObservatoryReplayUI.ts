@@ -269,6 +269,7 @@ export class ObservatoryReplayUI {
   private readonly scrubber: HTMLInputElement;
   private readonly timelineLabel: HTMLElement;
   private readonly beatPanel: HTMLElement;
+  private readonly sceneTooltip: HTMLElement;
   private keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   private replay: ObservatoryReplay | null = null;
   private turnIndex = 0;
@@ -287,6 +288,7 @@ export class ObservatoryReplayUI {
   private viewMode: ObservatoryViewMode = 'globe';
   private evidenceTab: EvidenceTab = 'now';
   private worldKeyOpen = false;
+  private hoveredSceneEvidence: ObservatoryEvidence | null = null;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -295,6 +297,7 @@ export class ObservatoryReplayUI {
     this.container.className = 'obs-shell obs-view-globe';
     this.container.innerHTML = `
       <div class="obs-scene" data-role="scene"></div>
+      <div class="obs-scene-tooltip" data-role="scene-tooltip" role="tooltip" hidden></div>
       <div class="obs-vignette"></div>
       <header class="obs-topbar">
         <div class="obs-brand">
@@ -420,9 +423,14 @@ export class ObservatoryReplayUI {
     this.scrubber = requireElement(this.container, '[data-role="scrubber"]') as HTMLInputElement;
     this.timelineLabel = requireElement(this.container, '[data-role="timeline-label"]');
     this.beatPanel = requireElement(this.container, '[data-role="beat"]');
+    this.sceneTooltip = requireElement(this.container, '[data-role="scene-tooltip"]');
 
     this.scene = new ObservatoryScene(this.sceneMount);
-    this.scene.onEvidenceSelected = (evidence) => this.renderEvidence(evidence);
+    this.scene.onEvidenceSelected = (evidence) => {
+      this.hideSceneTooltip();
+      this.renderEvidence(evidence);
+    };
+    this.scene.onEvidenceHovered = (evidence, point) => this.renderSceneTooltip(evidence, point);
     this.bindControls();
     this.renderFilters();
     void this.loadFromUrl();
@@ -655,6 +663,7 @@ export class ObservatoryReplayUI {
   }
 
   private renderEmpty(): void {
+    this.hideSceneTooltip();
     this.turnLabel.textContent = 'Turn --';
     this.phaseLabel.textContent = 'Waiting for replay';
     this.runLabel.textContent = '0 runs';
@@ -676,6 +685,7 @@ export class ObservatoryReplayUI {
   }
 
   private renderTurn(): void {
+    this.hideSceneTooltip();
     if (!this.replay || this.replay.turns.length === 0) {
       this.renderEmpty();
       return;
@@ -769,7 +779,7 @@ export class ObservatoryReplayUI {
         </div>
         <small>Select to locate and inspect / drag to orbit / scroll to zoom</small>
       </button>
-      ${renderWorldKey(actors, this.worldKeyOpen)}
+      ${renderWorldKey(actors, this.worldKeyOpen, turn)}
     `;
     this.beatPanel.querySelector<HTMLButtonElement>('[data-role="open-beat"]')?.addEventListener('click', () => {
       const located = this.scene.focusLocation(location, actors[0]);
@@ -777,10 +787,37 @@ export class ObservatoryReplayUI {
       for (const actor of actors.slice(located ? 1 : 0)) this.scene.pulseFaction(actor);
       this.renderEvidence(evidence);
     });
-    this.bindWorldKeyControls();
+    this.bindWorldKeyControls(turn);
   }
 
-  private bindWorldKeyControls(): void {
+  private renderSceneTooltip(evidence: ObservatoryEvidence | null, point: { clientX: number; clientY: number }): void {
+    if (!evidence) {
+      this.hideSceneTooltip();
+      return;
+    }
+    const bounds = this.container.getBoundingClientRect();
+    const left = Math.max(12, Math.min(bounds.width - 250, point.clientX - bounds.left + 16));
+    const top = Math.max(12, Math.min(bounds.height - 110, point.clientY - bounds.top + 16));
+    this.sceneTooltip.style.left = `${left}px`;
+    this.sceneTooltip.style.top = `${top}px`;
+    if (this.hoveredSceneEvidence !== evidence) {
+      this.sceneTooltip.innerHTML = `
+        <span>${escapeHtml(humanizeToken(evidence.category))} / ${escapeHtml(evidence.subgenre)}</span>
+        <strong>${escapeHtml(evidence.title)}</strong>
+        ${evidence.factionIds.length > 0 ? `<small>${escapeHtml(evidence.factionIds.map(labelFaction).join(' + '))}</small>` : ''}
+      `;
+      this.hoveredSceneEvidence = evidence;
+    }
+    this.sceneTooltip.hidden = false;
+  }
+
+  private hideSceneTooltip(): void {
+    this.hoveredSceneEvidence = null;
+    this.sceneTooltip.hidden = true;
+    this.sceneTooltip.innerHTML = '';
+  }
+
+  private bindWorldKeyControls(turn?: ReplayTurn): void {
     const worldKey = this.beatPanel.querySelector<HTMLDetailsElement>('.obs-world-key');
     worldKey?.addEventListener('toggle', () => {
       this.worldKeyOpen = worldKey.open;
@@ -790,6 +827,30 @@ export class ObservatoryReplayUI {
         const factionId = button.dataset.factionFocus || '';
         if (!this.scene.focusFaction(factionId)) return;
         this.status.textContent = `Located ${labelFaction(factionId)} on the globe.`;
+      });
+    }
+    for (const button of this.beatPanel.querySelectorAll<HTMLButtonElement>('[data-scene-signal]')) {
+      button.addEventListener('click', () => {
+        const event = turn?.sceneEvents?.[Number(button.dataset.sceneSignal)];
+        if (!event) return;
+        const eventActors = event.actors || [];
+        const title = humanizeToken(event.category || event.visualPreset || 'World signal');
+        const subgenre = event.subgenre || inferSubgenre(event.category, event.publicExplanation);
+        const evidence: ObservatoryEvidence = {
+          title,
+          category: event.category || 'SCENE_EVENT',
+          subgenre,
+          summary: renderSceneEventSummary(event, this.revealRetrospective),
+          factionIds: eventActors,
+          turn: turn?.turn,
+          phase: turn?.phase,
+          payload: this.revealRetrospective ? event : redactPrivatePayload(event)
+        };
+        const located = this.scene.focusLocation(event.location, eventActors[0]);
+        if (!located) this.scene.focusSubgenre(subgenre);
+        for (const actor of eventActors.slice(located ? 1 : 0)) this.scene.pulseFaction(actor);
+        this.hideSceneTooltip();
+        this.renderEvidence(evidence);
       });
     }
   }
@@ -1442,7 +1503,10 @@ function renderActorTag(factionId: string): string {
   return `<span class="obs-actor-tag" style="--obs-faction-color:${color}"><i aria-hidden="true"></i>${escapeHtml(labelFaction(factionId))}</span>`;
 }
 
-function renderWorldKey(activeActors: string[], open: boolean): string {
+function renderWorldKey(activeActors: string[], open: boolean, turn?: ReplayTurn): string {
+  const visibleSignals = (turn?.sceneEvents || [])
+    .map((event, index) => ({ event, index }))
+    .sort((left, right) => Number(right.event.intensity || 0) - Number(left.event.intensity || 0));
   return `
     <details class="obs-world-key" aria-live="off"${open ? ' open' : ''}>
       <summary><span>World key</span><small>7 ASIs / colors and signal forms</small></summary>
@@ -1465,6 +1529,22 @@ function renderWorldKey(activeActors: string[], open: boolean): string {
         <span><i class="obs-key-ring" aria-hidden="true"></i><b>Ring</b><small>systemic change</small></span>
         <span><i class="obs-key-cluster" aria-hidden="true"></i><b>Cluster</b><small>drones or anomaly</small></span>
       </div>
+      ${visibleSignals.length > 0 ? `
+        <div class="obs-visible-signals">
+          <div class="obs-visible-signals-heading"><span>Visible now / ${visibleSignals.length} signals</span><small>Keyboard and touch scene index</small></div>
+          ${visibleSignals.map(({ event, index }) => {
+            const actor = event.actors?.[0] || 'ALL';
+            const title = humanizeToken(event.category || event.visualPreset || 'World signal');
+            const location = labelLocation(event.location) || event.subgenre || 'World layer';
+            return `
+              <button type="button" data-scene-signal="${index}" style="--obs-faction-color:${factionColor(actor)}"
+                aria-label="Locate and inspect ${escapeHtml(title)} at ${escapeHtml(location)}">
+                <i aria-hidden="true"></i><span><b>${escapeHtml(title)}</b><small>${escapeHtml(location)}</small></span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+      ` : ''}
     </details>
   `;
 }

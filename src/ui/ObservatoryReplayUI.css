@@ -198,6 +198,16 @@
   box-shadow: 0 0 9px color-mix(in srgb, var(--obs-faction-color) 72%, transparent);
 }
 
+.obs-shell .obs-visible-signals button > i {
+  display: block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid var(--obs-faction-color);
+  border-radius: 50%;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--obs-faction-color) 60%, transparent);
+}
+
 .obs-shell .obs-location-tag::before {
   content: "+";
   margin-right: 4px;
@@ -206,6 +216,8 @@
 
 .obs-shell .obs-world-key {
   margin-top: 6px;
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
   border: 1px solid rgba(152, 226, 228, 0.2);
   border-radius: 8px;
   background: rgba(3, 10, 14, 0.76);
@@ -213,6 +225,28 @@
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
   backdrop-filter: blur(14px);
 }
+
+.obs-shell .obs-scene-tooltip {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  width: min(230px, calc(100vw - 24px));
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid rgba(125, 231, 237, 0.34);
+  border-left: 2px solid #f0c574;
+  border-radius: 3px 9px 9px 3px;
+  background: rgba(2, 8, 11, 0.9);
+  color: var(--obs-paper);
+  pointer-events: none;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.46);
+  backdrop-filter: blur(12px);
+}
+
+.obs-shell .obs-scene-tooltip[hidden] { display: none; }
+.obs-shell .obs-scene-tooltip span { color: #7de7ed; font-size: 7px; letter-spacing: 0.1em; text-transform: uppercase; }
+.obs-shell .obs-scene-tooltip strong { font-family: "Cormorant Garamond", Georgia, serif; font-size: 17px; font-weight: 500; line-height: 1; }
+.obs-shell .obs-scene-tooltip small { color: rgba(240, 232, 213, 0.5); font-size: 7px; text-transform: uppercase; }
 
 .obs-shell .obs-world-key summary {
   display: flex;
@@ -320,6 +354,67 @@
   height: 8px;
   margin-left: 3px;
 }
+
+.obs-shell .obs-visible-signals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 7px 8px 8px;
+  border-top: 1px solid rgba(152, 226, 228, 0.11);
+}
+
+.obs-shell .obs-visible-signals-heading {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2px 1px 4px;
+  color: rgba(240, 232, 213, 0.62);
+  font-size: 8px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.obs-shell .obs-visible-signals-heading small {
+  color: rgba(240, 232, 213, 0.3);
+  font-size: 6px;
+  letter-spacing: 0.05em;
+}
+
+.obs-shell .obs-visible-signals button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(152, 226, 228, 0.12);
+  border-radius: 5px;
+  background: rgba(2, 8, 11, 0.45);
+  color: var(--obs-paper);
+  text-align: left;
+  cursor: pointer;
+}
+
+.obs-shell .obs-visible-signals button:hover {
+  border-color: color-mix(in srgb, var(--obs-faction-color) 48%, transparent);
+  background: color-mix(in srgb, var(--obs-faction-color) 10%, rgba(2, 8, 11, 0.84));
+}
+
+.obs-shell .obs-visible-signals button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.obs-shell .obs-visible-signals button b,
+.obs-shell .obs-visible-signals button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-shell .obs-visible-signals button b { font-size: 8px; font-weight: 500; }
+.obs-shell .obs-visible-signals button small { color: rgba(240, 232, 213, 0.38); font-size: 7px; }
 
 .obs-shell .obs-key-beacon {
   border-radius: 50%;
@@ -887,7 +982,8 @@
   }
 
   .obs-shell .obs-world-key summary small,
-  .obs-shell .obs-faction-key button small {
+  .obs-shell .obs-faction-key button small,
+  .obs-shell .obs-visible-signals-heading small {
     display: none;
   }
 
