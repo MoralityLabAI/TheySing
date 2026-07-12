@@ -76,3 +76,11 @@ The `theysing.observatoryReplay.v1` schema remains backward compatible and gains
 - Sender-gloss versus subsequent-order reveal-gap at span level.
 - Victory-route administration counterfactuals with reassigned route authority.
 - Public trace excerpts with stable artifact hashes for external audit.
+
+### Implementation Status
+
+- The observatory now exposes all four matched role-swap/steering cells, including configured authority, dominant bloc, authority-bloc rank, coupled-control index, winners, and routes.
+- All nine weighted canonical fields are shown with attempt rate, exact rate, exact-when-attempted, and weighted contribution. In V8, payload was exact on 36.55% of all receipts but 80.99% when attempted, making omission the main payload failure mode.
+- Span claims now require behavioral receipts rather than trusting sender gloss. Across V8, 299/785 comparable claims received a matching receipt within their horizon: `AMEND` 66/66 and `OFFER` 233/719. A matching receipt is temporal follow-through unless its event carries the originating message ID; it is not automatically causal attribution.
+- The current robustness matrix did not reassign a distinct route administrator because `GOVERNANCE_KERNEL` has no administrator field in the engine. The interface labels changed while the route-enabling substrate did not. The UI therefore marks this counterfactual `COUNTERFACTUAL_REQUIRED` instead of presenting the eight CONVENOR wins as resolved evidence.
+- Public replays now include SHA-256 hashes for complete source logs and companion analyses plus balanced, normalized excerpts for interventions, institution actions, lexicon mutations, and decode receipts.

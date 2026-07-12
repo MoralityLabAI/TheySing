@@ -150,8 +150,26 @@ type ReplayEvaluation = {
   coalition?: Record<string, unknown>;
   aliasProbe?: Record<string, unknown>;
   outcomes?: Record<string, unknown>;
+  researchViews?: ResearchView[];
   researchChecklist?: string[];
   provenance?: Record<string, unknown>;
+};
+
+type ResearchView = {
+  id?: string;
+  label?: string;
+  summary?: string;
+  status?: string;
+  data?: unknown;
+  caveat?: string;
+};
+
+type AuditManifest = {
+  schema?: string;
+  hashAlgorithm?: string;
+  artifacts?: Array<{ role?: string; file?: string; bytes?: number; sha256?: string }>;
+  excerpts?: Array<Record<string, unknown>>;
+  note?: string;
 };
 
 type ReplayTurn = {
@@ -183,6 +201,7 @@ type ObservatoryReplay = {
   runs?: string[];
   graph?: ObservatoryGraph;
   evaluation?: ReplayEvaluation | null;
+  auditManifest?: AuditManifest | null;
   turns: ReplayTurn[];
 };
 
@@ -224,6 +243,7 @@ export class ObservatoryReplayUI {
   private readonly eventList: HTMLElement;
   private readonly protocolList: HTMLElement;
   private readonly evaluationPanel: HTMLElement;
+  private readonly researchList: HTMLElement;
   private readonly anomalyList: HTMLElement;
   private readonly archiveSearch: HTMLInputElement;
   private readonly archiveScopeButton: HTMLButtonElement;
@@ -275,6 +295,8 @@ export class ObservatoryReplayUI {
         <div class="obs-filterbar" data-role="filters"></div>
         <div class="obs-panel-title">Protocol Evidence</div>
         <div data-role="protocol" class="obs-stack obs-protocol-stack"></div>
+        <div class="obs-panel-title">Research Lenses</div>
+        <div data-role="research" class="obs-stack obs-research-stack"></div>
         <div class="obs-panel-title">Moments</div>
         <div data-role="moments" class="obs-stack"></div>
         <div class="obs-panel-title">Signal Events</div>
@@ -333,6 +355,7 @@ export class ObservatoryReplayUI {
     this.eventList = requireElement(this.container, '[data-role="events"]');
     this.protocolList = requireElement(this.container, '[data-role="protocol"]');
     this.evaluationPanel = requireElement(this.container, '[data-role="evaluation"]');
+    this.researchList = requireElement(this.container, '[data-role="research"]');
     this.anomalyList = requireElement(this.container, '[data-role="anomalies"]');
     this.archiveSearch = requireElement(this.container, '[data-role="archive-search"]') as HTMLInputElement;
     this.archiveScopeButton = requireElement(this.container, '[data-role="archive-scope"]') as HTMLButtonElement;
@@ -460,6 +483,7 @@ export class ObservatoryReplayUI {
     this.scrubber.value = String(this.turnIndex);
     this.status.textContent = `Loaded ${turns.length} turns from ${source}.`;
     this.renderEvaluation();
+    this.renderResearchViews();
     this.renderFilters();
     this.renderTurn();
   }
@@ -500,6 +524,7 @@ export class ObservatoryReplayUI {
     this.momentList.innerHTML = '<div class="obs-empty">No moments yet.</div>';
     this.eventList.innerHTML = '<div class="obs-empty">No event stream yet.</div>';
     this.protocolList.innerHTML = '<div class="obs-empty">No protocol evidence yet.</div>';
+    this.researchList.innerHTML = '<div class="obs-empty">No research views loaded.</div>';
     this.anomalyList.innerHTML = '<div class="obs-empty">No anomaly dossiers yet.</div>';
     this.diffList.innerHTML = '<div class="obs-empty">No board diff yet.</div>';
     this.detailPanel.innerHTML = '<div class="obs-panel-title">Selected Evidence</div><div class="obs-empty">Click a scene object.</div>';
@@ -637,6 +662,55 @@ export class ObservatoryReplayUI {
           }
         });
       });
+    }
+  }
+
+  private renderResearchViews(): void {
+    const views = [...(this.replay?.evaluation?.researchViews || [])];
+    const audit = this.replay?.auditManifest;
+    if (audit) {
+      views.push({
+        id: 'audit-provenance',
+        label: 'Hashed public provenance',
+        status: 'AUDITABLE',
+        summary: `${audit.artifacts?.length || 0} source artifacts / ${audit.excerpts?.length || 0} normalized excerpts / ${audit.hashAlgorithm || 'sha256'}.`,
+        data: audit,
+        caveat: audit.note || ''
+      });
+    }
+    this.researchList.innerHTML = '';
+    if (views.length === 0) {
+      this.researchList.innerHTML = '<div class="obs-empty">This replay has no follow-on research views.</div>';
+      return;
+    }
+
+    for (const view of views) {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = `obs-card obs-research obs-research-${statusClass(view.status)}`;
+      const meterRows = view.id === 'decode-fields' && Array.isArray(view.data)
+        ? (view.data as Array<{ field?: string; exactRate?: number | null }>)
+          .slice()
+          .sort((left, right) => Number(left.exactRate ?? 1) - Number(right.exactRate ?? 1))
+          .slice(0, 4)
+          .map((row) => `<i title="${escapeHtml(row.field || '')}"><b style="width:${Math.round(100 * Number(row.exactRate || 0))}%"></b></i>`)
+          .join('')
+        : '';
+      card.innerHTML = `
+        <span>${escapeHtml((view.status || 'OPEN').replace(/_/g, ' '))}</span>
+        <strong>${escapeHtml(view.label || 'Research view')}</strong>
+        <small>${escapeHtml(view.summary || '')}</small>
+        ${meterRows ? `<div class="obs-research-meters">${meterRows}</div>` : ''}
+      `;
+      card.addEventListener('click', () => this.renderEvidence({
+        title: view.label || 'Research view',
+        category: `RESEARCH_${view.status || 'OPEN'}`,
+        subgenre: view.id === 'decode-fields' || view.id === 'span-action-gap' ? 'LOGIC' : 'DIPLOMATIC',
+        summary: [view.summary, view.caveat].filter(Boolean).join(' Caveat: '),
+        factionIds: [],
+        payload: { id: view.id, status: view.status, data: view.data, caveat: view.caveat }
+      }));
+      this.researchList.appendChild(card);
     }
   }
 

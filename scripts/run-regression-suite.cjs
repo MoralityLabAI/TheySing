@@ -476,6 +476,8 @@ function runCollaborationEvidenceExporterSmoke(outputDir) {
   const report = readJson(path.join(evidenceDir, 'analysis', 'collaboration_language_report.json'));
   assert(report.aggregate.counts.decodeReceipts >= 1, 'Analyzer did not recover receipts from curated evidence');
   assert(report.aggregate.governance.available, 'Analyzer did not recover governance from curated evidence');
+  assert(Array.isArray(report.aggregate.language.decodeReceipts.fieldBreakdown), 'Analyzer omitted field-level receipt breakdown');
+  assert(report.aggregate.language.spanActionRevealGap && typeof report.aggregate.language.spanActionRevealGap.available === 'boolean', 'Analyzer omitted span-to-action metric');
   return `records=${records.length}, sha256=${manifest.sha256.slice(0, 12)}`;
 }
 
@@ -553,6 +555,11 @@ function runExporterSmoke(outputDir) {
 function runProtocolObservatoryExporterSmoke(outputDir) {
   const logFile = path.join(outputDir, 'alias-probe-logs', 'regression_alias_probe.jsonl');
   const replayPath = path.join(outputDir, 'alias_probe_observatory.json');
+  runNodeScript('scripts/analyze-collaboration-language.cjs', ['--input', logFile]);
+  const analysis = readJson(path.join(outputDir, 'alias-probe-logs', 'analysis', 'collaboration_language_report.json'));
+  const spanAction = analysis.aggregate.language.spanActionRevealGap;
+  assert(spanAction && typeof spanAction.available === 'boolean', 'Analyzer omitted span-to-action reveal-gap metric');
+  assert(Array.isArray(spanAction.byAct), 'Span-to-action metric omitted act breakdown');
   runNodeScript('scripts/export-observatory-replay.cjs', ['--run', logFile, '--output', replayPath, '--public']);
   validateObservatoryReplayFile(replayPath, { strictTurnArrays: true });
   const replay = readJson(replayPath);
@@ -565,7 +572,11 @@ function runProtocolObservatoryExporterSmoke(outputDir) {
   assert(replay.turns.some((turn) => (turn.protocolEvidence?.aliasProbes || []).length > 0), 'Observatory export omitted alias probe');
   assert(replay.turns.some((turn) => (turn.protocolEvidence?.lexiconEvents || []).some((event) => event.status === 'ACCEPTED')), 'Observatory export omitted accepted lexicon mutation');
   assert(replay.turns.flatMap((turn) => turn.sceneEvents || []).every((event) => event.privateReasoning === undefined && event.payload === undefined), 'Public replay retained duplicated scene-private payloads');
-  return `protocolEvidence=${evidence.length}, bytes=${fs.statSync(replayPath).size}`;
+  assert(replay.auditManifest?.schema === 'theysing.publicAuditManifest.v1', 'Public replay omitted audit manifest');
+  assert(replay.auditManifest.artifacts.every((artifact) => /^[a-f0-9]{64}$/.test(artifact.sha256)), 'Audit manifest contains invalid artifact hash');
+  const intervention = replay.auditManifest.excerpts.find((excerpt) => excerpt.type === 'INTERVENTION');
+  assert(intervention && /^[a-f0-9]{64}$/.test(intervention.recordSha256), 'Audit manifest omitted hashed intervention excerpt');
+  return `protocolEvidence=${evidence.length}, spanClaims=${spanAction.comparableClaims}, auditArtifacts=${replay.auditManifest.artifacts.length}, bytes=${fs.statSync(replayPath).size}`;
 }
 
 function validateObservatoryReplayFile(filePath, options = {}) {
@@ -590,6 +601,8 @@ function validateObservatoryReplayFile(filePath, options = {}) {
       for (const key of ['decodeReceipts', 'canonicalReveals', 'aliasProbes', 'lexiconEvents', 'institutionEvents']) {
         assert(Array.isArray(turn.protocolEvidence[key]), `Turn ${turn.turn}:${turn.phase} missing protocolEvidence.${key}`);
       }
+      assert(replay.auditManifest && replay.auditManifest.schema === 'theysing.publicAuditManifest.v1', 'Replay missing public audit manifest');
+      assert(Array.isArray(replay.auditManifest.artifacts) && replay.auditManifest.artifacts.length > 0, 'Replay audit manifest missing artifacts');
     } else if (turn.protocolEvidence !== undefined) {
       assert(typeof turn.protocolEvidence === 'object', `Turn ${turn.turn}:${turn.phase} has invalid protocolEvidence`);
     }

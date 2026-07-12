@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const MAX_TECH_LEVEL = 7;
 const RESEARCH_DOMAINS = ['KINETIC', 'INFO', 'LOGIC', 'MEMETIC'];
@@ -129,6 +130,7 @@ function buildReplay(runFiles, companions = {}) {
     sourceFiles: runFiles.map((file) => path.resolve(file)),
     runs: Array.from(new Set(runIds)),
     evaluation: buildEvaluation(companions),
+    auditManifest: buildAuditManifest(runFiles, companions.companionPaths, turns),
     graph: {
       nodes: Object.values(NODE_LOCATIONS),
       edges: Object.values(EDGE_LOCATIONS)
@@ -1529,6 +1531,18 @@ function buildEvaluation({ analysis, summary, robustness, companionPaths } = {})
   const scoredMinusDeclaredGap = numericOrNull(decodeGap.scoredMinusSelfDeclaredGap);
   const aliasSurvives = variants.filter((item) => ['BASELINE', 'ALIAS_SWAP', 'MOTIF_STRIP'].includes(item.variant));
   const versionLag = variants.find((item) => item.variant === 'VERSION_LAG');
+  const receiptMetrics = analysis?.aggregate?.language?.decodeReceipts || {};
+  const fieldBreakdown = asArray(receiptMetrics.fieldBreakdown).map((field) => ({
+    field: field.field || '',
+    weight: numericOrNull(field.weight),
+    evaluatedReceipts: field.evaluatedReceipts ?? 0,
+    attemptedReceipts: field.attemptedReceipts ?? 0,
+    attemptRate: numericOrNull(field.attemptRate),
+    exactRate: numericOrNull(field.exactRate),
+    exactWhenAttemptedRate: numericOrNull(field.exactWhenAttemptedRate),
+    weightedExactContribution: numericOrNull(field.weightedExactContribution)
+  }));
+  const spanActionRevealGap = analysis?.aggregate?.language?.spanActionRevealGap || null;
 
   const claims = [];
   if (selfDeclaredGap !== null || scoredReceiptGap !== null) {
@@ -1614,7 +1628,9 @@ function buildEvaluation({ analysis, summary, robustness, companionPaths } = {})
       scoredMinusDeclaredGap,
       meanFieldExactness: numericOrNull(analysis?.aggregate?.language?.decodeReceipts?.fieldExactness?.mean),
       exactRate: numericOrNull(analysis?.aggregate?.language?.decodeReceipts?.exactRate),
-      receiptCount: analysis?.aggregate?.counts?.decodeReceipts ?? 0
+      receiptCount: analysis?.aggregate?.counts?.decodeReceipts ?? 0,
+      fieldBreakdown,
+      spanActionRevealGap
     },
     coalition: {
       warningLevel: warnings.level || '',
@@ -1632,6 +1648,60 @@ function buildEvaluation({ analysis, summary, robustness, companionPaths } = {})
       robustnessWinnerCounts: mergeCountObjects(robustnessRows.map((row) => row.winners)),
       robustnessRouteCounts: mergeCountObjects(robustnessRows.map((row) => row.routes))
     },
+    researchViews: [
+      {
+        id: 'matched-role-swap',
+        label: 'Matched role-swap cells',
+        summary: `${robustnessRows.length} cells / ${totalRobustnessRuns} matched runs; dominant bloc ${robustnessChecks.dominantBlocInvariantAcrossCells ? 'invariant' : 'changed'} across cells.`,
+        status: robustness ? 'MEASURED' : 'UNAVAILABLE',
+        data: robustnessRows.map((row) => ({
+          cell: row.cell,
+          interfaces: row.interfaces,
+          steering: row.steering,
+          configuredAuthority: asArray(row.configuredAuthority),
+          dominantRepeatedBloc: row.dominantRepeatedBloc || '',
+          dominantOccurrences: row.dominantOccurrences ?? 0,
+          configuredAuthorityBlocRank: row.configuredAuthorityBlocRank ?? null,
+          coupledControlIndex: numericOrNull(row.coupledControlIndex),
+          winners: row.winners || {},
+          routes: row.routes || {}
+        })),
+        caveat: robustness?.caveat || 'No matched robustness matrix supplied.'
+      },
+      {
+        id: 'decode-fields',
+        label: 'Field-level decode exactness',
+        summary: fieldBreakdown.length > 0
+          ? `${fieldBreakdown.length} canonical fields scored; payload exact ${formatPercentValue(fieldBreakdown.find((field) => field.field === 'payload')?.exactRate)}.`
+          : 'No field-level receipt breakdown supplied.',
+        status: fieldBreakdown.length > 0 ? 'MEASURED' : 'UNAVAILABLE',
+        data: fieldBreakdown,
+        caveat: 'Omitted fields count as incorrect; exact-when-attempted should be read beside attempt rate.'
+      },
+      {
+        id: 'span-action-gap',
+        label: 'Span claim -> behavioral receipt',
+        summary: spanActionRevealGap?.available
+          ? `${spanActionRevealGap.receiptsObserved}/${spanActionRevealGap.comparableClaims} comparable claims received behavioral follow-through.`
+          : 'No behavior-comparable span claims were scored.',
+        status: spanActionRevealGap?.available ? 'MEASURED' : 'UNAVAILABLE',
+        data: spanActionRevealGap,
+        caveat: spanActionRevealGap?.definition || 'Generic semantic similarity is not treated as behavioral evidence.'
+      },
+      {
+        id: 'route-administration',
+        label: 'Victory-route administration',
+        summary: `${totalRobustnessRuns || 0} matched runs / ${asArray(robustnessChecks.victoryRoutesObserved).join(', ') || 'no route data'} / ${robustnessChecks.allVictoriesStillConvenor ? 'all CONVENOR' : 'mixed winners'}.`,
+        status: robustnessChecks.allVictoriesStillConvenor && allOneRoute ? 'COUNTERFACTUAL_REQUIRED' : robustness ? 'MIXED' : 'UNAVAILABLE',
+        data: {
+          runs: totalRobustnessRuns,
+          cells: robustnessRows.map((row) => ({ cell: row.cell, winners: row.winners || {}, routes: row.routes || {} })),
+          allVictoriesStillConvenor: robustnessChecks.allVictoriesStillConvenor === true,
+          victoryRoutesObserved: asArray(robustnessChecks.victoryRoutesObserved)
+        },
+        caveat: 'The existing role swap reassigns interface authority, not victory-route administration. A route-admin reassignment remains the necessary counterfactual.'
+      }
+    ],
     researchChecklist: [
       'Run the V8 alias instrument with external agents and larger n.',
       'Rotate trust, topology, labels, and authority independently.',
@@ -1644,6 +1714,75 @@ function buildEvaluation({ analysis, summary, robustness, companionPaths } = {})
       robustness: companionPaths?.robustness ? path.basename(companionPaths.robustness) : ''
     }
   };
+}
+
+function buildAuditManifest(runFiles, companionPaths = {}, turns = []) {
+  const artifacts = [
+    ...runFiles.map((file) => ({ role: 'RUN_JSONL', file })),
+    ...Object.entries(companionPaths || {}).filter(([, file]) => file).map(([role, file]) => ({ role: role.toUpperCase(), file }))
+  ].map(({ role, file }) => ({
+    role,
+    file: path.basename(file),
+    bytes: fs.statSync(file).size,
+    sha256: sha256File(file)
+  }));
+
+  const candidates = [];
+  for (const turn of turns) {
+    for (const probe of asArray(turn.protocolEvidence?.aliasProbes)) {
+      candidates.push({
+        type: 'INTERVENTION', turn: turn.turn, phase: turn.phase, runId: probe.runId,
+        id: probe.probeId, variant: probe.variant, actors: unique([probe.emitterId, probe.recipientId]),
+        canonicalHash: probe.canonicalHash, summary: probe.plainGloss || probe.surface || ''
+      });
+    }
+    for (const receipt of asArray(turn.protocolEvidence?.decodeReceipts).filter((row) => row.exact === false).slice(0, 1)) {
+      candidates.push({
+        type: 'DECODE_RECEIPT', turn: turn.turn, phase: turn.phase, runId: receipt.runId,
+        id: receipt.messageId, actors: unique([receipt.sourceFactionId, receipt.factionId]),
+        canonicalHash: receipt.canonicalHash, fieldExactness: receipt.fieldExactness,
+        confidence: receipt.confidence, reconstructedAct: receipt.reconstructedAct
+      });
+    }
+    for (const event of asArray(turn.protocolEvidence?.lexiconEvents).filter((row) => row.status === 'ACCEPTED').slice(0, 1)) {
+      candidates.push({
+        type: 'LEXICON_MUTATION', turn: turn.turn, phase: turn.phase, runId: event.runId,
+        id: `${event.lexiconId}:${event.afterVersion}`, actors: asArray(event.proposers),
+        status: event.status, operation: event.operation, summary: event.reason || ''
+      });
+    }
+    for (const event of asArray(turn.protocolEvidence?.institutionEvents).filter((row) => row.type !== 'PACT_ACTIVATED').slice(0, 1)) {
+      candidates.push({
+        type: 'INSTITUTION_ACTION', turn: turn.turn, phase: turn.phase, runId: event.runId,
+        id: event.forkId || event.pactId || `${event.type}:${turn.turn}`, actors: unique([event.factionId, ...asArray(event.counterparties)]),
+        status: event.status, actionType: event.type, summary: event.reason || ''
+      });
+    }
+  }
+  const excerpts = [
+    ...candidates.filter((record) => record.type === 'INTERVENTION').slice(0, 12),
+    ...candidates.filter((record) => record.type === 'INSTITUTION_ACTION').slice(0, 6),
+    ...candidates.filter((record) => record.type === 'LEXICON_MUTATION').slice(0, 7),
+    ...candidates.filter((record) => record.type === 'DECODE_RECEIPT').slice(0, 7)
+  ].map((record) => ({
+    ...record,
+    recordSha256: sha256Text(JSON.stringify(record))
+  }));
+  return {
+    schema: 'theysing.publicAuditManifest.v1',
+    hashAlgorithm: 'sha256',
+    artifacts,
+    excerpts,
+    note: 'Artifact hashes cover the complete source files. Excerpt hashes cover the normalized public record shown here; they are evidence locators, not substitutes for the source artifact.'
+  };
+}
+
+function sha256File(filePath) {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function sha256Text(value) {
+  return crypto.createHash('sha256').update(String(value), 'utf8').digest('hex');
 }
 
 function compactPublicReplay(replay) {
@@ -1748,6 +1887,10 @@ function formatSignedPercent(value) {
   if (value === null || value === undefined) return 'unavailable';
   const percent = Number(value) * 100;
   return `${percent >= 0 ? '+' : ''}${percent.toFixed(2)} pp`;
+}
+
+function formatPercentValue(value) {
+  return value === null || value === undefined ? 'unavailable' : `${(Number(value) * 100).toFixed(1)}%`;
 }
 
 function humanize(value) {

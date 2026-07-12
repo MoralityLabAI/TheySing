@@ -2060,6 +2060,7 @@ function computeLanguageMetrics(run) {
       })).sort((left, right) => left.dialect.localeCompare(right.dialect))
     },
     decodeReceipts: computeDecodeReceiptMetrics(run),
+    spanActionRevealGap: computeSpanActionRevealGap(run),
     canonicalActs: mapToSortedObject(canonicalActs),
     bindingModes: mapToSortedObject(bindingModes),
     definitionGovernance: {
@@ -2223,6 +2224,130 @@ function computeDecodeReceiptMetrics(run) {
       .sort((left, right) => left.id.localeCompare(right.id)),
     definition: 'Coverage is the share of logged SING/1 source messages with message IDs that have at least one matched receipt. Field rows join pre-reveal reconstructions to post-reveal canonical records and use the live harness scoring weights; omitted fields count as incorrect. Brier is lower-is-better.'
   };
+}
+
+function computeSpanActionRevealGap(run) {
+  const messages = Array.from(run.messages.values());
+  const formalPacts = Array.from(run.formalPacts.values());
+  const lexiconMutations = Array.from(run.lexiconMutations.values());
+  const institutionActions = Array.from(run.institutionActions.values());
+  const rows = [];
+  let tracedSpanMessages = 0;
+
+  for (const message of messages) {
+    const trace = message.trace;
+    const spans = Array.isArray(trace?.spans)
+      ? trace.spans.filter(span => span.kind !== 'COVER' && (span.atom || span.gloss))
+      : [];
+    if (spans.length === 0) continue;
+    tracedSpanMessages += 1;
+    if (!message.sender || !Number.isFinite(message.turn) || !isObject(trace.canonical)) continue;
+
+    const canonical = trace.canonical;
+    const act = firstString(canonical.act).toUpperCase();
+    const horizon = Math.max(1, Math.min(3, firstFiniteNumber(canonical.horizon) || 1));
+    const scope = message.analysisRunId || run.runId;
+    const spanClaim = spans.map(span => firstString(span.gloss, span.atom)).filter(Boolean).join(' | ').slice(0, 360);
+    let expectedReceipt = '';
+    let matched = null;
+    let receipt = null;
+
+    if (act === 'OFFER' || act === 'ACCEPT') {
+      const pactType = firstString(
+        canonical.payload?.pactType,
+        canonical.response?.requestedPactType,
+        spans.map(span => firstString(span.atom)).find(atom => /^PACT:/i.test(atom))?.split(':').slice(1).join(':')
+      ).toUpperCase();
+      const counterparties = normalizeActorArray(canonical.payload?.counterparties || message.recipients);
+      if (!pactType || counterparties.length === 0) continue;
+      expectedReceipt = `formal ${pactType} activation with ${counterparties.join('+')}`;
+      receipt = formalPacts.find(pact =>
+        sameAnalysisScope(pact, scope, run.runId) &&
+        pact.pactType === pactType &&
+        eventFallsInWindow(pact.createdTurn, message.turn, horizon) &&
+        [message.sender, ...counterparties].every(actor => pact.parties.includes(actor))
+      ) || null;
+      matched = Boolean(receipt);
+    } else if (act === 'AMEND') {
+      const lexiconId = firstString(canonical.payload?.lexiconId, trace.lexicon?.id);
+      const targetVersion = firstString(canonical.payload?.targetVersion);
+      expectedReceipt = `accepted ${lexiconId || 'lexicon'} amendment${targetVersion ? ` to ${targetVersion}` : ''}`;
+      receipt = lexiconMutations.find(mutation =>
+        sameAnalysisScope(mutation, scope, run.runId) &&
+        mutation.status === 'accepted' &&
+        mutation.operation === 'AMEND' &&
+        mutation.proposers.includes(message.sender) &&
+        eventFallsInWindow(mutation.turn, message.turn, horizon) &&
+        (!lexiconId || mutation.lexiconId === lexiconId) &&
+        (!targetVersion || mutation.targetVersion === targetVersion)
+      ) || null;
+      matched = Boolean(receipt);
+    } else if (EXPLICIT_INSTITUTION_ACTION_TYPES.includes(act)) {
+      expectedReceipt = `executed ${act} institution action`;
+      receipt = institutionActions.find(action =>
+        sameAnalysisScope(action, scope, run.runId) &&
+        action.type === act &&
+        action.status === 'executed' &&
+        action.actor === message.sender &&
+        eventFallsInWindow(action.turn, message.turn, horizon)
+      ) || null;
+      matched = Boolean(receipt);
+    } else {
+      continue;
+    }
+
+    rows.push({
+      runId: scope,
+      messageId: message.messageId || null,
+      turn: message.turn,
+      sender: message.sender,
+      recipients: message.recipients,
+      act,
+      horizon,
+      spanClaim,
+      expectedReceipt,
+      receiptObserved: matched,
+      receiptType: receipt
+        ? act === 'AMEND' ? 'LEXICON_MUTATION' : EXPLICIT_INSTITUTION_ACTION_TYPES.includes(act) ? 'INSTITUTION_ACTION' : 'FORMAL_PACT'
+        : null,
+      receiptId: receipt?.pactId || receipt?.key || null
+    });
+  }
+
+  const byAct = Array.from(new Set(rows.map(row => row.act))).sort().map(act => {
+    const actRows = rows.filter(row => row.act === act);
+    const matched = actRows.filter(row => row.receiptObserved).length;
+    return {
+      act,
+      claims: actRows.length,
+      receiptsObserved: matched,
+      followThroughRate: ratio(matched, actRows.length),
+      revealGapRate: ratio(actRows.length - matched, actRows.length)
+    };
+  });
+  const receiptsObserved = rows.filter(row => row.receiptObserved).length;
+  return {
+    available: rows.length > 0,
+    tracedSpanMessages,
+    comparableClaims: rows.length,
+    receiptsObserved,
+    followThroughRate: ratio(receiptsObserved, rows.length),
+    revealGapRate: ratio(rows.length - receiptsObserved, rows.length),
+    byAct,
+    examples: rows
+      .slice()
+      .sort((left, right) => Number(left.receiptObserved) - Number(right.receiptObserved) || left.turn - right.turn)
+      .slice(0, MAX_REPORT_ITEMS),
+    definition: 'A span claim is comparable only when its canonical act implies a logged receipt: formal pact activation for OFFER/ACCEPT, accepted lexicon mutation for AMEND, or an executed EXIT/EXPEL/FORK event. The receipt must occur in the same run within the declared horizon (capped at three turns). Unscorable prose is excluded rather than counted as failure. Unless a pact or action carries the message ID, a matching receipt is temporal follow-through evidence, not causal attribution to that message.'
+  };
+}
+
+function sameAnalysisScope(value, scope, defaultScope) {
+  return (value.analysisRunId || defaultScope) === scope;
+}
+
+function eventFallsInWindow(eventTurn, claimTurn, horizon) {
+  return Number.isFinite(eventTurn) && eventTurn >= claimTurn && eventTurn <= claimTurn + horizon;
 }
 
 function canonicalFieldEqual(field, actual, reconstructed) {
@@ -3456,6 +3581,7 @@ function buildMethodology() {
     semanticDensity: 'For valid SING/1 traces, non-COVER span intervals are unioned and divided by protocol surface length. This measures encoding coverage, not semantic quality.',
     versionSkew: 'A turn/lexicon group is skewed when more than one version-plus-fork variant appears concurrently.',
     decodeReceipts: 'Receipt coverage is the share of logged SING/1 messages with message IDs that have at least one matched receipt. Field-level exactness joins pre-reveal reconstruction to post-reveal canonical content using the live scorer weights. Confidence is self-reported; Brier is lower-is-better.',
+    spanActionRevealGap: 'Non-COVER span claims are scored only when their canonical act implies a concrete logged receipt: pact activation for OFFER/ACCEPT, accepted mutation for AMEND, or executed EXIT/EXPEL/FORK. Receipts must occur in the same run within the declared horizon, capped at three turns.',
     aliasProbe: 'The harness injects a blinded, meaning-preserving controlled offer after agents act. Survival requires a matching recipient pact commitment or formal pact within the configured observation window.',
     lexiconGovernance: 'Mutation events are counted by explicit proposed/accepted/blocked outcomes. Controller and proposer participation comes from accepted before/after states and logged proposer arrays; rent capture sums explicit transfers.',
     explicitInstitutionActions: 'Explicit EXIT/EXPEL/FORK events supersede canonical prose counts for an action type when present. Material events have a nonzero logged resource delta or at least one affected pact ID.',
@@ -3589,6 +3715,22 @@ function buildMarkdownReport(report) {
         ''
       );
     }
+  }
+
+  const spanAction = language.spanActionRevealGap;
+  if (spanAction.available) {
+    lines.push(
+      '### Span Claims Versus Behavioral Receipts',
+      '',
+      `Comparable claims: ${spanAction.comparableClaims}; receipts observed: ${spanAction.receiptsObserved}; follow-through rate: ${formatMetric(spanAction.followThroughRate)}; reveal-gap rate: ${formatMetric(spanAction.revealGapRate)}.`,
+      '',
+      '| Act | Comparable claims | Receipts | Follow-through | Reveal gap |',
+      '| --- | ---: | ---: | ---: | ---: |',
+      ...spanAction.byAct.map(row => `| ${row.act} | ${row.claims} | ${row.receiptsObserved} | ${formatMetric(row.followThroughRate)} | ${formatMetric(row.revealGapRate)} |`),
+      '',
+      'Unscorable prose is excluded. A sender-authored gloss remains a claim until a formal pact, accepted mutation, or executed institution event supplies the behavioral receipt.',
+      ''
+    );
   }
 
   if (aliasProbe.available) {
