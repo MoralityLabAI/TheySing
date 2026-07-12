@@ -592,10 +592,18 @@ function validateObservatoryUxContract() {
   assert(ui.includes("response.body.getReader()"), 'Observatory no longer streams replay load progress');
   assert(ui.includes("target.closest('button, a, input, textarea, select, label"), 'Global shortcuts do not guard interactive controls');
   assert(ui.includes("data-role=\"close-evidence\""), 'Selected evidence has no dismiss control');
-  assert(ui.includes("this.mobilePanelButton.textContent = diaryOpen ? 'Show evidence' : 'Show diary'"), 'Mobile panel action labels regressed');
+  assert(ui.includes("this.container.className = 'obs-shell obs-view-globe'"), 'Observatory no longer defaults to the globe-first view');
+  assert(ui.includes('data-view-mode="globe"'), 'Globe/evidence/diary view switch is missing');
+  assert(ui.includes('data-evidence-tab="protocol"'), 'Evidence progressive-disclosure tabs are missing');
+  assert(ui.includes('private renderCurrentBeat(turn: ReplayTurn)'), 'Plain-language current beat renderer is missing');
+  assert(ui.includes('private jumpToSignal(direction: -1 | 1)'), 'Narrative signal navigation is missing');
+  assert(ui.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Default director mode ignores reduced-motion preference');
+  assert(ui.includes("body.textContent = block.content"), 'Reduced-motion diary still uses staggered word timers');
+  assert(ui.includes('class="obs-detail obs-detail-dismissed"'), 'Empty evidence detail obscures the initial globe view');
   assert(css.includes('.obs-shell .obs-detail.obs-detail-open'), 'Responsive evidence detail sheet is missing');
+  assert(css.includes('.obs-shell.obs-view-globe .obs-panel'), 'Globe-first panel suppression is missing');
   assert(css.includes('button:focus-visible'), 'Keyboard focus treatment is missing');
-  return 'readiness, streaming progress, guarded shortcuts, mobile evidence, and focus styles present';
+  return 'readiness, globe-first hierarchy, progressive evidence, guarded shortcuts, responsive detail, and focus styles present';
 }
 
 function validateLegacyGameUxContract() {

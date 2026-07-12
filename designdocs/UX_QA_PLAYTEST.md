@@ -3,7 +3,7 @@
 ## Current Release
 
 - Production: <https://they-sing.vercel.app>
-- UX fix commit: `880fb99`
+- Current UX baseline: `main` (globe-first observatory and responsive legacy command deck)
 - Default route: evidence observatory
 - Legacy playable route: `?game`
 
@@ -19,6 +19,9 @@
 | P1 | The legacy `?game` route placed six fixed-width panels around the map with no responsive breakpoint, causing unavoidable overlap below desktop width. | Added a mobile command deck with single-sheet `STATUS`, `SELECT`, `ORDERS`, and `LOG` views; phase and observer context remain visible. | Static legacy UX contract and TypeScript build. Headed visual confirmation remains pending. |
 | P2 | Legacy global shortcuts could advance the phase behind focused controls, the tutorial, or a decision modal. | Shortcuts now ignore interactive descendants and halt while a blocking overlay is open. | Static legacy UX contract and TypeScript build. |
 | P2 | Legacy dialogs, event narration, panel state, focus, and motion preferences were not exposed consistently. | Added modal/live-region semantics, focus transfer/restore, pressed panel state, visible focus, and reduced-motion handling. | Static legacy UX contract and TypeScript build. |
+| P1 | The observatory treated the 3D globe as background behind two permanent side panels, an aggregate claim rail, a detail placeholder, and a three-column footer. | The observatory now opens in `Globe` mode with a plain-language current beat; `Evidence`, `Diary`, and desktop `All` are explicit modes. | Static globe-first UX contract and TypeScript build. Headed visual confirmation remains pending. |
+| P1 | Evidence mixed filters, protocol traces, research, events, board changes, and the anomaly archive into one continuous technical scroll. | The evidence drawer now uses `Now`, `Protocol`, `Research`, and `Archive` tabs with proper tab semantics. | Static progressive-disclosure contract and TypeScript build. |
+| P2 | Mobile offered one ambiguous evidence/diary toggle and had no way to reclaim the full globe. | Mobile uses the same explicit `Globe`, `Evidence`, and `Diary` modes; reset camera remains available beside replay controls. | Static responsive UX contract. |
 
 ## Automated Gates
 
@@ -35,19 +38,22 @@ These flows require an actual browser viewport and remain the completion gate.
 ### Desktop
 
 1. Load from a cold cache and confirm progress remains visible through scene readiness.
-2. Scrub the full campaign and confirm moves, scene, diary, evidence, and campaign tempo stay synchronized.
-3. Play/pause, then operate every focused button with Space/Enter and confirm no double activation.
-4. Exercise every scene, faction, phase, moment, protocol, and reveal-gap filter.
-5. Open aggregate claims, research lenses, protocol receipts, events, diffs, and anomalies; inspect and close details.
-6. Toggle public/private reveal and confirm the distinction is legible rather than merely changing text density.
-7. Orbit, zoom, reset, and use subgenre camera focus without losing the selected turn.
-8. Load a replay file and export a spectator clip.
+2. Confirm the first usable state is the unobstructed globe plus one current-beat card, not open evidence drawers.
+3. Switch among `Globe`, `Evidence`, `Diary`, and `All`; confirm the globe remains spatially continuous and drawer state is obvious.
+4. In Evidence, switch among `Now`, `Protocol`, `Research`, and `Archive` without losing the selected campaign phase.
+5. Scrub the full campaign and confirm current beat, moves, scene, diary, evidence, and campaign tempo stay synchronized.
+6. Play/pause, then operate every focused button with Space/Enter and confirm no double activation.
+7. Exercise every scene, faction, phase, moment, protocol, and reveal-gap filter.
+8. Open aggregate claims, research lenses, protocol receipts, events, diffs, and anomalies; inspect and close details.
+9. Toggle public/private reveal and confirm the distinction is legible rather than merely changing text density.
+10. Orbit, zoom, reset, and use subgenre camera focus without losing the selected turn.
+11. Load a replay file and export a spectator clip.
 
 ### Tablet And Mobile
 
-1. Confirm the title, evaluation strip, 3D scene, evidence sheet, timeline, moves, and controls do not overlap.
+1. Confirm Globe mode leaves the 3D scene operable and the current-beat card, timeline, moves, and controls do not overlap.
 2. Horizontally inspect evaluation cards and moves; verify scroll affordances are apparent.
-3. Switch between evidence and diary using the action-labelled control.
+3. Switch among `Globe`, `Evidence`, and `Diary`; verify the selected mode remains visibly pressed.
 4. Open details from claims, research lenses, protocol evidence, events, and anomalies; confirm the detail sheet is readable and dismissible.
 5. Scrub while a detail is open and confirm stale evidence closes.
 6. Rotate portrait/landscape and confirm the active panel remains usable.

@@ -218,6 +218,9 @@ type SpectatorClipSettings = {
   archiveCampaignMode: boolean;
 };
 
+type ObservatoryViewMode = 'globe' | 'evidence' | 'diary' | 'all';
+type EvidenceTab = 'now' | 'protocol' | 'research' | 'archive';
+
 const STYLE_ID = 'they-sing-observatory-styles';
 
 const FACTION_LABELS: Record<string, string> = {
@@ -253,7 +256,7 @@ export class ObservatoryReplayUI {
   private readonly playButton: HTMLButtonElement;
   private readonly scrubber: HTMLInputElement;
   private readonly timelineLabel: HTMLElement;
-  private readonly mobilePanelButton: HTMLButtonElement;
+  private readonly beatPanel: HTMLElement;
   private keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   private replay: ObservatoryReplay | null = null;
   private turnIndex = 0;
@@ -269,53 +272,89 @@ export class ObservatoryReplayUI {
   private archiveCampaignMode = false;
   private revealRetrospective = false;
   private directorMode = false;
+  private viewMode: ObservatoryViewMode = 'globe';
+  private evidenceTab: EvidenceTab = 'now';
 
   constructor(container: HTMLElement) {
     this.container = container;
+    this.directorMode = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     injectStyles();
-    this.container.className = 'obs-shell';
+    this.container.className = 'obs-shell obs-view-globe';
     this.container.innerHTML = `
       <div class="obs-scene" data-role="scene"></div>
       <div class="obs-vignette"></div>
       <header class="obs-topbar">
-        <div>
-          <div class="obs-kicker">They Sing / Babel Compact</div>
-          <div class="obs-title">Collaboration evidence observatory</div>
+        <div class="obs-brand">
+          <div class="obs-kicker">Machine diplomacy replay</div>
+          <div class="obs-title">They Sing</div>
+          <div class="obs-deck">Watch seven machine powers bargain, fracture, and remake the world.</div>
         </div>
-        <div class="obs-readout">
-          <span data-role="turn">Turn --</span>
-          <span data-role="phase">No replay loaded</span>
-          <span data-role="run">0 runs</span>
+        <div class="obs-topbar-actions">
+          <div class="obs-readout">
+            <span data-role="turn">Turn --</span>
+            <span data-role="phase">No replay loaded</span>
+            <span data-role="run">0 runs</span>
+          </div>
+          <nav class="obs-view-switch" aria-label="Observatory view">
+            <button type="button" data-view-mode="globe" aria-pressed="true">Globe</button>
+            <button type="button" data-view-mode="evidence" aria-pressed="false">Evidence</button>
+            <button type="button" data-view-mode="diary" aria-pressed="false">Diary</button>
+            <button type="button" data-view-mode="all" aria-pressed="false">All</button>
+          </nav>
         </div>
       </header>
+      <section class="obs-beat" data-role="beat" aria-live="polite">
+        <div class="obs-empty">The current world event will appear here.</div>
+      </section>
       <section class="obs-evaluation" data-role="evaluation">
         <div class="obs-empty">Evaluation evidence will appear when an analysis-enriched replay is loaded.</div>
       </section>
       <aside class="obs-panel obs-left" aria-label="Replay evidence and filters">
-        <div class="obs-panel-title">Scene Filters</div>
-        <div class="obs-filterbar" data-role="filters"></div>
-        <div class="obs-panel-title">Protocol Evidence</div>
-        <div data-role="protocol" class="obs-stack obs-protocol-stack"></div>
-        <div class="obs-panel-title">Research Lenses</div>
-        <div data-role="research" class="obs-stack obs-research-stack"></div>
-        <div class="obs-panel-title">Moments</div>
-        <div data-role="moments" class="obs-stack"></div>
-        <div class="obs-panel-title">Signal Events</div>
-        <div data-role="events" class="obs-stack obs-event-stack"></div>
-        <div class="obs-panel-title">What Changed</div>
-        <div data-role="diffs" class="obs-stack obs-diff-stack"></div>
-        <div class="obs-panel-title">Anomaly Archive</div>
-        <div class="obs-archive-tools">
-          <input data-role="archive-search" type="search" placeholder="Search archive">
-          <button data-role="archive-scope" type="button" aria-pressed="false">Turn</button>
+        <div class="obs-drawer-heading">
+          <div class="obs-panel-title">Evidence</div>
+          <button type="button" data-role="close-drawer" aria-label="Return to globe">Globe</button>
         </div>
-        <div data-role="anomalies" class="obs-stack obs-anomaly-stack"></div>
+        <nav class="obs-evidence-tabs" role="tablist" aria-label="Evidence sections">
+          <button type="button" role="tab" data-evidence-tab="now" aria-selected="true" aria-controls="obs-evidence-now">Now</button>
+          <button type="button" role="tab" data-evidence-tab="protocol" aria-selected="false" aria-controls="obs-evidence-protocol">Protocol</button>
+          <button type="button" role="tab" data-evidence-tab="research" aria-selected="false" aria-controls="obs-evidence-research">Research</button>
+          <button type="button" role="tab" data-evidence-tab="archive" aria-selected="false" aria-controls="obs-evidence-archive">Archive</button>
+        </nav>
+        <section class="obs-evidence-section" id="obs-evidence-now" data-evidence-section="now" role="tabpanel">
+          <div class="obs-panel-title">Scene Filters</div>
+          <div class="obs-filterbar" data-role="filters"></div>
+          <div class="obs-panel-title">Moments</div>
+          <div data-role="moments" class="obs-stack"></div>
+          <div class="obs-panel-title">Signal Events</div>
+          <div data-role="events" class="obs-stack obs-event-stack"></div>
+          <div class="obs-panel-title">What Changed</div>
+          <div data-role="diffs" class="obs-stack obs-diff-stack"></div>
+        </section>
+        <section class="obs-evidence-section" id="obs-evidence-protocol" data-evidence-section="protocol" role="tabpanel" hidden>
+          <div class="obs-panel-title">Protocol Evidence</div>
+          <div data-role="protocol" class="obs-stack obs-protocol-stack"></div>
+        </section>
+        <section class="obs-evidence-section" id="obs-evidence-research" data-evidence-section="research" role="tabpanel" hidden>
+          <div class="obs-panel-title">Research Lenses</div>
+          <div data-role="research" class="obs-stack obs-research-stack"></div>
+        </section>
+        <section class="obs-evidence-section" id="obs-evidence-archive" data-evidence-section="archive" role="tabpanel" hidden>
+          <div class="obs-panel-title">Anomaly Archive</div>
+          <div class="obs-archive-tools">
+            <input data-role="archive-search" type="search" placeholder="Search archive">
+            <button data-role="archive-scope" type="button" aria-pressed="false">Turn</button>
+          </div>
+          <div data-role="anomalies" class="obs-stack obs-anomaly-stack"></div>
+        </section>
       </aside>
       <aside class="obs-panel obs-right" aria-label="Negotiation diary">
-        <div class="obs-panel-title">Animated Diary</div>
+        <div class="obs-drawer-heading">
+          <div class="obs-panel-title">Negotiation Diary</div>
+          <button type="button" data-role="close-drawer" aria-label="Return to globe">Globe</button>
+        </div>
         <div data-role="transcript" class="obs-transcript"></div>
       </aside>
-      <aside class="obs-detail" data-role="detail" aria-live="polite">
+      <aside class="obs-detail obs-detail-dismissed" data-role="detail" aria-live="polite">
         <div class="obs-panel-title">Selected Evidence</div>
         <div class="obs-empty">Click a beacon, beam, drone swarm, social bloom, audit mesh, or escape vector.</div>
       </aside>
@@ -328,14 +367,15 @@ export class ObservatoryReplayUI {
           <button data-role="prev" type="button">Prev</button>
           <button data-role="play" type="button" aria-pressed="false">Play</button>
           <button data-role="next" type="button">Next</button>
+          <button data-role="prev-signal" type="button">Prev signal</button>
+          <button data-role="next-signal" type="button">Next signal</button>
           <button data-role="reset-camera" type="button">Reset Cam</button>
           <button data-role="focus-orbit" type="button">Orbit</button>
           <button data-role="focus-memetic" type="button">Memetic</button>
           <button data-role="focus-cyber" type="button">Cyber</button>
-          <button data-role="director-mode" type="button" aria-pressed="false">Director: Off</button>
+          <button data-role="director-mode" type="button" aria-pressed="${this.directorMode}" class="${this.directorMode ? 'obs-active' : ''}">Director: ${this.directorMode ? 'On' : 'Off'}</button>
           <button data-role="reveal-retro" type="button" aria-pressed="false">Reveal: Public</button>
           <button data-role="export-clip" type="button">Export Clip</button>
-          <button data-role="mobile-panel" class="obs-mobile-panel" type="button" aria-pressed="false">Show diary</button>
           <label class="obs-file">
             Load JSON
             <input data-role="file" type="file" accept="application/json,.json">
@@ -366,7 +406,7 @@ export class ObservatoryReplayUI {
     this.playButton = requireElement(this.container, '[data-role="play"]') as HTMLButtonElement;
     this.scrubber = requireElement(this.container, '[data-role="scrubber"]') as HTMLInputElement;
     this.timelineLabel = requireElement(this.container, '[data-role="timeline-label"]');
-    this.mobilePanelButton = requireElement(this.container, '[data-role="mobile-panel"]') as HTMLButtonElement;
+    this.beatPanel = requireElement(this.container, '[data-role="beat"]');
 
     this.scene = new ObservatoryScene(this.sceneMount);
     this.scene.onEvidenceSelected = (evidence) => this.renderEvidence(evidence);
@@ -384,6 +424,8 @@ export class ObservatoryReplayUI {
   private bindControls(): void {
     const prev = requireElement(this.container, '[data-role="prev"]') as HTMLButtonElement;
     const next = requireElement(this.container, '[data-role="next"]') as HTMLButtonElement;
+    const previousSignal = requireElement(this.container, '[data-role="prev-signal"]') as HTMLButtonElement;
+    const nextSignal = requireElement(this.container, '[data-role="next-signal"]') as HTMLButtonElement;
     const file = requireElement(this.container, '[data-role="file"]') as HTMLInputElement;
     const resetCamera = requireElement(this.container, '[data-role="reset-camera"]') as HTMLButtonElement;
     const focusOrbit = requireElement(this.container, '[data-role="focus-orbit"]') as HTMLButtonElement;
@@ -393,8 +435,20 @@ export class ObservatoryReplayUI {
     const revealRetro = requireElement(this.container, '[data-role="reveal-retro"]') as HTMLButtonElement;
     const exportClip = requireElement(this.container, '[data-role="export-clip"]') as HTMLButtonElement;
 
+    for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-view-mode]')) {
+      button.addEventListener('click', () => this.setViewMode(button.dataset.viewMode as ObservatoryViewMode));
+    }
+    for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-role="close-drawer"]')) {
+      button.addEventListener('click', () => this.setViewMode('globe'));
+    }
+    for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-evidence-tab]')) {
+      button.addEventListener('click', () => this.setEvidenceTab(button.dataset.evidenceTab as EvidenceTab));
+    }
+
     prev.addEventListener('click', () => this.step(-1));
     next.addEventListener('click', () => this.step(1));
+    previousSignal.addEventListener('click', () => this.jumpToSignal(-1));
+    nextSignal.addEventListener('click', () => this.jumpToSignal(1));
     this.playButton.addEventListener('click', () => this.togglePlay());
     resetCamera.addEventListener('click', () => this.scene.resetCamera());
     focusOrbit.addEventListener('click', () => this.scene.focusSubgenre('ORBITAL'));
@@ -422,11 +476,6 @@ export class ObservatoryReplayUI {
       this.closeEvidence();
       this.renderTurn();
     });
-    this.mobilePanelButton.addEventListener('click', () => {
-      const diaryOpen = this.container.classList.toggle('obs-mobile-diary');
-      this.mobilePanelButton.textContent = diaryOpen ? 'Show evidence' : 'Show diary';
-      this.mobilePanelButton.setAttribute('aria-pressed', String(diaryOpen));
-    });
     this.archiveSearch.addEventListener('input', () => {
       this.archiveQuery = this.archiveSearch.value;
       this.renderTurn();
@@ -446,12 +495,41 @@ export class ObservatoryReplayUI {
       if (isInteractiveTarget(event.target)) return;
       if (event.key === 'ArrowLeft') this.step(-1);
       if (event.key === 'ArrowRight') this.step(1);
+      if (event.key.toLowerCase() === 'g') this.setViewMode('globe');
+      if (event.key.toLowerCase() === 'e') this.setViewMode('evidence');
+      if (event.key.toLowerCase() === 'd') this.setViewMode('diary');
+      if (event.key.toLowerCase() === 'n') this.jumpToSignal(1);
+      if (event.key.toLowerCase() === 'p') this.jumpToSignal(-1);
       if (event.key === ' ') {
         event.preventDefault();
         this.togglePlay();
       }
     };
     document.addEventListener('keydown', this.keydownHandler);
+  }
+
+  private setViewMode(mode: ObservatoryViewMode): void {
+    this.viewMode = mode;
+    this.container.classList.remove('obs-view-globe', 'obs-view-evidence', 'obs-view-diary', 'obs-view-all');
+    this.container.classList.add(`obs-view-${mode}`);
+    for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-view-mode]')) {
+      const active = button.dataset.viewMode === mode;
+      button.setAttribute('aria-pressed', String(active));
+      button.classList.toggle('obs-active', active);
+    }
+    if (mode !== 'globe') this.closeEvidence();
+  }
+
+  private setEvidenceTab(tab: EvidenceTab): void {
+    this.evidenceTab = tab;
+    for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-evidence-tab]')) {
+      const active = button.dataset.evidenceTab === tab;
+      button.setAttribute('aria-selected', String(active));
+      button.classList.toggle('obs-active', active);
+    }
+    for (const section of this.container.querySelectorAll<HTMLElement>('[data-evidence-section]')) {
+      section.hidden = section.dataset.evidenceSection !== tab;
+    }
   }
 
   private async loadFromUrl(): Promise<void> {
@@ -576,6 +654,9 @@ export class ObservatoryReplayUI {
     this.anomalyList.innerHTML = '<div class="obs-empty">No anomaly dossiers yet.</div>';
     this.diffList.innerHTML = '<div class="obs-empty">No board diff yet.</div>';
     this.detailPanel.innerHTML = '<div class="obs-panel-title">Selected Evidence</div><div class="obs-empty">Click a scene object.</div>';
+    this.detailPanel.classList.remove('obs-detail-open');
+    this.detailPanel.classList.add('obs-detail-dismissed');
+    this.beatPanel.innerHTML = '<div class="obs-empty">Load a replay to watch the world change.</div>';
     this.scrubber.value = '0';
     this.timelineLabel.textContent = 'Campaign timeline';
   }
@@ -606,6 +687,7 @@ export class ObservatoryReplayUI {
     this.timelineLabel.textContent = `T${turn.turn} ${turn.phase || 'UNKNOWN'} / ${this.turnIndex + 1} of ${this.replay.turns.length}`;
     this.scrubber.setAttribute('aria-valuetext', this.timelineLabel.textContent);
 
+    this.renderCurrentBeat(filteredTurn);
     this.renderMoments(filteredTurn);
     this.renderProtocolEvidence(filteredTurn);
     this.renderEvents(filteredTurn);
@@ -613,6 +695,62 @@ export class ObservatoryReplayUI {
     this.renderBoardDiff(filteredTurn);
     this.renderAnomalies(filteredTurn);
     this.animateTranscript(filteredTurn);
+  }
+
+  private renderCurrentBeat(turn: ReplayTurn): void {
+    const sceneEvent = (turn.sceneEvents || []).slice().sort((left, right) => Number(right.intensity || 0) - Number(left.intensity || 0))[0];
+    const moment = (turn.moments || []).slice().sort((left, right) => Number(right.interestScore || 0) - Number(left.interestScore || 0))[0];
+    const event = (turn.events || []).slice(-1)[0];
+    const message = (turn.messages || [])[0];
+    const diff = turn.boardDiff;
+    const actors = sceneEvent?.actors || moment?.factionsInvolved || (message?.sender ? [message.sender] : []);
+    const subgenre = sceneEvent?.subgenre || inferSubgenre(
+      sceneEvent?.category || moment?.category || event?.category,
+      sceneEvent?.publicExplanation || moment?.impact || event?.summary || diff?.summary
+    );
+    const title = sceneEvent
+      ? humanizeToken(sceneEvent.category || sceneEvent.visualPreset || 'World signal')
+      : moment?.title || (event ? humanizeToken(event.category || 'World signal') : message
+        ? `${labelFaction(message.sender || '')} calls ${labelFaction(message.recipient || 'ALL')}`
+        : diff ? (diff.summary?.includes('No board-state changes') ? 'The board stabilizes' : 'Orders resolve across the world')
+          : 'The board holds its breath');
+    const summary = sceneEvent
+      ? renderSceneEventSummary(sceneEvent, this.revealRetrospective)
+      : moment ? renderMomentSummary(moment, this.revealRetrospective)
+        : event?.summary || message?.content || (this.revealRetrospective ? diff?.explanation || diff?.summary : diff?.summary) ||
+          'No major event was logged in this phase. Orbit the globe or advance the campaign.';
+    const protocolCount = protocolEvidenceCount(turn.protocolEvidence);
+    const evidence: ObservatoryEvidence = {
+      title,
+      category: sceneEvent?.category || moment?.category || event?.category || (diff ? 'BOARD_DIFF' : 'CURRENT_BEAT'),
+      subgenre,
+      summary,
+      factionIds: actors,
+      turn: turn.turn,
+      phase: turn.phase,
+      payload: sceneEvent
+        ? (this.revealRetrospective ? sceneEvent : redactPrivatePayload(sceneEvent))
+        : moment || event || message || diff || null
+    };
+
+    this.beatPanel.innerHTML = `
+      <button type="button" class="obs-beat-open" data-role="open-beat">
+        <span class="obs-beat-kicker">Now / ${escapeHtml(turn.phase || 'Unknown phase')} / ${escapeHtml(subgenre)}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(summary)}</p>
+        <div class="obs-beat-meta">
+          ${actors.length > 0 ? `<span>${escapeHtml(actors.map(labelFaction).join(' + '))}</span>` : ''}
+          <span>${turn.messages?.length || 0} messages</span>
+          <span>${turn.orders?.length || 0} moves</span>
+          <span>${protocolCount} evidence</span>
+        </div>
+        <small>Drag to orbit · scroll to zoom · click a signal to inspect</small>
+      </button>
+    `;
+    this.beatPanel.querySelector<HTMLButtonElement>('[data-role="open-beat"]')?.addEventListener('click', () => {
+      for (const actor of actors) this.scene.pulseFaction(actor);
+      this.renderEvidence(evidence);
+    });
   }
 
   private renderFilters(): void {
@@ -1170,6 +1308,21 @@ export class ObservatoryReplayUI {
     const token = this.animationToken;
     this.transcript.innerHTML = '';
 
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      for (const block of blocks) {
+        const item = document.createElement('article');
+        item.className = 'obs-line';
+        const label = document.createElement('div');
+        label.className = 'obs-line-label';
+        label.textContent = block.label;
+        const body = document.createElement('p');
+        body.textContent = block.content;
+        item.append(label, body);
+        this.transcript.appendChild(item);
+      }
+      return;
+    }
+
     const animateBlock = (index: number) => {
       if (token !== this.animationToken || index >= blocks.length) return;
       const block = blocks[index];
@@ -1212,6 +1365,20 @@ export class ObservatoryReplayUI {
     this.renderTurn();
   }
 
+  private jumpToSignal(direction: -1 | 1): void {
+    if (!this.replay || this.replay.turns.length === 0) return;
+    for (let offset = 1; offset <= this.replay.turns.length; offset += 1) {
+      const candidateIndex = wrapIndex(this.turnIndex + direction * offset, this.replay.turns.length);
+      const candidate = this.replay.turns[candidateIndex];
+      if (!hasNarrativeSignal(candidate)) continue;
+      this.turnIndex = candidateIndex;
+      this.closeEvidence();
+      this.renderTurn();
+      this.status.textContent = `Jumped to signal at turn ${candidate.turn} / ${candidate.phase || 'UNKNOWN'}.`;
+      return;
+    }
+  }
+
   private togglePlay(): void {
     this.playing = !this.playing;
     this.playButton.textContent = this.playing ? 'Pause' : 'Play';
@@ -1244,6 +1411,22 @@ function renderResearch(order: ReplayOrder): string {
   }
   if (order.type === 'RESEARCH' || order.techDomain) return `research ${order.techDomain || 'unknown track'}`;
   return '';
+}
+
+function hasNarrativeSignal(turn: ReplayTurn): boolean {
+  const protocol = turn.protocolEvidence || {};
+  return (turn.sceneEvents?.length || 0) > 0 ||
+    (turn.moments?.length || 0) > 0 ||
+    (protocol.aliasProbes?.length || 0) > 0 ||
+    (protocol.institutionEvents?.length || 0) > 0 ||
+    (protocol.lexiconEvents?.length || 0) > 0;
+}
+
+function humanizeToken(value: string): string {
+  return value
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function renderEvidenceSummary(evidence: ObservatoryEvidence, revealRetrospective: boolean): string {
