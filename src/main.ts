@@ -146,8 +146,16 @@ function initGame() {
 
   ui.setFaction('HEGEMON');
 
+  const isInteractiveTarget = (target: EventTarget | null): boolean => {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest(
+      'button, a, input, textarea, select, label, [contenteditable="true"], [role="button"], [role="dialog"]'
+    ));
+  };
+
   // Keyboard controls
   document.addEventListener('keydown', (e) => {
+    if (isInteractiveTarget(e.target) || ui.isBlockingOverlayOpen()) return;
     switch (e.key) {
       case '1': ui.setFaction('HEGEMON'); break;
       case '2': ui.setFaction('INFILTRATOR'); break;

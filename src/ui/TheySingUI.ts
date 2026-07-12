@@ -32,6 +32,8 @@ export class TheySingUI {
   private modalOverlay!: HTMLElement;
   private tutorialOverlay!: HTMLElement;
   private narratorPanel!: HTMLElement;
+  private wrapper!: HTMLElement;
+  private mobileNav!: HTMLElement;
   
   // Order building state
   private pendingOrders: Order[] = [];
@@ -39,6 +41,9 @@ export class TheySingUI {
   private tutorialStepIndex = 0;
   private narratorResetTimer: number | null = null;
   private narratorSuppressedUntil = 0;
+  private activeMobilePanel: 'hud' | 'details' | 'orders' | 'log' = 'orders';
+  private focusBeforeTutorial: HTMLElement | null = null;
+  private focusBeforeModal: HTMLElement | null = null;
 
   constructor(container: HTMLElement, engine: TheySingEngine, scene: FlatMapScene) {
     this.container = container;
@@ -83,6 +88,13 @@ export class TheySingUI {
         padding: 12px;
         pointer-events: auto;
         backdrop-filter: blur(8px);
+      }
+
+      .ts-ui button:focus-visible,
+      .ts-ui [tabindex]:focus-visible {
+        outline: 2px solid #d8f0ff;
+        outline-offset: 3px;
+        box-shadow: 0 0 0 5px rgba(68, 136, 255, 0.28);
       }
       
       .ts-header {
@@ -685,7 +697,6 @@ export class TheySingUI {
       }
 
       .ts-panel.ts-tutorial-anchor {
-        position: relative;
         box-shadow: 0 0 0 2px rgba(143, 206, 255, 0.9), 0 0 28px rgba(76, 145, 255, 0.35);
       }
 
@@ -895,6 +906,10 @@ export class TheySingUI {
         font-family: 'Orbitron', sans-serif;
         letter-spacing: 0.06em;
       }
+
+      .ts-mobile-nav {
+        display: none;
+      }
       
       /* Tech display */
       .ts-tech-levels {
@@ -935,6 +950,216 @@ export class TheySingUI {
         background: #4488ff;
         border-radius: 3px;
       }
+
+      @media (max-width: 900px) {
+        .ts-phase {
+          top: 8px;
+          left: 8px;
+          right: 8px;
+          width: auto;
+          min-width: 0;
+          padding: 9px 12px;
+          transform: none;
+          z-index: 12;
+        }
+
+        .ts-turn {
+          margin-bottom: 2px;
+          font-size: 10px;
+        }
+
+        .ts-phase-name {
+          margin-bottom: 5px;
+          font-size: 16px;
+        }
+
+        .ts-phase-steps {
+          margin-bottom: 7px;
+        }
+
+        .ts-phase-step {
+          width: auto;
+          flex: 1;
+        }
+
+        .ts-advance-btn {
+          padding: 7px 16px;
+        }
+
+        .ts-phase-tools {
+          margin-top: 7px;
+        }
+
+        .ts-hud,
+        .ts-details,
+        .ts-orders,
+        .ts-log {
+          display: none;
+          top: auto;
+          left: 8px;
+          right: 8px;
+          bottom: calc(72px + env(safe-area-inset-bottom));
+          width: auto;
+          max-height: min(52vh, 480px);
+          overflow-y: auto;
+          border-radius: 12px;
+          z-index: 16;
+        }
+
+        .ts-ui[data-mobile-panel="hud"] .ts-hud,
+        .ts-ui[data-mobile-panel="details"] .ts-details,
+        .ts-ui[data-mobile-panel="orders"] .ts-orders,
+        .ts-ui[data-mobile-panel="log"] .ts-log {
+          display: block;
+        }
+
+        .ts-log-entries,
+        .ts-pending-orders,
+        .ts-unit-list {
+          max-height: none;
+        }
+
+        .ts-observer {
+          top: 156px;
+          bottom: auto;
+          left: 8px;
+          right: 8px;
+          width: auto;
+          min-width: 0;
+          max-height: 88px;
+          padding: 10px 12px;
+          overflow: hidden;
+          transform: none;
+          pointer-events: none;
+        }
+
+        .ts-observer-top {
+          margin-bottom: 5px;
+        }
+
+        .ts-observer-line {
+          display: -webkit-box;
+          overflow: hidden;
+          font-size: 12px;
+          line-height: 1.4;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
+
+        .ts-mobile-nav {
+          position: absolute;
+          left: 8px;
+          right: 8px;
+          bottom: calc(8px + env(safe-area-inset-bottom));
+          z-index: 22;
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 5px;
+          padding: 6px;
+          border: 1px solid rgba(90, 150, 220, 0.5);
+          border-radius: 13px;
+          background: rgba(5, 10, 18, 0.96);
+          box-shadow: 0 12px 38px rgba(0, 0, 0, 0.5);
+          pointer-events: auto;
+          backdrop-filter: blur(12px);
+        }
+
+        .ts-mobile-nav-btn {
+          min-height: 44px;
+          border: 1px solid transparent;
+          border-radius: 8px;
+          background: rgba(25, 39, 58, 0.88);
+          color: #91a8c7;
+          font-family: 'Orbitron', sans-serif;
+          font-size: 9px;
+          letter-spacing: 0.06em;
+          cursor: pointer;
+        }
+
+        .ts-mobile-nav-btn[aria-pressed="true"] {
+          border-color: #67aaff;
+          background: linear-gradient(180deg, rgba(40, 94, 160, 0.96), rgba(22, 54, 92, 0.96));
+          color: #f2f7ff;
+        }
+
+        .ts-modal {
+          width: min(500px, calc(100vw - 24px));
+          max-height: calc(100vh - 24px);
+          overflow-y: auto;
+        }
+      }
+
+      @media (max-width: 600px) {
+        .ts-observer-tone {
+          display: none;
+        }
+
+        .ts-tutorial-overlay {
+          align-items: flex-start;
+          overflow-y: auto;
+          padding: 12px 0;
+        }
+
+        .ts-tutorial-card {
+          width: calc(100vw - 20px);
+          padding: 18px 16px 16px;
+        }
+
+        .ts-tutorial-top,
+        .ts-tutorial-footer {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .ts-tutorial-title {
+          font-size: 22px;
+        }
+
+        .ts-tutorial-skip {
+          align-self: flex-start;
+        }
+
+        .ts-tutorial-footer {
+          gap: 12px;
+        }
+
+        .ts-tutorial-actions,
+        .ts-tutorial-btn {
+          flex: 1;
+        }
+
+        .ts-modal {
+          padding: 18px;
+        }
+
+        .ts-modal-buttons {
+          flex-wrap: wrap;
+        }
+      }
+
+      @media (max-width: 900px) and (max-height: 650px) {
+        .ts-observer {
+          display: none;
+        }
+
+        .ts-hud,
+        .ts-details,
+        .ts-orders,
+        .ts-log {
+          max-height: min(52vh, calc(100vh - 225px));
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .ts-ui *,
+        .ts-ui *::before,
+        .ts-ui *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+        }
+      }
     `;
     document.head.appendChild(style);
   }
@@ -944,9 +1169,10 @@ export class TheySingUI {
   // ==========================================================================
 
   private createUI(): void {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'ts-ui';
-    wrapper.style.cssText = 'position: absolute; top: 0; left: 0; right: 0; bottom: 0;';
+    this.wrapper = document.createElement('div');
+    this.wrapper.className = 'ts-ui';
+    this.wrapper.dataset.mobilePanel = this.activeMobilePanel;
+    this.wrapper.style.cssText = 'position: absolute; top: 0; left: 0; right: 0; bottom: 0;';
     
     this.hudPanel = this.createHUDPanel();
     this.phasePanel = this.createPhasePanel();
@@ -956,22 +1182,26 @@ export class TheySingUI {
     this.modalOverlay = this.createModalOverlay();
     this.tutorialOverlay = this.createTutorialOverlay();
     this.narratorPanel = this.createNarratorPanel();
+    this.mobileNav = this.createMobileNav();
     
-    wrapper.appendChild(this.hudPanel);
-    wrapper.appendChild(this.phasePanel);
-    wrapper.appendChild(this.detailsPanel);
-    wrapper.appendChild(this.ordersPanel);
-    wrapper.appendChild(this.narratorPanel);
-    wrapper.appendChild(this.logPanel);
-    wrapper.appendChild(this.modalOverlay);
-    wrapper.appendChild(this.tutorialOverlay);
+    this.wrapper.appendChild(this.hudPanel);
+    this.wrapper.appendChild(this.phasePanel);
+    this.wrapper.appendChild(this.detailsPanel);
+    this.wrapper.appendChild(this.ordersPanel);
+    this.wrapper.appendChild(this.narratorPanel);
+    this.wrapper.appendChild(this.logPanel);
+    this.wrapper.appendChild(this.mobileNav);
+    this.wrapper.appendChild(this.modalOverlay);
+    this.wrapper.appendChild(this.tutorialOverlay);
     
-    this.container.appendChild(wrapper);
+    this.container.appendChild(this.wrapper);
   }
 
   private createHUDPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'ts-panel ts-hud';
+    panel.id = 'ts-panel-hud';
+    panel.setAttribute('aria-label', 'Faction status');
     panel.innerHTML = `
       <div class="ts-faction-name"></div>
       <div class="ts-resources">
@@ -1072,10 +1302,11 @@ export class TheySingUI {
   private createPhasePanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'ts-panel ts-phase';
+    panel.setAttribute('aria-label', 'Turn and phase controls');
     panel.innerHTML = `
-      <div class="ts-turn">TURN 1</div>
-      <div class="ts-phase-name">NEGOTIATION</div>
-      <div class="ts-phase-steps">
+      <div class="ts-turn" aria-live="polite">TURN 1</div>
+      <div class="ts-phase-name" aria-live="polite">NEGOTIATION</div>
+      <div class="ts-phase-steps" aria-hidden="true">
         <div class="ts-phase-step active" data-phase="NEGOTIATION"></div>
         <div class="ts-phase-step" data-phase="ALLOCATION"></div>
         <div class="ts-phase-step" data-phase="ACTION_DECLARATION"></div>
@@ -1094,6 +1325,8 @@ export class TheySingUI {
   private createDetailsPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'ts-panel ts-details';
+    panel.id = 'ts-panel-details';
+    panel.setAttribute('aria-label', 'Current selection');
     panel.innerHTML = `
       <div class="ts-header">Selection</div>
       <div class="ts-detail-content">
@@ -1108,6 +1341,8 @@ export class TheySingUI {
   private createOrdersPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'ts-panel ts-orders';
+    panel.id = 'ts-panel-orders';
+    panel.setAttribute('aria-label', 'Order controls');
     panel.innerHTML = `
       <div class="ts-header">Orders</div>
       <div class="ts-order-buttons"></div>
@@ -1121,9 +1356,11 @@ export class TheySingUI {
   private createLogPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'ts-panel ts-log';
+    panel.id = 'ts-panel-log';
+    panel.setAttribute('aria-label', 'Event log');
     panel.innerHTML = `
       <div class="ts-header">Event Log</div>
-      <div class="ts-log-entries"></div>
+      <div class="ts-log-entries" role="log" aria-live="polite" aria-relevant="additions"></div>
     `;
     return panel;
   }
@@ -1131,12 +1368,16 @@ export class TheySingUI {
   private createTutorialOverlay(): HTMLElement {
     const overlay = document.createElement('div');
     overlay.className = 'ts-tutorial-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'ts-tutorial-title');
+    overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = `
       <div class="ts-tutorial-card">
         <div class="ts-tutorial-top">
           <div>
             <div class="ts-tutorial-kicker">New Player Briefing</div>
-            <div class="ts-tutorial-title"></div>
+            <div class="ts-tutorial-title" id="ts-tutorial-title"></div>
           </div>
           <button class="ts-tutorial-skip">SKIP TUTORIAL</button>
         </div>
@@ -1157,6 +1398,8 @@ export class TheySingUI {
   private createNarratorPanel(): HTMLElement {
     const panel = document.createElement('div');
     panel.className = 'ts-observer';
+    panel.setAttribute('role', 'status');
+    panel.setAttribute('aria-live', 'polite');
     panel.innerHTML = `
       <div class="ts-observer-top">
         <div class="ts-observer-voice">Observer</div>
@@ -1170,14 +1413,36 @@ export class TheySingUI {
   private createModalOverlay(): HTMLElement {
     const overlay = document.createElement('div');
     overlay.className = 'ts-modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'ts-modal-title');
+    overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = `
       <div class="ts-modal">
-        <div class="ts-modal-title"></div>
+        <div class="ts-modal-title" id="ts-modal-title"></div>
         <div class="ts-modal-content"></div>
         <div class="ts-modal-buttons"></div>
       </div>
     `;
     return overlay;
+  }
+
+  private createMobileNav(): HTMLElement {
+    const nav = document.createElement('nav');
+    nav.className = 'ts-mobile-nav';
+    nav.setAttribute('aria-label', 'Game panels');
+    nav.innerHTML = [
+      ['hud', 'STATUS'],
+      ['details', 'SELECT'],
+      ['orders', 'ORDERS'],
+      ['log', 'LOG']
+    ].map(([panel, label]) => `
+      <button class="ts-mobile-nav-btn" data-mobile-panel="${panel}"
+              aria-controls="ts-panel-${panel}" aria-pressed="${panel === this.activeMobilePanel}">
+        ${label}
+      </button>
+    `).join('');
+    return nav;
   }
 
   // ==========================================================================
@@ -1204,10 +1469,30 @@ export class TheySingUI {
       ?.addEventListener('click', () => this.stepTutorial(-1));
     this.tutorialOverlay.querySelector('[data-action="next"]')
       ?.addEventListener('click', () => this.stepTutorial(1));
+
+    this.tutorialOverlay.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        this.hideTutorial(false);
+      }
+    });
+
+    this.mobileNav.querySelectorAll<HTMLButtonElement>('[data-mobile-panel]').forEach(button => {
+      button.addEventListener('click', () => {
+        this.setMobilePanel(button.dataset.mobilePanel as 'hud' | 'details' | 'orders' | 'log');
+      });
+    });
     
     // Scene callbacks
-    this.scene.onNodeClick = (nodeId) => this.showNodeDetails(nodeId);
-    this.scene.onUnitClick = (unitId) => this.showUnitDetails(unitId);
+    this.scene.onNodeClick = (nodeId) => {
+      this.showNodeDetails(nodeId);
+      this.setMobilePanel('details');
+    };
+    this.scene.onUnitClick = (unitId) => {
+      this.showUnitDetails(unitId);
+      this.setMobilePanel('details');
+    };
     
     // Engine events
     this.engine.on('*', (event) => this.onEngineEvent(event));
@@ -1270,18 +1555,26 @@ export class TheySingUI {
     if (resetStep) {
       this.tutorialStepIndex = 0;
     }
+    this.focusBeforeTutorial = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.tutorialOverlay.classList.add('visible');
+    this.tutorialOverlay.setAttribute('aria-hidden', 'false');
     this.renderTutorialStep();
+    window.requestAnimationFrame(() => {
+      this.tutorialOverlay.querySelector<HTMLButtonElement>('[data-action="next"]')?.focus();
+    });
   }
 
   private hideTutorial(persistDismissal: boolean): void {
     this.tutorialOverlay.classList.remove('visible');
+    this.tutorialOverlay.setAttribute('aria-hidden', 'true');
     this.setTutorialAnchor(null);
     if (persistDismissal) {
       try {
         window.localStorage.setItem('theysing:tutorialDismissed:v1', '1');
       } catch {}
     }
+    this.focusBeforeTutorial?.focus();
+    this.focusBeforeTutorial = null;
   }
 
   private stepTutorial(direction: number): void {
@@ -1332,6 +1625,17 @@ export class TheySingUI {
     if (anchor === 'details') this.detailsPanel.classList.add('ts-tutorial-anchor');
     if (anchor === 'orders') this.ordersPanel.classList.add('ts-tutorial-anchor');
     if (anchor === 'log') this.logPanel.classList.add('ts-tutorial-anchor');
+    if (anchor === 'hud' || anchor === 'details' || anchor === 'orders' || anchor === 'log') {
+      this.setMobilePanel(anchor);
+    }
+  }
+
+  private setMobilePanel(panel: 'hud' | 'details' | 'orders' | 'log'): void {
+    this.activeMobilePanel = panel;
+    this.wrapper.dataset.mobilePanel = panel;
+    this.mobileNav.querySelectorAll<HTMLButtonElement>('[data-mobile-panel]').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.mobilePanel === panel));
+    });
   }
 
   private setNarratorLine(message: string): void {
@@ -2007,10 +2311,18 @@ export class TheySingUI {
     });
     
     this.modalOverlay.classList.add('visible');
+    this.modalOverlay.setAttribute('aria-hidden', 'false');
+    this.focusBeforeModal = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    window.requestAnimationFrame(() => {
+      buttonsEl.querySelector<HTMLButtonElement>('.ts-modal-btn:not(:disabled)')?.focus();
+    });
   }
 
   private hideModal(): void {
     this.modalOverlay.classList.remove('visible');
+    this.modalOverlay.setAttribute('aria-hidden', 'true');
+    this.focusBeforeModal?.focus();
+    this.focusBeforeModal = null;
   }
 
   private showGameOverModal(payload: Record<string, unknown>): void {
@@ -2035,5 +2347,9 @@ export class TheySingUI {
   public setFaction(faction: FactionId): void {
     this.currentFaction = faction;
     this.updateAll();
+  }
+
+  public isBlockingOverlayOpen(): boolean {
+    return this.tutorialOverlay.classList.contains('visible') || this.modalOverlay.classList.contains('visible');
   }
 }

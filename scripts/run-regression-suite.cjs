@@ -40,6 +40,7 @@ async function main() {
   await runTest('harness JSONL replays deterministically from logged decisions', () => runHarnessReplaySmoke(outputDir));
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
+  await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
 
   const summary = {
@@ -595,6 +596,22 @@ function validateObservatoryUxContract() {
   assert(css.includes('.obs-shell .obs-detail.obs-detail-open'), 'Responsive evidence detail sheet is missing');
   assert(css.includes('button:focus-visible'), 'Keyboard focus treatment is missing');
   return 'readiness, streaming progress, guarded shortcuts, mobile evidence, and focus styles present';
+}
+
+function validateLegacyGameUxContract() {
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main.ts'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'TheySingUI.ts'), 'utf8');
+  assert(ui.includes('@media (max-width: 900px)'), 'Legacy game has no tablet/mobile layout breakpoint');
+  assert(ui.includes('data-mobile-panel="${panel}"'), 'Legacy game has no mobile panel navigation');
+  assert(ui.includes('aria-controls="ts-panel-${panel}"'), 'Mobile panel controls are not associated with their panels');
+  assert(ui.includes('button.setAttribute(\'aria-pressed\''), 'Mobile panel selection state is not exposed');
+  assert(ui.includes('role="log" aria-live="polite"'), 'Legacy event log is not announced as live content');
+  assert(ui.includes("overlay.setAttribute('aria-modal', 'true')"), 'Legacy overlays are not exposed as modal dialogs');
+  assert(ui.includes('.ts-ui button:focus-visible'), 'Legacy keyboard focus treatment is missing');
+  assert(ui.includes('@media (prefers-reduced-motion: reduce)'), 'Legacy game ignores reduced-motion preferences');
+  assert(!ui.includes('.ts-panel.ts-tutorial-anchor {\n        position: relative;'), 'Tutorial highlight dislocates fixed HUD panels');
+  assert(main.includes('isInteractiveTarget(e.target) || ui.isBlockingOverlayOpen()'), 'Legacy global shortcuts can fire behind controls or dialogs');
+  return 'responsive command deck, modal semantics, guarded shortcuts, live log, focus, and reduced motion present';
 }
 
 function validateObservatoryReplayFile(filePath, options = {}) {
