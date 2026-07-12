@@ -22,6 +22,7 @@
 | P1 | The observatory treated the 3D globe as background behind two permanent side panels, an aggregate claim rail, a detail placeholder, and a three-column footer. | The observatory now opens in `Globe` mode with a plain-language current beat; `Evidence`, `Diary`, and desktop `All` are explicit modes. | Static globe-first UX contract and TypeScript build. Headed visual confirmation remains pending. |
 | P1 | Evidence mixed filters, protocol traces, research, events, board changes, and the anomaly archive into one continuous technical scroll. | The evidence drawer now uses `Now`, `Protocol`, `Research`, and `Archive` tabs with proper tab semantics. | Static progressive-disclosure contract and TypeScript build. |
 | P2 | Mobile offered one ambiguous evidence/diary toggle and had no way to reclaim the full globe. | Mobile uses the same explicit `Globe`, `Evidence`, and `Diary` modes; reset camera remains available beside replay controls. | Static responsive UX contract. |
+| P1 | The globe's colors, persistent beacons, effects, and logged locations were not explained or connected to the current-beat prose. | Current beats now show colored actors, signal progress, and location labels; selecting one focuses its logged node or edge. A compact key identifies all seven ASIs and four scene-signal forms: beacons, arcs, rings, and clusters. | Static globe-comprehension contract and TypeScript build. Headed visual confirmation remains pending. |
 
 ## Automated Gates
 
@@ -48,6 +49,8 @@ These flows require an actual browser viewport and remain the completion gate.
 9. Toggle public/private reveal and confirm the distinction is legible rather than merely changing text density.
 10. Orbit, zoom, reset, and use subgenre camera focus without losing the selected turn.
 11. Load a replay file and export a spectator clip.
+12. Open the World key, locate each ASI, and verify the matching beacon pulses without changing the replay turn.
+13. Select beats with node, edge, and orbital locations; confirm the camera visibly targets the corresponding scene signal.
 
 ### Tablet And Mobile
 
@@ -58,6 +61,7 @@ These flows require an actual browser viewport and remain the completion gate.
 5. Scrub while a detail is open and confirm stale evidence closes.
 6. Rotate portrait/landscape and confirm the active panel remains usable.
 7. Test reduced-motion and keyboard navigation where supported.
+8. Open the World key and confirm it remains bounded, tappable, and does not trap access to the timeline or Globe mode.
 
 ### Legacy Game
 

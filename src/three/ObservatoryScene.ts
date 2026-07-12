@@ -23,6 +23,15 @@ export type ObservatoryGraphNode = {
   orbitShell?: string;
 };
 
+export type ObservatoryLocation = {
+  nodeId?: string;
+  edgeId?: string;
+  lat?: number;
+  lon?: number;
+  altitude?: number;
+  orbitShell?: string;
+};
+
 export type ObservatoryGraphEdge = {
   edgeId?: string;
   from?: string;
@@ -104,14 +113,7 @@ type ObservatorySceneEvent = {
   publicExplanation?: string;
   retrospectiveTruth?: string;
   intensity?: number;
-  location?: {
-    nodeId?: string;
-    edgeId?: string;
-    lat?: number;
-    lon?: number;
-    altitude?: number;
-    orbitShell?: string;
-  };
+  location?: ObservatoryLocation;
   sourceType?: string;
   payload?: unknown;
 };
@@ -166,7 +168,7 @@ type InteractiveObject = THREE.Object3D & {
   };
 };
 
-const FACTION_COLORS: Record<string, number> = {
+export const FACTION_COLORS: Record<string, number> = {
   HEGEMON: 0xff5b4d,
   INFILTRATOR: 0x37f6a5,
   STATE: 0x55a8ff,
@@ -618,6 +620,50 @@ export class ObservatoryScene {
   pulseFaction(factionId: string): void {
     this.highlightFaction(factionId, 1.6);
     this.addMomentBeam({ category: 'MANUAL_PULSE', factionsInvolved: [factionId], interestScore: 7 }, { turn: 0 });
+  }
+
+  focusFaction(factionId: string): boolean {
+    const beacon = this.beacons.get(factionId);
+    if (!beacon) return false;
+    this.directorShot = null;
+    this.rootGroup.updateWorldMatrix(true, true);
+    this.cameraTarget.copy(beacon.getWorldPosition(new THREE.Vector3()));
+    this.cameraRadius = 7.2;
+    this.updateCameraPosition();
+    this.pulseFaction(factionId);
+    return true;
+  }
+
+  focusLocation(location: ObservatoryLocation | undefined, factionId = 'ALL'): boolean {
+    if (!location) return factionId !== 'ALL' && this.focusFaction(factionId);
+
+    const nodeById = new Map((this.graph?.nodes || [])
+      .filter((node): node is ObservatoryGraphNode & { nodeId: string } => !!node.nodeId)
+      .map((node) => [node.nodeId, node]));
+    let target: THREE.Vector3 | undefined;
+
+    if (location.edgeId) {
+      const edge = (this.graph?.edges || []).find((candidate) => candidate.edgeId === location.edgeId);
+      const from = edge?.fromLocation || (edge?.from ? nodeById.get(edge.from) : undefined);
+      const to = edge?.toLocation || (edge?.to ? nodeById.get(edge.to) : undefined);
+      const fromPosition = positionFromLocation(from, factionId, 0);
+      const toPosition = positionFromLocation(to, factionId, 0);
+      if (fromPosition && toPosition) target = fromPosition.lerp(toPosition, 0.5);
+    }
+
+    if (!target) {
+      const resolvedNode = location.nodeId ? nodeById.get(location.nodeId) : undefined;
+      target = positionFromLocation(resolvedNode || location, factionId, 0);
+    }
+    if (!target) return factionId !== 'ALL' && this.focusFaction(factionId);
+
+    this.directorShot = null;
+    this.rootGroup.updateWorldMatrix(true, true);
+    this.cameraTarget.copy(this.rootGroup.localToWorld(target.clone()));
+    this.cameraRadius = THREE.MathUtils.clamp(5.8 + target.length() * 0.45, 6.4, 11.5);
+    this.updateCameraPosition();
+    if (factionId !== 'ALL') this.pulseFaction(factionId);
+    return true;
   }
 
   resetCamera(): void {

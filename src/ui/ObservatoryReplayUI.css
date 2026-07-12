@@ -182,6 +182,173 @@
   letter-spacing: 0.04em;
 }
 
+.obs-shell .obs-actor-tag {
+  border-color: color-mix(in srgb, var(--obs-faction-color) 42%, transparent);
+  color: color-mix(in srgb, var(--obs-faction-color) 76%, var(--obs-paper));
+}
+
+.obs-shell .obs-actor-tag i,
+.obs-shell .obs-faction-key button > i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: var(--obs-faction-color);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--obs-faction-color) 72%, transparent);
+}
+
+.obs-shell .obs-location-tag::before {
+  content: "+";
+  margin-right: 4px;
+  color: #f0c574;
+}
+
+.obs-shell .obs-world-key {
+  margin-top: 6px;
+  border: 1px solid rgba(152, 226, 228, 0.2);
+  border-radius: 8px;
+  background: rgba(3, 10, 14, 0.76);
+  color: rgba(240, 232, 213, 0.72);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(14px);
+}
+
+.obs-shell .obs-world-key summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 9px;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.obs-shell .obs-world-key summary::-webkit-details-marker { display: none; }
+
+.obs-shell .obs-world-key summary::after {
+  content: "+";
+  color: #7de7ed;
+  font-size: 13px;
+}
+
+.obs-shell .obs-world-key[open] summary::after { content: "-"; }
+
+.obs-shell .obs-world-key summary small {
+  margin-left: auto;
+  color: rgba(240, 232, 213, 0.38);
+  font-size: 7px;
+  letter-spacing: 0.06em;
+}
+
+.obs-shell .obs-faction-key {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 2px 8px 8px;
+}
+
+.obs-shell .obs-faction-key button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid rgba(152, 226, 228, 0.12);
+  border-radius: 5px;
+  background: rgba(2, 8, 11, 0.45);
+  color: rgba(240, 232, 213, 0.62);
+  text-align: left;
+  cursor: pointer;
+}
+
+.obs-shell .obs-faction-key button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.obs-shell .obs-faction-key button b,
+.obs-shell .obs-faction-key button small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.obs-shell .obs-faction-key button b {
+  color: var(--obs-paper);
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.obs-shell .obs-faction-key button small {
+  color: rgba(240, 232, 213, 0.38);
+  font-size: 7px;
+}
+
+.obs-shell .obs-faction-key button:hover,
+.obs-shell .obs-faction-key button.obs-current-actor {
+  border-color: color-mix(in srgb, var(--obs-faction-color) 48%, transparent);
+  background: color-mix(in srgb, var(--obs-faction-color) 10%, rgba(2, 8, 11, 0.84));
+}
+
+.obs-shell .obs-signal-key {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  padding: 7px 8px 8px;
+  border-top: 1px solid rgba(152, 226, 228, 0.11);
+}
+
+.obs-shell .obs-signal-key > span {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+}
+
+.obs-shell .obs-signal-key i { grid-row: 1 / 3; }
+.obs-shell .obs-signal-key b { color: rgba(240, 232, 213, 0.7); font-size: 7px; font-weight: 500; }
+.obs-shell .obs-signal-key small { color: rgba(240, 232, 213, 0.3); font-size: 6px; }
+
+.obs-shell .obs-key-beacon,
+.obs-shell .obs-key-ring,
+.obs-shell .obs-key-cluster {
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin-left: 3px;
+}
+
+.obs-shell .obs-key-beacon {
+  border-radius: 50%;
+  background: #ff77c8;
+  box-shadow: 0 0 8px #ff77c8;
+}
+
+.obs-shell .obs-key-arc {
+  display: block;
+  width: 13px;
+  height: 7px;
+  border-top: 1px solid #78e7ff;
+  border-radius: 50%;
+}
+
+.obs-shell .obs-key-ring {
+  border: 1px solid #37f6a5;
+  border-radius: 50%;
+}
+
+.obs-shell .obs-key-cluster {
+  position: relative;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ff5b4d;
+  box-shadow: 7px 2px 0 #f0c574, 3px 7px 0 #78e7ff;
+}
+
 .obs-shell .obs-panel {
   border-color: rgba(152, 226, 228, 0.2);
   background:
@@ -711,6 +878,24 @@
   }
 
   .obs-shell .obs-beat-open small {
+    display: none;
+  }
+
+  .obs-shell .obs-world-key[open] {
+    max-height: min(38vh, 290px);
+    overflow-y: auto;
+  }
+
+  .obs-shell .obs-world-key summary small,
+  .obs-shell .obs-faction-key button small {
+    display: none;
+  }
+
+  .obs-shell .obs-faction-key button {
+    min-height: 32px;
+  }
+
+  .obs-shell .obs-signal-key small {
     display: none;
   }
 

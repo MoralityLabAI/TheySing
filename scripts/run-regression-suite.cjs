@@ -596,6 +596,12 @@ function validateObservatoryUxContract() {
   assert(ui.includes('data-view-mode="globe"'), 'Globe/evidence/diary view switch is missing');
   assert(ui.includes('data-evidence-tab="protocol"'), 'Evidence progressive-disclosure tabs are missing');
   assert(ui.includes('private renderCurrentBeat(turn: ReplayTurn)'), 'Plain-language current beat renderer is missing');
+  assert(ui.includes('data-faction-focus='), 'Interactive globe faction key is missing');
+  assert(ui.includes('Signal ${signalOrdinal + 1} of ${signalTurns.length}'), 'Current beat no longer exposes narrative signal progress');
+  assert(ui.includes('this.scene.focusLocation(location, actors[0])'), 'Current beat no longer locates its logged globe event');
+  assert(ui.includes('Globe signal forms'), 'Globe visual grammar is missing');
+  assert(css.includes('.obs-shell .obs-faction-key'), 'Faction key presentation is missing');
+  assert(css.includes('.obs-shell .obs-signal-key'), 'Signal legend presentation is missing');
   assert(ui.includes('private jumpToSignal(direction: -1 | 1)'), 'Narrative signal navigation is missing');
   assert(ui.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Default director mode ignores reduced-motion preference');
   assert(ui.includes("body.textContent = block.content"), 'Reduced-motion diary still uses staggered word timers');

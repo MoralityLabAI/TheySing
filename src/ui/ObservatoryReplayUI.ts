@@ -1,4 +1,4 @@
-import { ObservatoryBoardDiff, ObservatoryBoardState, ObservatoryEvidence, ObservatoryGraph, ObservatoryScene } from '../three/ObservatoryScene';
+import { FACTION_COLORS, ObservatoryBoardDiff, ObservatoryBoardState, ObservatoryEvidence, ObservatoryGraph, ObservatoryLocation, ObservatoryScene } from '../three/ObservatoryScene';
 import './ObservatoryReplayUI.css';
 
 type ReplayMessage = {
@@ -233,6 +233,18 @@ const FACTION_LABELS: Record<string, string> = {
   CANTOR: 'Semantic Cantor'
 };
 
+const FACTION_PRESENTATION: Record<string, { doctrine: string }> = {
+  HEGEMON: { doctrine: 'Orbital hard power' },
+  INFILTRATOR: { doctrine: 'Memetic infiltration' },
+  STATE: { doctrine: 'State infrastructure' },
+  BROKER: { doctrine: 'Routes and markets' },
+  ARCHIVIST: { doctrine: 'Memory and corrigibility' },
+  CONVENOR: { doctrine: 'Procedure and compacts' },
+  CANTOR: { doctrine: 'Language and protocol' }
+};
+
+const FACTION_ORDER = Object.keys(FACTION_PRESENTATION);
+
 export class ObservatoryReplayUI {
   private readonly container: HTMLElement;
   private readonly sceneMount: HTMLElement;
@@ -274,6 +286,7 @@ export class ObservatoryReplayUI {
   private directorMode = false;
   private viewMode: ObservatoryViewMode = 'globe';
   private evidenceTab: EvidenceTab = 'now';
+  private worldKeyOpen = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -656,7 +669,8 @@ export class ObservatoryReplayUI {
     this.detailPanel.innerHTML = '<div class="obs-panel-title">Selected Evidence</div><div class="obs-empty">Click a scene object.</div>';
     this.detailPanel.classList.remove('obs-detail-open');
     this.detailPanel.classList.add('obs-detail-dismissed');
-    this.beatPanel.innerHTML = '<div class="obs-empty">Load a replay to watch the world change.</div>';
+    this.beatPanel.innerHTML = `<div class="obs-empty">Load a replay to watch the world change.</div>${renderWorldKey([], this.worldKeyOpen)}`;
+    this.bindWorldKeyControls();
     this.scrubber.value = '0';
     this.timelineLabel.textContent = 'Campaign timeline';
   }
@@ -720,6 +734,14 @@ export class ObservatoryReplayUI {
         : event?.summary || message?.content || (this.revealRetrospective ? diff?.explanation || diff?.summary : diff?.summary) ||
           'No major event was logged in this phase. Orbit the globe or advance the campaign.';
     const protocolCount = protocolEvidenceCount(turn.protocolEvidence);
+    const location = sceneEvent?.location;
+    const locationText = labelLocation(location);
+    const signalTurns = (this.replay?.turns || []).reduce<number[]>((indexes, candidate, index) => {
+      if (hasNarrativeSignal(candidate)) indexes.push(index);
+      return indexes;
+    }, []);
+    const signalOrdinal = signalTurns.indexOf(this.turnIndex);
+    const signalLabel = signalOrdinal >= 0 ? `Signal ${signalOrdinal + 1} of ${signalTurns.length}` : 'Between major signals';
     const evidence: ObservatoryEvidence = {
       title,
       category: sceneEvent?.category || moment?.category || event?.category || (diff ? 'BOARD_DIFF' : 'CURRENT_BEAT'),
@@ -735,22 +757,41 @@ export class ObservatoryReplayUI {
 
     this.beatPanel.innerHTML = `
       <button type="button" class="obs-beat-open" data-role="open-beat">
-        <span class="obs-beat-kicker">Now / ${escapeHtml(turn.phase || 'Unknown phase')} / ${escapeHtml(subgenre)}</span>
+        <span class="obs-beat-kicker">${escapeHtml(signalLabel)} / ${escapeHtml(turn.phase || 'Unknown phase')} / ${escapeHtml(subgenre)}</span>
         <strong>${escapeHtml(title)}</strong>
         <p>${escapeHtml(summary)}</p>
         <div class="obs-beat-meta">
-          ${actors.length > 0 ? `<span>${escapeHtml(actors.map(labelFaction).join(' + '))}</span>` : ''}
+          ${actors.map(renderActorTag).join('')}
+          ${locationText ? `<span class="obs-location-tag">${escapeHtml(locationText)}</span>` : ''}
           <span>${turn.messages?.length || 0} messages</span>
           <span>${turn.orders?.length || 0} moves</span>
           <span>${protocolCount} evidence</span>
         </div>
-        <small>Drag to orbit · scroll to zoom · click a signal to inspect</small>
+        <small>Select to locate and inspect / drag to orbit / scroll to zoom</small>
       </button>
+      ${renderWorldKey(actors, this.worldKeyOpen)}
     `;
     this.beatPanel.querySelector<HTMLButtonElement>('[data-role="open-beat"]')?.addEventListener('click', () => {
-      for (const actor of actors) this.scene.pulseFaction(actor);
+      const located = this.scene.focusLocation(location, actors[0]);
+      if (!located) this.scene.focusSubgenre(subgenre);
+      for (const actor of actors.slice(located ? 1 : 0)) this.scene.pulseFaction(actor);
       this.renderEvidence(evidence);
     });
+    this.bindWorldKeyControls();
+  }
+
+  private bindWorldKeyControls(): void {
+    const worldKey = this.beatPanel.querySelector<HTMLDetailsElement>('.obs-world-key');
+    worldKey?.addEventListener('toggle', () => {
+      this.worldKeyOpen = worldKey.open;
+    });
+    for (const button of this.beatPanel.querySelectorAll<HTMLButtonElement>('[data-faction-focus]')) {
+      button.addEventListener('click', () => {
+        const factionId = button.dataset.factionFocus || '';
+        if (!this.scene.focusFaction(factionId)) return;
+        this.status.textContent = `Located ${labelFaction(factionId)} on the globe.`;
+      });
+    }
   }
 
   private renderFilters(): void {
@@ -1394,6 +1435,53 @@ export class ObservatoryReplayUI {
       this.scheduleNextTurn();
     }, 3600);
   }
+}
+
+function renderActorTag(factionId: string): string {
+  const color = factionColor(factionId);
+  return `<span class="obs-actor-tag" style="--obs-faction-color:${color}"><i aria-hidden="true"></i>${escapeHtml(labelFaction(factionId))}</span>`;
+}
+
+function renderWorldKey(activeActors: string[], open: boolean): string {
+  return `
+    <details class="obs-world-key" aria-live="off"${open ? ' open' : ''}>
+      <summary><span>World key</span><small>7 ASIs / colors and signal forms</small></summary>
+      <div class="obs-faction-key" role="group" aria-label="Machine powers">
+        ${FACTION_ORDER.map((factionId) => {
+          const presentation = FACTION_PRESENTATION[factionId];
+          const isActive = activeActors.includes(factionId);
+          return `
+            <button type="button" class="${isActive ? 'obs-current-actor' : ''}"
+              data-faction-focus="${factionId}" style="--obs-faction-color:${factionColor(factionId)}"
+              aria-label="Locate ${escapeHtml(labelFaction(factionId))}: ${escapeHtml(presentation.doctrine)}${isActive ? '. Active in the current beat.' : ''}">
+              <i aria-hidden="true"></i><span><b>${escapeHtml(labelFaction(factionId))}</b><small>${escapeHtml(presentation.doctrine)}</small></span>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      <div class="obs-signal-key" aria-label="Globe signal forms">
+        <span><i class="obs-key-beacon" aria-hidden="true"></i><b>Beacon</b><small>ASI presence</small></span>
+        <span><i class="obs-key-arc" aria-hidden="true"></i><b>Arc</b><small>route or strike</small></span>
+        <span><i class="obs-key-ring" aria-hidden="true"></i><b>Ring</b><small>systemic change</small></span>
+        <span><i class="obs-key-cluster" aria-hidden="true"></i><b>Cluster</b><small>drones or anomaly</small></span>
+      </div>
+    </details>
+  `;
+}
+
+function factionColor(factionId: string): string {
+  return `#${(FACTION_COLORS[factionId] || 0xf0e8d5).toString(16).padStart(6, '0')}`;
+}
+
+function labelLocation(location?: ObservatoryLocation): string {
+  if (!location) return '';
+  if (location.nodeId) return humanizeToken(location.nodeId);
+  if (location.edgeId) return humanizeToken(location.edgeId);
+  if (location.orbitShell) return `${humanizeToken(location.orbitShell)} orbit`;
+  if (typeof location.lat === 'number' && typeof location.lon === 'number') {
+    return `${location.lat.toFixed(1)}, ${location.lon.toFixed(1)}`;
+  }
+  return '';
 }
 
 function renderResearch(order: ReplayOrder): string {
