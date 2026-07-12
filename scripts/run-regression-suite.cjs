@@ -39,6 +39,7 @@ async function main() {
   await runTest('harness JSONL validates against trace grammar', () => runTraceValidationSmoke(outputDir));
   await runTest('harness JSONL replays deterministically from logged decisions', () => runHarnessReplaySmoke(outputDir));
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
+  await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
 
   const summary = {
@@ -577,6 +578,23 @@ function runProtocolObservatoryExporterSmoke(outputDir) {
   const intervention = replay.auditManifest.excerpts.find((excerpt) => excerpt.type === 'INTERVENTION');
   assert(intervention && /^[a-f0-9]{64}$/.test(intervention.recordSha256), 'Audit manifest omitted hashed intervention excerpt');
   return `protocolEvidence=${evidence.length}, spanClaims=${spanAction.comparableClaims}, auditArtifacts=${replay.auditManifest.artifacts.length}, bytes=${fs.statSync(replayPath).size}`;
+}
+
+function validateObservatoryUxContract() {
+  const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const main = fs.readFileSync(path.join(ROOT, 'src', 'main.ts'), 'utf8');
+  const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.ts'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.css'), 'utf8');
+  assert(html.includes("window.addEventListener('theysing:loading'"), 'Loading screen does not consume replay progress');
+  assert(html.includes("window.addEventListener('theysing:ready'"), 'Loading screen does not wait for application readiness');
+  assert(main.includes("new CustomEvent('theysing:ready')"), 'Legacy game does not signal readiness');
+  assert(ui.includes("response.body.getReader()"), 'Observatory no longer streams replay load progress');
+  assert(ui.includes("target.closest('button, a, input, textarea, select, label"), 'Global shortcuts do not guard interactive controls');
+  assert(ui.includes("data-role=\"close-evidence\""), 'Selected evidence has no dismiss control');
+  assert(ui.includes("this.mobilePanelButton.textContent = diaryOpen ? 'Show evidence' : 'Show diary'"), 'Mobile panel action labels regressed');
+  assert(css.includes('.obs-shell .obs-detail.obs-detail-open'), 'Responsive evidence detail sheet is missing');
+  assert(css.includes('button:focus-visible'), 'Keyboard focus treatment is missing');
+  return 'readiness, streaming progress, guarded shortcuts, mobile evidence, and focus styles present';
 }
 
 function validateObservatoryReplayFile(filePath, options = {}) {

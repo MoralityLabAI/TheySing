@@ -181,6 +181,7 @@ function initGame() {
   (window as any).engine = engine;
   (window as any).scene = scene;
   (window as any).ui = ui;
+  window.dispatchEvent(new CustomEvent('theysing:ready'));
 
   console.log(`
 ╔═══════════════════════════════════════════════════════════════╗

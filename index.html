@@ -56,6 +56,7 @@
       width: 0;
       background: linear-gradient(90deg, #71dce8, #e66a52);
       animation: loading 1.5s ease-in-out infinite;
+      transition: width 180ms ease-out;
     }
     @keyframes loading {
       0% { width: 0; margin-left: 0; }
@@ -83,11 +84,28 @@
   <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>
   <script>
+    const loadingScreen = document.getElementById('loading');
+    const loadingSubtitle = loadingScreen?.querySelector('.loading-subtitle');
+    const loadingProgress = loadingScreen?.querySelector('.loading-progress');
+    const hideLoading = () => loadingScreen?.classList.add('hidden');
+
+    window.addEventListener('theysing:loading', (event) => {
+      const detail = event.detail || {};
+      if (loadingSubtitle && detail.label) loadingSubtitle.textContent = detail.label;
+      if (loadingProgress && Number.isFinite(detail.percent)) {
+        loadingProgress.style.animation = 'none';
+        loadingProgress.style.marginLeft = '0';
+        loadingProgress.style.width = `${Math.max(2, Math.min(100, detail.percent))}%`;
+      }
+    });
+    window.addEventListener('theysing:ready', hideLoading, { once: true });
     window.addEventListener('load', () => {
       setTimeout(() => {
-        document.getElementById('loading')?.classList.add('hidden');
-      }, 900);
-    });
+        if (loadingScreen && !loadingScreen.classList.contains('hidden') && loadingSubtitle) {
+          loadingSubtitle.textContent = 'Still loading / check network if this persists';
+        }
+      }, 30000);
+    }, { once: true });
   </script>
 </body>
 </html>

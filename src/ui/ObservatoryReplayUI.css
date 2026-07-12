@@ -277,6 +277,38 @@
   background: rgba(5, 14, 17, 0.82);
 }
 
+.obs-shell .obs-detail.obs-detail-dismissed {
+  display: none;
+}
+
+.obs-detail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.obs-detail-heading button {
+  border: 1px solid rgba(152, 226, 228, 0.28);
+  background: rgba(3, 10, 14, 0.76);
+  color: rgba(240, 232, 213, 0.74);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.obs-shell button:focus-visible,
+.obs-shell input:focus-visible,
+.obs-shell .obs-file:focus-within {
+  outline: 2px solid #f0c574;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(240, 197, 116, 0.14);
+}
+
 @media (max-width: 1180px) {
   .obs-evaluation {
     left: calc(min(330px, 30vw) + 40px);
@@ -320,6 +352,19 @@
   }
 
   .obs-shell .obs-status { display: none; }
+
+  .obs-shell .obs-detail.obs-detail-open {
+    display: block;
+    top: auto;
+    left: 16px;
+    right: 16px;
+    bottom: 178px;
+    width: auto;
+    height: 32vh;
+    max-height: none;
+    transform: none;
+    z-index: 9;
+  }
 
   .obs-shell .obs-controls [data-role="director-mode"],
   .obs-shell .obs-controls [data-role="export-clip"] {
@@ -383,6 +428,19 @@
   .obs-shell.obs-mobile-diary .obs-right { display: block; }
 
   .obs-shell .obs-detail { display: none; }
+
+  .obs-shell .obs-detail.obs-detail-open {
+    display: block;
+    top: auto;
+    left: 9px;
+    right: 9px;
+    bottom: 166px;
+    width: auto;
+    height: 35vh;
+    max-height: none;
+    transform: none;
+    z-index: 9;
+  }
 
   .obs-shell .obs-bottom {
     left: 9px;

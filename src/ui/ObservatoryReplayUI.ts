@@ -254,6 +254,7 @@ export class ObservatoryReplayUI {
   private readonly scrubber: HTMLInputElement;
   private readonly timelineLabel: HTMLElement;
   private readonly mobilePanelButton: HTMLButtonElement;
+  private keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   private replay: ObservatoryReplay | null = null;
   private turnIndex = 0;
   private playing = false;
@@ -290,7 +291,7 @@ export class ObservatoryReplayUI {
       <section class="obs-evaluation" data-role="evaluation">
         <div class="obs-empty">Evaluation evidence will appear when an analysis-enriched replay is loaded.</div>
       </section>
-      <aside class="obs-panel obs-left">
+      <aside class="obs-panel obs-left" aria-label="Replay evidence and filters">
         <div class="obs-panel-title">Scene Filters</div>
         <div class="obs-filterbar" data-role="filters"></div>
         <div class="obs-panel-title">Protocol Evidence</div>
@@ -306,15 +307,15 @@ export class ObservatoryReplayUI {
         <div class="obs-panel-title">Anomaly Archive</div>
         <div class="obs-archive-tools">
           <input data-role="archive-search" type="search" placeholder="Search archive">
-          <button data-role="archive-scope" type="button">Turn</button>
+          <button data-role="archive-scope" type="button" aria-pressed="false">Turn</button>
         </div>
         <div data-role="anomalies" class="obs-stack obs-anomaly-stack"></div>
       </aside>
-      <aside class="obs-panel obs-right">
+      <aside class="obs-panel obs-right" aria-label="Negotiation diary">
         <div class="obs-panel-title">Animated Diary</div>
         <div data-role="transcript" class="obs-transcript"></div>
       </aside>
-      <aside class="obs-detail" data-role="detail">
+      <aside class="obs-detail" data-role="detail" aria-live="polite">
         <div class="obs-panel-title">Selected Evidence</div>
         <div class="obs-empty">Click a beacon, beam, drone swarm, social bloom, audit mesh, or escape vector.</div>
       </aside>
@@ -325,23 +326,23 @@ export class ObservatoryReplayUI {
         </div>
         <div class="obs-controls">
           <button data-role="prev" type="button">Prev</button>
-          <button data-role="play" type="button">Play</button>
+          <button data-role="play" type="button" aria-pressed="false">Play</button>
           <button data-role="next" type="button">Next</button>
           <button data-role="reset-camera" type="button">Reset Cam</button>
           <button data-role="focus-orbit" type="button">Orbit</button>
           <button data-role="focus-memetic" type="button">Memetic</button>
           <button data-role="focus-cyber" type="button">Cyber</button>
-          <button data-role="director-mode" type="button">Director: Off</button>
-          <button data-role="reveal-retro" type="button">Reveal: Public</button>
+          <button data-role="director-mode" type="button" aria-pressed="false">Director: Off</button>
+          <button data-role="reveal-retro" type="button" aria-pressed="false">Reveal: Public</button>
           <button data-role="export-clip" type="button">Export Clip</button>
-          <button data-role="mobile-panel" class="obs-mobile-panel" type="button">Panel: Evidence</button>
+          <button data-role="mobile-panel" class="obs-mobile-panel" type="button" aria-pressed="false">Show diary</button>
           <label class="obs-file">
             Load JSON
             <input data-role="file" type="file" accept="application/json,.json">
           </label>
         </div>
         <div data-role="moves" class="obs-moves"></div>
-        <div data-role="status" class="obs-status">Export a harness log to public/observatory_replay.json, or load a replay file.</div>
+        <div data-role="status" class="obs-status" role="status">Export a harness log to public/observatory_replay.json, or load a replay file.</div>
       </footer>
     `;
 
@@ -376,6 +377,7 @@ export class ObservatoryReplayUI {
 
   dispose(): void {
     window.clearTimeout(this.playTimer);
+    if (this.keydownHandler) document.removeEventListener('keydown', this.keydownHandler);
     this.scene.dispose();
   }
 
@@ -402,6 +404,7 @@ export class ObservatoryReplayUI {
       this.directorMode = !this.directorMode;
       directorButton.textContent = this.directorMode ? 'Director: On' : 'Director: Off';
       directorButton.classList.toggle('obs-active', this.directorMode);
+      directorButton.setAttribute('aria-pressed', String(this.directorMode));
       this.scene.setDirectorMode(this.directorMode);
       this.renderTurn();
     });
@@ -409,17 +412,20 @@ export class ObservatoryReplayUI {
       this.revealRetrospective = !this.revealRetrospective;
       revealRetro.textContent = this.revealRetrospective ? 'Reveal: Private' : 'Reveal: Public';
       revealRetro.classList.toggle('obs-active', this.revealRetrospective);
+      revealRetro.setAttribute('aria-pressed', String(this.revealRetrospective));
       this.renderTurn();
     });
     exportClip.addEventListener('click', () => this.exportSpectatorClip());
     this.scrubber.addEventListener('input', () => {
       if (!this.replay) return;
       this.turnIndex = Math.max(0, Math.min(this.replay.turns.length - 1, Number(this.scrubber.value)));
+      this.closeEvidence();
       this.renderTurn();
     });
     this.mobilePanelButton.addEventListener('click', () => {
       const diaryOpen = this.container.classList.toggle('obs-mobile-diary');
-      this.mobilePanelButton.textContent = diaryOpen ? 'Panel: Diary' : 'Panel: Evidence';
+      this.mobilePanelButton.textContent = diaryOpen ? 'Show evidence' : 'Show diary';
+      this.mobilePanelButton.setAttribute('aria-pressed', String(diaryOpen));
     });
     this.archiveSearch.addEventListener('input', () => {
       this.archiveQuery = this.archiveSearch.value;
@@ -429,37 +435,78 @@ export class ObservatoryReplayUI {
       this.archiveCampaignMode = !this.archiveCampaignMode;
       this.archiveScopeButton.textContent = this.archiveCampaignMode ? 'Campaign' : 'Turn';
       this.archiveScopeButton.classList.toggle('obs-active', this.archiveCampaignMode);
+      this.archiveScopeButton.setAttribute('aria-pressed', String(this.archiveCampaignMode));
       this.renderTurn();
     });
     file.addEventListener('change', () => {
       const selected = file.files?.[0];
       if (selected) void this.loadFile(selected);
     });
-    document.addEventListener('keydown', (event) => {
-      const target = event.target as HTMLElement | null;
-      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
+    this.keydownHandler = (event) => {
+      if (isInteractiveTarget(event.target)) return;
       if (event.key === 'ArrowLeft') this.step(-1);
       if (event.key === 'ArrowRight') this.step(1);
       if (event.key === ' ') {
         event.preventDefault();
         this.togglePlay();
       }
-    });
+    };
+    document.addEventListener('keydown', this.keydownHandler);
   }
 
   private async loadFromUrl(): Promise<void> {
     const params = new URLSearchParams(window.location.search);
     const replayPath = params.get('replay') || '/observatory_replay.json';
     try {
+      this.announceLoading('Contacting the Babel evidence archive');
       const response = await fetch(replayPath, { cache: 'no-store' });
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const replay = await response.json() as ObservatoryReplay;
+      const replay = await this.readReplayResponse(response);
       this.setReplay(replay, replayPath);
     } catch (error) {
       this.status.textContent = `No replay fetched from ${replayPath}. Use Load JSON or export one into public/.`;
       console.warn('Observatory replay load failed:', error);
       this.renderEmpty();
+      this.signalReady();
     }
+  }
+
+  private async readReplayResponse(response: Response): Promise<ObservatoryReplay> {
+    const expectedBytes = response.headers.get('Content-Encoding')
+      ? 0
+      : Number(response.headers.get('Content-Length') || 0);
+    if (!response.body) return response.json() as Promise<ObservatoryReplay>;
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let receivedBytes = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      chunks.push(value);
+      receivedBytes += value.byteLength;
+      const percent = expectedBytes > 0 ? Math.min(99, Math.round(100 * receivedBytes / expectedBytes)) : null;
+      this.announceLoading(
+        percent === null ? `Receiving archive / ${formatMegabytes(receivedBytes)}` : `Receiving archive / ${percent}%`,
+        percent
+      );
+    }
+    this.announceLoading('Indexing negotiation evidence', 99);
+    const bytes = new Uint8Array(receivedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(bytes)) as ObservatoryReplay;
+  }
+
+  private announceLoading(label: string, percent: number | null = null): void {
+    window.dispatchEvent(new CustomEvent('theysing:loading', { detail: { label, percent } }));
+  }
+
+  private signalReady(): void {
+    window.dispatchEvent(new CustomEvent('theysing:ready'));
   }
 
   private async loadFile(file: File): Promise<void> {
@@ -486,6 +533,7 @@ export class ObservatoryReplayUI {
     this.renderResearchViews();
     this.renderFilters();
     this.renderTurn();
+    this.signalReady();
   }
 
   private exportSpectatorClip(): void {
@@ -556,6 +604,7 @@ export class ObservatoryReplayUI {
     this.runLabel.textContent = `${this.replay.runs?.length || 0} run${(this.replay.runs?.length || 0) === 1 ? '' : 's'}`;
     this.scrubber.value = String(this.turnIndex);
     this.timelineLabel.textContent = `T${turn.turn} ${turn.phase || 'UNKNOWN'} / ${this.turnIndex + 1} of ${this.replay.turns.length}`;
+    this.scrubber.setAttribute('aria-valuetext', this.timelineLabel.textContent);
 
     this.renderMoments(filteredTurn);
     this.renderProtocolEvidence(filteredTurn);
@@ -581,7 +630,7 @@ export class ObservatoryReplayUI {
       signalMode: nextFilters.signalMode ?? this.activeSignalMode
     });
     const button = (kind: string, value: string, activeValue: string, count: number, label = value) =>
-      `<button type="button" data-filter-kind="${kind}" data-filter-value="${value}" class="${value === activeValue ? 'obs-active' : ''}">${escapeHtml(label)}<b>${count}</b></button>`;
+      `<button type="button" data-filter-kind="${kind}" data-filter-value="${value}" aria-pressed="${value === activeValue}" class="${value === activeValue ? 'obs-active' : ''}">${escapeHtml(label)}<b>${count}</b></button>`;
     filters.innerHTML = `
       <div class="obs-chip-row">
         ${subgenres.map((item) => button('subgenre', item, this.activeSubgenre, countFor({ subgenre: item }))).join('')}
@@ -820,7 +869,10 @@ export class ObservatoryReplayUI {
     const payloadValue = this.revealRetrospective ? evidence.payload : redactPrivatePayload(evidence.payload);
     const payload = payloadValue ? compactJson(payloadValue) : '';
     this.detailPanel.innerHTML = `
-      <div class="obs-panel-title">Selected Evidence</div>
+      <div class="obs-detail-heading">
+        <div class="obs-panel-title">Selected Evidence</div>
+        <button type="button" data-role="close-evidence" aria-label="Close selected evidence">Close</button>
+      </div>
       <article class="obs-evidence-card">
         <span>${escapeHtml(evidence.category)} / ${escapeHtml(evidence.subgenre)}</span>
         <strong>${escapeHtml(evidence.title)}</strong>
@@ -833,7 +885,16 @@ export class ObservatoryReplayUI {
         ${payload ? `<pre>${escapeHtml(payload)}</pre>` : ''}
       </article>
     `;
+    this.detailPanel.classList.remove('obs-detail-dismissed');
+    this.detailPanel.classList.add('obs-detail-open');
+    this.detailPanel.querySelector<HTMLButtonElement>('[data-role="close-evidence"]')
+      ?.addEventListener('click', () => this.closeEvidence());
     if (evidence.subgenre) this.scene.focusSubgenre(evidence.subgenre);
+  }
+
+  private closeEvidence(): void {
+    this.detailPanel.classList.remove('obs-detail-open');
+    this.detailPanel.classList.add('obs-detail-dismissed');
   }
 
   private renderMoments(turn: ReplayTurn): void {
@@ -1147,12 +1208,14 @@ export class ObservatoryReplayUI {
   private step(delta: number): void {
     if (!this.replay || this.replay.turns.length === 0) return;
     this.turnIndex = wrapIndex(this.turnIndex + delta, this.replay.turns.length);
+    this.closeEvidence();
     this.renderTurn();
   }
 
   private togglePlay(): void {
     this.playing = !this.playing;
     this.playButton.textContent = this.playing ? 'Pause' : 'Play';
+    this.playButton.setAttribute('aria-pressed', String(this.playing));
     window.clearTimeout(this.playTimer);
     if (this.playing) this.scheduleNextTurn();
   }
@@ -1638,6 +1701,15 @@ function requireElement(root: ParentNode, selector: string): HTMLElement {
     throw new Error(`Missing observatory element: ${selector}`);
   }
   return element;
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('button, a, input, textarea, select, label, [contenteditable="true"], [role="button"]'));
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${(Math.max(0, bytes) / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function statusClass(value?: string): string {
