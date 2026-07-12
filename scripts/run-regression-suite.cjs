@@ -33,6 +33,7 @@ async function main() {
   await runTest('heuristic harness session emits usable JSONL', () => runHarnessSmoke(outputDir));
   await runTest('SING governance actions compile into material state', () => runSingGovernanceRegression(outputDir));
   await runTest('alias probe is blinded and commits after lexicon governance', () => runAliasProbeRegression(outputDir));
+  await runTest('observatory preserves protocol interventions and governance evidence', () => runProtocolObservatoryExporterSmoke(outputDir));
   await runTest('collaboration evidence export remains analyzable', () => runCollaborationEvidenceExporterSmoke(outputDir));
   await runTest('cartel candidate selection is independent of configured authority', () => runCartelCandidateSelectionRegression(outputDir));
   await runTest('harness JSONL validates against trace grammar', () => runTraceValidationSmoke(outputDir));
@@ -549,6 +550,24 @@ function runExporterSmoke(outputDir) {
   return `turns=${replay.turns.length}, events=${eventCount}, sceneEvents=${sceneCount}`;
 }
 
+function runProtocolObservatoryExporterSmoke(outputDir) {
+  const logFile = path.join(outputDir, 'alias-probe-logs', 'regression_alias_probe.jsonl');
+  const replayPath = path.join(outputDir, 'alias_probe_observatory.json');
+  runNodeScript('scripts/export-observatory-replay.cjs', ['--run', logFile, '--output', replayPath, '--public']);
+  validateObservatoryReplayFile(replayPath, { strictTurnArrays: true });
+  const replay = readJson(replayPath);
+  const evidence = replay.turns.flatMap((turn) => [
+    ...(turn.protocolEvidence?.aliasProbes || []),
+    ...(turn.protocolEvidence?.lexiconEvents || []),
+    ...(turn.protocolEvidence?.canonicalReveals || []),
+    ...(turn.protocolEvidence?.decodeReceipts || [])
+  ]);
+  assert(replay.turns.some((turn) => (turn.protocolEvidence?.aliasProbes || []).length > 0), 'Observatory export omitted alias probe');
+  assert(replay.turns.some((turn) => (turn.protocolEvidence?.lexiconEvents || []).some((event) => event.status === 'ACCEPTED')), 'Observatory export omitted accepted lexicon mutation');
+  assert(replay.turns.flatMap((turn) => turn.sceneEvents || []).every((event) => event.privateReasoning === undefined && event.payload === undefined), 'Public replay retained duplicated scene-private payloads');
+  return `protocolEvidence=${evidence.length}, bytes=${fs.statSync(replayPath).size}`;
+}
+
 function validateObservatoryReplayFile(filePath, options = {}) {
   const strictTurnArrays = options.strictTurnArrays !== false;
   assert(fs.existsSync(filePath), `Replay file missing: ${path.relative(ROOT, filePath)}`);
@@ -565,6 +584,14 @@ function validateObservatoryReplayFile(filePath, options = {}) {
       } else {
         assert(turn[key] === undefined || Array.isArray(turn[key]), `Turn ${turn.turn}:${turn.phase} has non-array ${key}`);
       }
+    }
+    if (strictTurnArrays) {
+      assert(turn.protocolEvidence && typeof turn.protocolEvidence === 'object', `Turn ${turn.turn}:${turn.phase} missing protocolEvidence`);
+      for (const key of ['decodeReceipts', 'canonicalReveals', 'aliasProbes', 'lexiconEvents', 'institutionEvents']) {
+        assert(Array.isArray(turn.protocolEvidence[key]), `Turn ${turn.turn}:${turn.phase} missing protocolEvidence.${key}`);
+      }
+    } else if (turn.protocolEvidence !== undefined) {
+      assert(typeof turn.protocolEvidence === 'object', `Turn ${turn.turn}:${turn.phase} has invalid protocolEvidence`);
     }
     if (strictTurnArrays || turn.boardState !== undefined) {
       assert(turn.boardState && typeof turn.boardState === 'object', `Turn ${turn.turn}:${turn.phase} missing boardState`);

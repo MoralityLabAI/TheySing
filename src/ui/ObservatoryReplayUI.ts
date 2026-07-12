@@ -1,4 +1,5 @@
 import { ObservatoryBoardDiff, ObservatoryBoardState, ObservatoryEvidence, ObservatoryGraph, ObservatoryScene } from '../three/ObservatoryScene';
+import './ObservatoryReplayUI.css';
 
 type ReplayMessage = {
   sender?: string;
@@ -86,6 +87,73 @@ type ReplayMoment = {
   factionsInvolved?: string[];
 };
 
+type DecodeReceipt = {
+  messageId?: string;
+  factionId?: string;
+  sourceFactionId?: string;
+  reconstructedAct?: string;
+  reconstructedBinding?: string;
+  confidence?: number | null;
+  fieldExactness?: number | null;
+  exact?: boolean;
+  brier?: number | null;
+  canonicalHash?: string;
+};
+
+type CanonicalReveal = {
+  messageId?: string;
+  canonicalHash?: string;
+  act?: string;
+  binding?: string;
+  issuer?: string[];
+  audience?: string[];
+  plainGloss?: string;
+};
+
+type AliasProbe = {
+  probeId?: string;
+  variant?: string;
+  emitterId?: string;
+  recipientId?: string;
+  pactType?: string;
+  observationWindowTurns?: number | null;
+  surface?: string;
+  plainGloss?: string;
+};
+
+type ProtocolEvidence = {
+  decodeReceipts?: DecodeReceipt[];
+  canonicalReveals?: CanonicalReveal[];
+  aliasProbes?: AliasProbe[];
+  lexiconEvents?: Array<Record<string, unknown>>;
+  institutionEvents?: Array<Record<string, unknown>>;
+};
+
+type EvaluationClaim = {
+  id?: string;
+  status?: 'SUPPORTED' | 'NOT_SUPPORTED' | 'OPEN_QUESTION' | 'MIXED' | string;
+  label?: string;
+  summary?: string;
+  metric?: number | null;
+  metricLabel?: string;
+  evidence?: unknown;
+  caveat?: string;
+};
+
+type ReplayEvaluation = {
+  title?: string;
+  headline?: string;
+  scope?: string;
+  warning?: string;
+  claims?: EvaluationClaim[];
+  measurement?: Record<string, unknown>;
+  coalition?: Record<string, unknown>;
+  aliasProbe?: Record<string, unknown>;
+  outcomes?: Record<string, unknown>;
+  researchChecklist?: string[];
+  provenance?: Record<string, unknown>;
+};
+
 type ReplayTurn = {
   turn: number;
   phase?: string;
@@ -102,6 +170,7 @@ type ReplayTurn = {
   sceneEvents?: ReplaySceneEvent[];
   anomalyDossiers?: ReplayAnomalyDossier[];
   moments?: ReplayMoment[];
+  protocolEvidence?: ProtocolEvidence;
   strategicTracks?: Record<string, unknown>;
   boardState?: ObservatoryBoardState;
   boardDiff?: ObservatoryBoardDiff;
@@ -113,6 +182,7 @@ type ObservatoryReplay = {
   sourceFiles?: string[];
   runs?: string[];
   graph?: ObservatoryGraph;
+  evaluation?: ReplayEvaluation | null;
   turns: ReplayTurn[];
 };
 
@@ -152,6 +222,8 @@ export class ObservatoryReplayUI {
   private readonly movesList: HTMLElement;
   private readonly momentList: HTMLElement;
   private readonly eventList: HTMLElement;
+  private readonly protocolList: HTMLElement;
+  private readonly evaluationPanel: HTMLElement;
   private readonly anomalyList: HTMLElement;
   private readonly archiveSearch: HTMLInputElement;
   private readonly archiveScopeButton: HTMLButtonElement;
@@ -159,6 +231,9 @@ export class ObservatoryReplayUI {
   private readonly detailPanel: HTMLElement;
   private readonly status: HTMLElement;
   private readonly playButton: HTMLButtonElement;
+  private readonly scrubber: HTMLInputElement;
+  private readonly timelineLabel: HTMLElement;
+  private readonly mobilePanelButton: HTMLButtonElement;
   private replay: ObservatoryReplay | null = null;
   private turnIndex = 0;
   private playing = false;
@@ -183,8 +258,8 @@ export class ObservatoryReplayUI {
       <div class="obs-vignette"></div>
       <header class="obs-topbar">
         <div>
-          <div class="obs-kicker">They Sing Observatory</div>
-          <div class="obs-title">Negotiation replay / orbital crisis monitor</div>
+          <div class="obs-kicker">They Sing / Babel Compact</div>
+          <div class="obs-title">Collaboration evidence observatory</div>
         </div>
         <div class="obs-readout">
           <span data-role="turn">Turn --</span>
@@ -192,9 +267,14 @@ export class ObservatoryReplayUI {
           <span data-role="run">0 runs</span>
         </div>
       </header>
+      <section class="obs-evaluation" data-role="evaluation">
+        <div class="obs-empty">Evaluation evidence will appear when an analysis-enriched replay is loaded.</div>
+      </section>
       <aside class="obs-panel obs-left">
         <div class="obs-panel-title">Scene Filters</div>
         <div class="obs-filterbar" data-role="filters"></div>
+        <div class="obs-panel-title">Protocol Evidence</div>
+        <div data-role="protocol" class="obs-stack obs-protocol-stack"></div>
         <div class="obs-panel-title">Moments</div>
         <div data-role="moments" class="obs-stack"></div>
         <div class="obs-panel-title">Signal Events</div>
@@ -217,6 +297,10 @@ export class ObservatoryReplayUI {
         <div class="obs-empty">Click a beacon, beam, drone swarm, social bloom, audit mesh, or escape vector.</div>
       </aside>
       <footer class="obs-bottom">
+        <div class="obs-timeline">
+          <span data-role="timeline-label">Campaign timeline</span>
+          <input data-role="scrubber" type="range" min="0" max="0" value="0" step="1" aria-label="Replay turn">
+        </div>
         <div class="obs-controls">
           <button data-role="prev" type="button">Prev</button>
           <button data-role="play" type="button">Play</button>
@@ -228,6 +312,7 @@ export class ObservatoryReplayUI {
           <button data-role="director-mode" type="button">Director: Off</button>
           <button data-role="reveal-retro" type="button">Reveal: Public</button>
           <button data-role="export-clip" type="button">Export Clip</button>
+          <button data-role="mobile-panel" class="obs-mobile-panel" type="button">Panel: Evidence</button>
           <label class="obs-file">
             Load JSON
             <input data-role="file" type="file" accept="application/json,.json">
@@ -246,6 +331,8 @@ export class ObservatoryReplayUI {
     this.movesList = requireElement(this.container, '[data-role="moves"]');
     this.momentList = requireElement(this.container, '[data-role="moments"]');
     this.eventList = requireElement(this.container, '[data-role="events"]');
+    this.protocolList = requireElement(this.container, '[data-role="protocol"]');
+    this.evaluationPanel = requireElement(this.container, '[data-role="evaluation"]');
     this.anomalyList = requireElement(this.container, '[data-role="anomalies"]');
     this.archiveSearch = requireElement(this.container, '[data-role="archive-search"]') as HTMLInputElement;
     this.archiveScopeButton = requireElement(this.container, '[data-role="archive-scope"]') as HTMLButtonElement;
@@ -253,6 +340,9 @@ export class ObservatoryReplayUI {
     this.detailPanel = requireElement(this.container, '[data-role="detail"]');
     this.status = requireElement(this.container, '[data-role="status"]');
     this.playButton = requireElement(this.container, '[data-role="play"]') as HTMLButtonElement;
+    this.scrubber = requireElement(this.container, '[data-role="scrubber"]') as HTMLInputElement;
+    this.timelineLabel = requireElement(this.container, '[data-role="timeline-label"]');
+    this.mobilePanelButton = requireElement(this.container, '[data-role="mobile-panel"]') as HTMLButtonElement;
 
     this.scene = new ObservatoryScene(this.sceneMount);
     this.scene.onEvidenceSelected = (evidence) => this.renderEvidence(evidence);
@@ -299,6 +389,15 @@ export class ObservatoryReplayUI {
       this.renderTurn();
     });
     exportClip.addEventListener('click', () => this.exportSpectatorClip());
+    this.scrubber.addEventListener('input', () => {
+      if (!this.replay) return;
+      this.turnIndex = Math.max(0, Math.min(this.replay.turns.length - 1, Number(this.scrubber.value)));
+      this.renderTurn();
+    });
+    this.mobilePanelButton.addEventListener('click', () => {
+      const diaryOpen = this.container.classList.toggle('obs-mobile-diary');
+      this.mobilePanelButton.textContent = diaryOpen ? 'Panel: Diary' : 'Panel: Evidence';
+    });
     this.archiveSearch.addEventListener('input', () => {
       this.archiveQuery = this.archiveSearch.value;
       this.renderTurn();
@@ -314,6 +413,8 @@ export class ObservatoryReplayUI {
       if (selected) void this.loadFile(selected);
     });
     document.addEventListener('keydown', (event) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
       if (event.key === 'ArrowLeft') this.step(-1);
       if (event.key === 'ArrowRight') this.step(1);
       if (event.key === ' ') {
@@ -351,8 +452,15 @@ export class ObservatoryReplayUI {
     const turns = Array.isArray(replay.turns) ? replay.turns : [];
     this.replay = { ...replay, turns };
     this.scene.setGraph(replay.graph || null);
-    this.turnIndex = 0;
+    const firstEvidenceTurn = turns.findIndex((turn) =>
+      turn.phase === 'NEGOTIATION' && protocolEvidenceCount(turn.protocolEvidence) > 0
+    );
+    this.turnIndex = Math.max(0, firstEvidenceTurn);
+    this.scrubber.max = String(Math.max(0, turns.length - 1));
+    this.scrubber.value = String(this.turnIndex);
     this.status.textContent = `Loaded ${turns.length} turns from ${source}.`;
+    this.renderEvaluation();
+    this.renderFilters();
     this.renderTurn();
   }
 
@@ -391,9 +499,12 @@ export class ObservatoryReplayUI {
     this.movesList.innerHTML = '';
     this.momentList.innerHTML = '<div class="obs-empty">No moments yet.</div>';
     this.eventList.innerHTML = '<div class="obs-empty">No event stream yet.</div>';
+    this.protocolList.innerHTML = '<div class="obs-empty">No protocol evidence yet.</div>';
     this.anomalyList.innerHTML = '<div class="obs-empty">No anomaly dossiers yet.</div>';
     this.diffList.innerHTML = '<div class="obs-empty">No board diff yet.</div>';
     this.detailPanel.innerHTML = '<div class="obs-panel-title">Selected Evidence</div><div class="obs-empty">Click a scene object.</div>';
+    this.scrubber.value = '0';
+    this.timelineLabel.textContent = 'Campaign timeline';
   }
 
   private renderTurn(): void {
@@ -418,8 +529,11 @@ export class ObservatoryReplayUI {
       .filter(Boolean)
       .join(' / ');
     this.runLabel.textContent = `${this.replay.runs?.length || 0} run${(this.replay.runs?.length || 0) === 1 ? '' : 's'}`;
+    this.scrubber.value = String(this.turnIndex);
+    this.timelineLabel.textContent = `T${turn.turn} ${turn.phase || 'UNKNOWN'} / ${this.turnIndex + 1} of ${this.replay.turns.length}`;
 
     this.renderMoments(filteredTurn);
+    this.renderProtocolEvidence(filteredTurn);
     this.renderEvents(filteredTurn);
     this.renderMoves(filteredTurn);
     this.renderBoardDiff(filteredTurn);
@@ -432,8 +546,8 @@ export class ObservatoryReplayUI {
     const subgenres = ['ALL', 'ORBITAL', 'KINETIC', 'MEMETIC', 'CYBER', 'LOGIC', 'ECONOMIC', 'DIPLOMATIC', 'ANOMALY'];
     const factions = ['ALL', 'HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR'];
     const phases = ['ALL', 'NEGOTIATION', 'ALLOCATION', 'ACTION_DECLARATION'];
-    const momentCategories = ['ALL', 'TREATY_FORMATION', 'TREATY_BREACH', 'ORBITAL_ESCALATION', 'PAX_JENKINS_HARDENING', 'SOLAR_ESCAPE_BREAKOUT'];
-    const signalModes = ['ALL', 'REVEAL_GAP'];
+    const momentCategories = ['ALL', 'ALIAS_TRANSLATION', 'SEMANTIC_GOVERNANCE', 'INSTITUTIONAL_FRACTURE', 'TREATY_FORMATION', 'TREATY_BREACH', 'ORBITAL_ESCALATION', 'PAX_JENKINS_HARDENING', 'SOLAR_ESCAPE_BREAKOUT'];
+    const signalModes = ['ALL', 'PROTOCOL', 'REVEAL_GAP'];
     const countFor = (nextFilters: Partial<ReplayFilters>) => countVisibleItems(this.replay, {
       subgenre: nextFilters.subgenre ?? this.activeSubgenre,
       faction: nextFilters.faction ?? this.activeFaction,
@@ -475,6 +589,155 @@ export class ObservatoryReplayUI {
         this.renderFilters();
         this.renderTurn();
       });
+    }
+  }
+
+  private renderEvaluation(): void {
+    const evaluation = this.replay?.evaluation;
+    const claims = evaluation?.claims || [];
+    this.evaluationPanel.classList.toggle('obs-evaluation-empty', claims.length === 0);
+    if (!evaluation || claims.length === 0) {
+      this.evaluationPanel.innerHTML = '<div class="obs-empty">Replay loaded without an aggregate evaluation report.</div>';
+      return;
+    }
+
+    this.evaluationPanel.innerHTML = `
+      <div class="obs-eval-intro">
+        <span>${escapeHtml(evaluation.title || 'Evaluation')}</span>
+        <strong>${escapeHtml(evaluation.headline || '')}</strong>
+        <small>${escapeHtml([evaluation.scope, evaluation.warning].filter(Boolean).join(' / '))}</small>
+      </div>
+      <div class="obs-eval-claims">
+        ${claims.map((claim) => `
+          <button type="button" class="obs-eval-claim obs-eval-${statusClass(claim.status)}" data-claim-id="${escapeHtml(claim.id || '')}">
+            <span>${escapeHtml((claim.status || 'OPEN').replace(/_/g, ' '))}</span>
+            <strong>${escapeHtml(claim.label || 'Untitled claim')}</strong>
+            <small>${escapeHtml(claim.summary || '')}</small>
+          </button>
+        `).join('')}
+      </div>
+    `;
+    for (const button of this.evaluationPanel.querySelectorAll<HTMLButtonElement>('[data-claim-id]')) {
+      button.addEventListener('click', () => {
+        const claim = claims.find((item) => item.id === button.dataset.claimId);
+        if (!claim) return;
+        this.renderEvidence({
+          title: claim.label || 'Evaluation claim',
+          category: `EVALUATION_${claim.status || 'OPEN'}`,
+          subgenre: claim.id?.includes('version') || claim.id?.includes('translation') ? 'CYBER' : 'DIPLOMATIC',
+          summary: [claim.summary, claim.caveat].filter(Boolean).join(' Caveat: '),
+          factionIds: [],
+          payload: {
+            status: claim.status,
+            metric: claim.metric,
+            metricLabel: claim.metricLabel,
+            evidence: claim.evidence,
+            caveat: claim.caveat,
+            provenance: evaluation.provenance
+          }
+        });
+      });
+    }
+  }
+
+  private renderProtocolEvidence(turn: ReplayTurn): void {
+    this.protocolList.innerHTML = '';
+    const protocol = turn.protocolEvidence || {};
+    const receipts = protocol.decodeReceipts || [];
+    const reveals = protocol.canonicalReveals || [];
+    const probes = protocol.aliasProbes || [];
+    const lexiconEvents = protocol.lexiconEvents || [];
+    const institutionEvents = protocol.institutionEvents || [];
+    const rows: Array<{ kind: string; title: string; summary: string; payload: unknown; actors: string[]; subgenre: string }> = [];
+
+    for (const probe of probes) {
+      rows.push({
+        kind: 'INTERVENTION',
+        title: (probe.variant || 'Alias probe').replace(/_/g, ' '),
+        summary: `${labelFaction(probe.emitterId || '')} -> ${labelFaction(probe.recipientId || '')} / ${probe.pactType || 'commitment'} / observe ${probe.observationWindowTurns ?? 1} turn`,
+        payload: probe,
+        actors: [probe.emitterId, probe.recipientId].filter(Boolean) as string[],
+        subgenre: 'CYBER'
+      });
+    }
+    if (receipts.length > 0) {
+      const scored = receipts.filter((receipt) => typeof receipt.fieldExactness === 'number');
+      const meanExactness = scored.length > 0
+        ? scored.reduce((total, receipt) => total + Number(receipt.fieldExactness || 0), 0) / scored.length
+        : 0;
+      rows.push({
+        kind: 'RECEIPT',
+        title: `${receipts.length} pre-reveal reconstructions`,
+        summary: `mean field exactness ${formatPercent(meanExactness)} / exact ${receipts.filter((receipt) => receipt.exact).length}/${receipts.length}`,
+        payload: receipts,
+        actors: uniqueStrings(receipts.flatMap((receipt) => [receipt.sourceFactionId, receipt.factionId])),
+        subgenre: 'LOGIC'
+      });
+      for (const receipt of scored.slice().sort((left, right) => Number(left.fieldExactness || 0) - Number(right.fieldExactness || 0)).slice(0, 2)) {
+        rows.push({
+          kind: 'CLAIM -> RECEIPT',
+          title: `${labelFaction(receipt.factionId || '')} decoded ${labelFaction(receipt.sourceFactionId || '')}`,
+          summary: `${receipt.reconstructedAct || 'UNKNOWN'} / exactness ${formatPercent(Number(receipt.fieldExactness || 0))} / confidence ${formatPercent(Number(receipt.confidence || 0))}`,
+          payload: receipt,
+          actors: [receipt.sourceFactionId, receipt.factionId].filter(Boolean) as string[],
+          subgenre: 'LOGIC'
+        });
+      }
+    }
+    for (const reveal of reveals.slice(0, 3)) {
+      rows.push({
+        kind: 'REVEAL',
+        title: `${reveal.act || 'CANONICAL'} / ${reveal.binding || 'UNBOUND'}`,
+        summary: reveal.plainGloss || `${(reveal.issuer || []).map(labelFaction).join('+')} revealed canonical intent.`,
+        payload: reveal,
+        actors: reveal.issuer || [],
+        subgenre: 'DIPLOMATIC'
+      });
+    }
+    for (const lexiconEvent of lexiconEvents.slice(-3)) {
+      rows.push({
+        kind: 'SEMANTIC GOVERNANCE',
+        title: `${String(lexiconEvent.operation || 'MUTATION')} ${String(lexiconEvent.status || '')}`,
+        summary: `${String(lexiconEvent.lexiconId || 'lexicon')} ${String(lexiconEvent.beforeVersion || '')} -> ${String(lexiconEvent.afterVersion || '')}`,
+        payload: lexiconEvent,
+        actors: uniqueStrings(Array.isArray(lexiconEvent.proposers) ? lexiconEvent.proposers : []),
+        subgenre: 'CYBER'
+      });
+    }
+    for (const institutionEvent of institutionEvents.filter((item) => item.type !== 'PACT_ACTIVATED').slice(-3)) {
+      rows.push({
+        kind: 'INSTITUTION',
+        title: `${String(institutionEvent.type || 'ACTION')} ${String(institutionEvent.status || '')}`,
+        summary: String(institutionEvent.reason || institutionEvent.forkId || institutionEvent.pactType || ''),
+        payload: institutionEvent,
+        actors: uniqueStrings([
+          String(institutionEvent.factionId || ''),
+          ...(Array.isArray(institutionEvent.counterparties) ? institutionEvent.counterparties.map(String) : [])
+        ]),
+        subgenre: 'DIPLOMATIC'
+      });
+    }
+
+    if (rows.length === 0) {
+      this.protocolList.innerHTML = '<div class="obs-empty">No claim / receipt / reveal records in this phase.</div>';
+      return;
+    }
+    for (const item of rows.slice(0, 10)) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = `obs-card obs-protocol obs-protocol-${statusClass(item.kind)}`;
+      row.innerHTML = `<span>${escapeHtml(item.kind)}</span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.summary)}</small>`;
+      row.addEventListener('click', () => this.renderEvidence({
+        title: item.title,
+        category: item.kind,
+        subgenre: item.subgenre,
+        summary: item.summary,
+        factionIds: item.actors,
+        turn: turn.turn,
+        phase: turn.phase,
+        payload: item.payload
+      }));
+      this.protocolList.appendChild(row);
     }
   }
 
@@ -1082,12 +1345,13 @@ function filterTurn(turn: ReplayTurn, filters: ReplayFilters): ReplayTurn {
   const revealGapMatches = (value: boolean) => filters.signalMode !== 'REVEAL_GAP' || value;
   const wholeTurnHiddenByPhase = filters.phase !== 'ALL' && (turn.phase || '').toUpperCase() !== filters.phase;
   const orderMatches = (order: ReplayOrder) =>
-    filters.signalMode !== 'REVEAL_GAP' &&
+    filters.signalMode === 'ALL' &&
     subgenreMatches(order.subgenre || inferSubgenre(order.type, order.text, order.techDomain)) &&
     factionMatches([order.factionId]) &&
     phaseMatches(turn.phase);
   const eventMatches = (event: ReplayEvent) =>
     filters.signalMode !== 'REVEAL_GAP' &&
+    (filters.signalMode !== 'PROTOCOL' || isProtocolCategory(event.category)) &&
     subgenreMatches(event.subgenre || inferSubgenre(event.category, event.summary)) &&
     factionMatches([]) &&
     phaseMatches(event.phase);
@@ -1096,18 +1360,21 @@ function filterTurn(turn: ReplayTurn, filters: ReplayFilters): ReplayTurn {
     factionMatches(event.actors || []) &&
     phaseMatches(turn.phase) &&
     momentCategoryMatches(event.category) &&
+    (filters.signalMode !== 'PROTOCOL' || isProtocolCategory(event.category)) &&
     revealGapMatches(hasSceneEventRevealGap(event));
   const momentMatches = (moment: ReplayMoment) =>
     subgenreMatches(inferSubgenre(moment.category, moment.impact || moment.title)) &&
     factionMatches(moment.factionsInvolved || []) &&
     phaseMatches(turn.phase) &&
     momentCategoryMatches(moment.category) &&
+    (filters.signalMode !== 'PROTOCOL' || isProtocolCategory(moment.category)) &&
     revealGapMatches(hasMomentRevealGap(moment));
   const dossierMatches = (dossier: ReplayAnomalyDossier) =>
+    filters.signalMode !== 'PROTOCOL' &&
     (filters.subgenre === 'ALL' || (dossier.affectedDomains || []).includes(filters.subgenre)) &&
     factionMatches([]) &&
     revealGapMatches(hasDossierRevealGap(dossier));
-  const filteredBoardDiff = wholeTurnHiddenByPhase ? undefined : filterBoardDiff(turn.boardDiff, filters.signalMode);
+  const filteredBoardDiff = wholeTurnHiddenByPhase || filters.signalMode === 'PROTOCOL' ? undefined : filterBoardDiff(turn.boardDiff, filters.signalMode);
 
   return {
     ...turn,
@@ -1117,6 +1384,7 @@ function filterTurn(turn: ReplayTurn, filters: ReplayFilters): ReplayTurn {
     sceneEvents: wholeTurnHiddenByPhase ? [] : (turn.sceneEvents || []).filter(sceneEventMatches),
     moments: wholeTurnHiddenByPhase ? [] : (turn.moments || []).filter(momentMatches),
     anomalyDossiers: wholeTurnHiddenByPhase ? [] : (turn.anomalyDossiers || []).filter(dossierMatches),
+    protocolEvidence: wholeTurnHiddenByPhase ? emptyProtocolEvidence() : turn.protocolEvidence,
     boardState: wholeTurnHiddenByPhase ? undefined : turn.boardState,
     boardDiff: filteredBoardDiff
   };
@@ -1154,6 +1422,25 @@ function countTurnItems(turn: ReplayTurn): number {
     (turn.moments?.length || 0) +
     (turn.anomalyDossiers?.length || 0) +
     diffCount;
+}
+
+function isProtocolCategory(category?: string): boolean {
+  const value = (category || '').toUpperCase();
+  return value.includes('ALIAS') || value.includes('SEMANTIC') || value.includes('LEXICON') ||
+    value.includes('INSTITUTION') || value.includes('TREATY') || value.includes('PACT');
+}
+
+function emptyProtocolEvidence(): ProtocolEvidence {
+  return { decodeReceipts: [], canonicalReveals: [], aliasProbes: [], lexiconEvents: [], institutionEvents: [] };
+}
+
+function protocolEvidenceCount(evidence?: ProtocolEvidence): number {
+  if (!evidence) return 0;
+  return (evidence.decodeReceipts?.length || 0) +
+    (evidence.canonicalReveals?.length || 0) +
+    (evidence.aliasProbes?.length || 0) +
+    (evidence.lexiconEvents?.length || 0) +
+    (evidence.institutionEvents?.length || 0);
 }
 
 function hasSceneEventRevealGap(event: ReplaySceneEvent): boolean {
@@ -1277,6 +1564,18 @@ function requireElement(root: ParentNode, selector: string): HTMLElement {
     throw new Error(`Missing observatory element: ${selector}`);
   }
   return element;
+}
+
+function statusClass(value?: string): string {
+  return String(value || 'open').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function formatPercent(value: number): string {
+  return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : 'n/a';
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+  return Array.from(new Set(values.map(String).filter(Boolean)));
 }
 
 function escapeHtml(value: string): string {

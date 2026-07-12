@@ -193,11 +193,11 @@ function initGame() {
 
 function init() {
   const params = new URLSearchParams(window.location.search);
-  if (params.has('observatory') || params.has('replay')) {
-    void initObservatory();
+  if (params.has('game') || params.has('legacy')) {
+    initGame();
     return;
   }
-  initGame();
+  void initObservatory();
 }
 
 if (document.readyState === 'loading') {

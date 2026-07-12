@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ASI CARTEL — 6th Generation Warfare</title>
+  <meta name="theme-color" content="#03090d" />
+  <meta name="description" content="They Sing: an evidence observatory for ASI diplomacy, collaboration, and institutional capture." />
+  <title>They Sing | Collaboration Evidence Observatory</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -12,7 +14,7 @@
       overflow: hidden;
       background: #020308;
       color: #eee;
-      font-family: system-ui, -apple-system, sans-serif;
+      font-family: 'IBM Plex Mono', monospace;
     }
     #app {
       width: 100vw;
@@ -22,8 +24,10 @@
     canvas { display: block; }
     .loading-screen {
       position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: #020308;
+      inset: 0;
+      background:
+        radial-gradient(circle at 50% 42%, rgba(39, 122, 135, 0.2), transparent 30%),
+        #020308;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -33,54 +37,56 @@
     }
     .loading-screen.hidden { opacity: 0; pointer-events: none; }
     .loading-title {
-      font-family: 'Orbitron', system-ui, sans-serif;
-      font-size: 28px;
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      font-size: 32px;
+      font-weight: 500;
       letter-spacing: 8px;
-      color: #00d4ff;
+      color: #f0e8d5;
       margin-bottom: 30px;
-      text-shadow: 0 0 30px rgba(0, 212, 255, 0.5);
+      text-shadow: 0 0 30px rgba(113, 220, 232, 0.42);
     }
     .loading-bar {
-      width: 200px;
+      width: 220px;
       height: 2px;
       background: rgba(255, 255, 255, 0.1);
-      border-radius: 1px;
       overflow: hidden;
     }
     .loading-progress {
       height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #00d4ff, #ff44aa);
+      width: 0;
+      background: linear-gradient(90deg, #71dce8, #e66a52);
       animation: loading 1.5s ease-in-out infinite;
     }
     @keyframes loading {
-      0% { width: 0%; margin-left: 0%; }
+      0% { width: 0; margin-left: 0; }
       50% { width: 60%; margin-left: 20%; }
-      100% { width: 0%; margin-left: 100%; }
+      100% { width: 0; margin-left: 100%; }
     }
     .loading-subtitle {
       margin-top: 20px;
-      font-size: 11px;
-      letter-spacing: 4px;
-      color: #667;
+      font-size: 10px;
+      letter-spacing: 3px;
+      color: #718287;
       text-transform: uppercase;
     }
   </style>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="loading-screen" id="loading">
-    <div class="loading-title">ASI CARTEL</div>
+    <div class="loading-title">THEY SING</div>
     <div class="loading-bar"><div class="loading-progress"></div></div>
-    <div class="loading-subtitle">Initializing Global Network</div>
+    <div class="loading-subtitle">Opening the Babel evidence archive</div>
   </div>
   <div id="app"></div>
   <script type="module" src="/src/main.ts"></script>
   <script>
     window.addEventListener('load', () => {
       setTimeout(() => {
-        document.getElementById('loading').classList.add('hidden');
-      }, 1500);
+        document.getElementById('loading')?.classList.add('hidden');
+      }, 900);
     });
   </script>
 </body>

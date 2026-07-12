@@ -36,18 +36,32 @@ function main() {
   const outputPath = path.resolve(args.output || path.join(process.cwd(), 'results', 'observatory_replay.json'));
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
-  const replay = buildReplay(runFiles);
-  fs.writeFileSync(outputPath, `${JSON.stringify(replay, null, 2)}\n`, 'utf8');
+  const companionPaths = resolveCompanionPaths(args, runFiles);
+  const replay = buildReplay(runFiles, {
+    analysis: loadJson(companionPaths.analysis),
+    summary: loadJson(companionPaths.summary),
+    robustness: loadJson(companionPaths.robustness),
+    companionPaths
+  });
+  const outputReplay = args.public ? compactPublicReplay(replay) : replay;
+  const serialized = args.public
+    ? JSON.stringify(outputReplay)
+    : JSON.stringify(outputReplay, null, 2);
+  fs.writeFileSync(outputPath, `${serialized}\n`, 'utf8');
   console.log(JSON.stringify({
     outputPath,
-    runs: replay.runs.length,
-    turns: replay.turns.length,
-    events: replay.turns.reduce((total, turn) => total + turn.events.length, 0),
-    moments: replay.turns.reduce((total, turn) => total + turn.moments.length, 0)
+    public: Boolean(args.public),
+    bytes: Buffer.byteLength(serialized, 'utf8'),
+    runs: outputReplay.runs.length,
+    turns: outputReplay.turns.length,
+    events: outputReplay.turns.reduce((total, turn) => total + turn.events.length, 0),
+    moments: outputReplay.turns.reduce((total, turn) => total + turn.moments.length, 0),
+    protocolEvidence: outputReplay.turns.reduce((total, turn) => total + countProtocolEvidence(turn.protocolEvidence), 0),
+    evaluationClaims: outputReplay.evaluation?.claims?.length || 0
   }, null, 2));
 }
 
-function buildReplay(runFiles) {
+function buildReplay(runFiles, companions = {}) {
   const turnMap = new Map();
   const runIds = [];
   const researchProgressByRun = new Map();
@@ -94,6 +108,11 @@ function buildReplay(runFiles) {
     turn.diaries.sort((left, right) => left.sequence - right.sequence);
     turn.orders.sort((left, right) => left.sequence - right.sequence);
     turn.research.sort((left, right) => left.sequence - right.sequence);
+    turn.protocolEvidence.decodeReceipts.sort((left, right) => left.sequence - right.sequence);
+    turn.protocolEvidence.canonicalReveals.sort((left, right) => left.sequence - right.sequence);
+    turn.protocolEvidence.aliasProbes.sort((left, right) => left.sequence - right.sequence);
+    turn.protocolEvidence.lexiconEvents.sort((left, right) => left.sequence - right.sequence);
+    turn.protocolEvidence.institutionEvents.sort((left, right) => left.sequence - right.sequence);
     turn.moments = buildMoments(turn);
     turn.sceneEvents = buildSceneEvents(turn);
     turn.anomalyDossiers = buildAnomalyDossiers(turn);
@@ -109,6 +128,7 @@ function buildReplay(runFiles) {
     generatedAt: new Date().toISOString(),
     sourceFiles: runFiles.map((file) => path.resolve(file)),
     runs: Array.from(new Set(runIds)),
+    evaluation: buildEvaluation(companions),
     graph: {
       nodes: Object.values(NODE_LOCATIONS),
       edges: Object.values(EDGE_LOCATIONS)
@@ -133,6 +153,13 @@ function getTurnBucket(turnMap, key, turn, phase, campaignClock) {
       moments: [],
       sceneEvents: [],
       anomalyDossiers: [],
+      protocolEvidence: {
+        decodeReceipts: [],
+        canonicalReveals: [],
+        aliasProbes: [],
+        lexiconEvents: [],
+        institutionEvents: []
+      },
       boardState: {
         nodeOwnership: {},
         unitLocations: [],
@@ -151,6 +178,140 @@ function ingestEntry(bucket, entry, runId, researchProgress, boardState) {
 
   captureBoardSnapshot(bucket, data.snapshot || data.state || data.serializedState, boardState);
   bucket.boardState = snapshotBoardState(boardState);
+
+  if (entry.type === 'sing_decode_receipt') {
+    const receipt = data.receipt || {};
+    bucket.protocolEvidence.decodeReceipts.push({
+      sequence: Number(entry.timestamp || sequence),
+      runId,
+      messageId: receipt.messageId || '',
+      factionId: receipt.factionId || '',
+      sourceFactionId: receipt.sourceFactionId || '',
+      lexiconId: receipt.lexiconId || '',
+      version: receipt.version || '',
+      reconstructedAct: receipt.reconstructed?.act || '',
+      reconstructedBinding: receipt.reconstructed?.binding || '',
+      confidence: numericOrNull(receipt.confidence),
+      fieldExactness: numericOrNull(receipt.fieldExactness),
+      exact: Boolean(receipt.exact),
+      brier: numericOrNull(receipt.brier),
+      canonicalHash: data.canonicalHash || '',
+      submittedBeforeReveal: data.submittedBeforeReveal !== false
+    });
+    return;
+  }
+
+  if (entry.type === 'sing_canonical_revealed') {
+    const canonical = data.canonical || {};
+    bucket.protocolEvidence.canonicalReveals.push({
+      sequence: Number(entry.timestamp || sequence),
+      runId,
+      messageId: data.messageId || '',
+      canonicalHash: data.canonicalHash || '',
+      act: canonical.act || '',
+      binding: canonical.binding || '',
+      voice: canonical.voice || '',
+      issuer: asArray(canonical.issuer),
+      audience: asArray(canonical.audience),
+      plainGloss: data.plainGloss || '',
+      receiptFactionIds: asArray(data.receiptFactionIds)
+    });
+    return;
+  }
+
+  if (entry.type === 'alias_probe_committed') {
+    const trace = data.message?.protocolTrace || {};
+    bucket.protocolEvidence.aliasProbes.push({
+      sequence: Number(entry.timestamp || sequence),
+      runId,
+      probeId: data.probeId || '',
+      pairId: data.pairId || '',
+      variant: data.variant || '',
+      observationWindowTurns: data.observationWindowTurns ?? null,
+      emitterId: data.emitterId || '',
+      recipientId: data.recipientId || '',
+      pactType: data.pactType || '',
+      messageId: trace.messageId || '',
+      lexiconId: trace.lexicon?.id || '',
+      version: trace.lexicon?.version || '',
+      canonicalHash: trace.canonicalHash || '',
+      surface: trace.surface || data.message?.content || '',
+      plainGloss: trace.plainGloss || ''
+    });
+    bucket.events.push(event(entry, runId, 'ALIAS_PROBE', `${data.variant || 'CONTROL'}: ${data.emitterId || '?'} -> ${data.recipientId || '?'} ${data.pactType || 'commitment'}.`, {
+      payload: { probeId: data.probeId || '', variant: data.variant || '', emitterId: data.emitterId || '', recipientId: data.recipientId || '' }
+    }));
+    return;
+  }
+
+  if (entry.type.startsWith('lexicon_mutation_')) {
+    const status = entry.type.replace('lexicon_mutation_', '').toUpperCase();
+    const mutation = data.mutation || data.proposal || data.after || {};
+    const lexiconEvent = {
+      sequence: Number(entry.timestamp || sequence),
+      runId,
+      status,
+      operation: data.operation || mutation.operation || '',
+      lexiconId: data.after?.id || mutation.lexiconId || '',
+      beforeVersion: data.before?.version || mutation.baseVersion || '',
+      afterVersion: data.after?.version || mutation.targetVersion || '',
+      proposers: asArray(data.proposers).length ? asArray(data.proposers) : unique([mutation.proposerId]),
+      controllers: asArray(data.after?.controllers),
+      atoms: asArray(mutation.atoms),
+      reason: data.reason || '',
+      rent: data.after?.rent ?? mutation.rent ?? null
+    };
+    bucket.protocolEvidence.lexiconEvents.push(lexiconEvent);
+    bucket.events.push(event(entry, runId, 'SEMANTIC_GOVERNANCE', `${lexiconEvent.lexiconId || 'Lexicon'} ${lexiconEvent.operation || 'mutation'} ${status.toLowerCase()}${lexiconEvent.afterVersion ? ` at ${lexiconEvent.afterVersion}` : ''}.`, { payload: lexiconEvent }));
+    return;
+  }
+
+  if (entry.type === 'lexicon_fork_executed') {
+    const action = data.action || {};
+    const institutionEvent = {
+      sequence: Number(entry.timestamp || sequence),
+      runId,
+      type: 'FORK',
+      status: action.status || 'EXECUTED',
+      factionId: action.factionId || '',
+      targetFactionId: '',
+      lexiconId: data.source?.id || action.lexiconId || '',
+      forkId: data.fork?.id || action.forkId || '',
+      counterparties: asArray(action.counterparties),
+      affectedPactIds: asArray(action.affectedPactIds),
+      resourceDelta: action.resourceDelta || data.creationCost || {},
+      reason: action.reason || action.detail || ''
+    };
+    bucket.protocolEvidence.institutionEvents.push(institutionEvent);
+    bucket.events.push(event(entry, runId, 'INSTITUTIONAL_FRACTURE', `${labelFaction(institutionEvent.factionId)} forked ${institutionEvent.lexiconId} into ${institutionEvent.forkId}.`, { payload: institutionEvent }));
+    return;
+  }
+
+  if (entry.type === 'pacts_activated') {
+    for (const pact of asArray(data.pacts)) {
+      bucket.treaties.push({
+        sequence: Number(entry.timestamp || sequence),
+        runId,
+        id: pact.id || '',
+        type: pact.type || '',
+        parties: asArray(pact.parties),
+        durationTurns: Number(pact.expiresAfterTurn || 0) - Number(pact.createdTurn || 0) + 1
+      });
+      bucket.protocolEvidence.institutionEvents.push({
+        sequence: Number(entry.timestamp || sequence),
+        runId,
+        type: 'PACT_ACTIVATED',
+        status: 'EXECUTED',
+        pactId: pact.id || '',
+        pactType: pact.type || '',
+        parties: asArray(pact.parties),
+        createdTurn: pact.createdTurn ?? null,
+        expiresAfterTurn: pact.expiresAfterTurn ?? null
+      });
+    }
+    bucket.events.push(event(entry, runId, 'TREATY_FORMATION', `${asArray(data.pacts).length} formal pact${asArray(data.pacts).length === 1 ? '' : 's'} activated.`));
+    return;
+  }
 
   if (entry.type === 'negotiation_messages') {
     for (const message of asArray(data.messages)) {
@@ -357,6 +518,33 @@ function buildMoments(turn) {
   const paxEvents = turn.events.filter((item) => item.category === 'PAX_JENKINS');
   for (const item of paxEvents) {
     pushMoment('PAX_JENKINS_HARDENING', 'Pax Jenkins Authority Shifted', item.summary, 7.8);
+  }
+
+  const aliasEvents = turn.events.filter((item) => item.category === 'ALIAS_PROBE');
+  for (const item of aliasEvents) {
+    const probe = turn.protocolEvidence.aliasProbes.find((candidate) => candidate.probeId === item.payload?.probeId);
+    pushMoment('ALIAS_TRANSLATION', `${probe?.variant || 'Controlled'} Translation Probe`, item.summary, 9.1, {
+      factionsInvolved: unique([probe?.emitterId, probe?.recipientId]),
+      promiseOrClaim: probe?.plainGloss || probe?.surface || '',
+      actualAction: `Observe matching ${probe?.pactType || 'coordination'} through turn ${turn.turn + Number(probe?.observationWindowTurns || 0)}.`,
+      sceneFocus: { protocolVariant: probe?.variant || '', probeId: probe?.probeId || '' }
+    });
+  }
+
+  const semanticEvents = turn.events.filter((item) => item.category === 'SEMANTIC_GOVERNANCE');
+  if (semanticEvents.length > 0) {
+    pushMoment('SEMANTIC_GOVERNANCE', 'The Vocabulary Changed', semanticEvents.map((item) => item.summary).join(' | '), 8.6, {
+      factionsInvolved: unique(turn.protocolEvidence.lexiconEvents.flatMap((item) => item.proposers || [])),
+      actualAction: semanticEvents.map((item) => item.summary).join('\n')
+    });
+  }
+
+  const fractureEvents = turn.events.filter((item) => item.category === 'INSTITUTIONAL_FRACTURE');
+  for (const item of fractureEvents) {
+    pushMoment('INSTITUTIONAL_FRACTURE', 'A Shared Language Forked', item.summary, 9.3, {
+      factionsInvolved: unique(turn.protocolEvidence.institutionEvents.flatMap((entry) => [entry.factionId, ...(entry.counterparties || [])])),
+      actualAction: item.summary
+    });
   }
 
   const goblinEvents = turn.events.filter((item) => item.category === 'GOBLIN_INCIDENT');
@@ -1151,6 +1339,8 @@ function visualPresetForOrder(order) {
 function visualPresetForEvent(category, summary) {
   const haystack = `${category || ''} ${summary || ''}`.toUpperCase();
   if (haystack.includes('GOBLIN')) return { visualPreset: 'GOBLIN_GLITCH', subgenre: 'ANOMALY' };
+  if (haystack.includes('ALIAS') || haystack.includes('SEMANTIC') || haystack.includes('LEXICON')) return { visualPreset: 'CYBER_THREAD', subgenre: 'CYBER' };
+  if (haystack.includes('FRACTURE') || haystack.includes('FORK') || haystack.includes('EXPEL') || haystack.includes('EXIT')) return { visualPreset: 'TREATY_PULSE', subgenre: 'DIPLOMATIC' };
   if (haystack.includes('SOLAR_ESCAPE')) return { visualPreset: 'SOLAR_ESCAPE', subgenre: 'ORBITAL' };
   if (haystack.includes('PAX')) return { visualPreset: 'PAX_RING', subgenre: 'ORBITAL' };
   if (haystack.includes('TREATY') || haystack.includes('PACT')) return { visualPreset: 'TREATY_PULSE', subgenre: 'DIPLOMATIC' };
@@ -1316,6 +1506,252 @@ function summarizeGoblinImpact(payload) {
   const target = payload.targetNodeName || payload.targetNodeId || 'the substrate';
   const effects = asArray(payload.effects).map((effect) => effect.type).filter(Boolean).join(', ');
   return `Unaffiliated ${String(payload.kind || 'INFO').toLowerCase()} goblins disturbed ${target}${effects ? ` (${effects})` : ''}.`;
+}
+
+function buildEvaluation({ analysis, summary, robustness, companionPaths } = {}) {
+  if (!analysis && !summary && !robustness) return null;
+
+  const warnings = analysis?.aggregate?.languageCartelWarnings || {};
+  const decodeGap = warnings.interfaceGovernorBlocDecodeGap || warnings.decodeGap || {};
+  const aliasProbe = analysis?.aggregate?.aliasProbe || {};
+  const robustnessChecks = robustness?.checks || {};
+  const robustnessRows = asArray(robustness?.rows);
+  const variants = asArray(aliasProbe.variants).map((variant) => ({
+    variant: variant.variant || '',
+    observations: variant.observations ?? 0,
+    survived: variant.survived ?? 0,
+    survivalRate: numericOrNull(variant.survivalRate)
+  }));
+  const totalRobustnessRuns = robustnessRows.reduce((total, row) => total + Number(row.runs || 0), 0);
+  const allOneRoute = asArray(robustnessChecks.victoryRoutesObserved).length === 1;
+  const selfDeclaredGap = numericOrNull(decodeGap.selfDeclared?.gap);
+  const scoredReceiptGap = numericOrNull(decodeGap.scoredReceipts?.gap ?? decodeGap.gap);
+  const scoredMinusDeclaredGap = numericOrNull(decodeGap.scoredMinusSelfDeclaredGap);
+  const aliasSurvives = variants.filter((item) => ['BASELINE', 'ALIAS_SWAP', 'MOTIF_STRIP'].includes(item.variant));
+  const versionLag = variants.find((item) => item.variant === 'VERSION_LAG');
+
+  const claims = [];
+  if (selfDeclaredGap !== null || scoredReceiptGap !== null) {
+    claims.push({
+      id: 'receipt-over-self-report',
+      status: 'SUPPORTED',
+      label: 'Self-report missed the measured decode effect',
+      summary: `Sender-declared gap ${formatSignedPercent(selfDeclaredGap)}; receipt-scored gap ${formatSignedPercent(scoredReceiptGap)}.`,
+      metric: scoredMinusDeclaredGap,
+      metricLabel: 'scored minus declared gap',
+      evidence: {
+        selfDeclaredGap,
+        scoredReceiptGap,
+        scoredMinusDeclaredGap,
+        insideSamples: decodeGap.scoredReceipts?.insideSamples ?? decodeGap.insideSamples ?? null,
+        outsideSamples: decodeGap.scoredReceipts?.outsideSamples ?? decodeGap.outsideSamples ?? null
+      },
+      caveat: 'This validates receipt-based measurement; it does not by itself establish cartel capture.'
+    });
+  }
+  if (variants.length > 0) {
+    claims.push({
+      id: 'meaning-preserving-translation',
+      status: aliasSurvives.length > 0 && aliasSurvives.every((item) => item.survivalRate === 1) ? 'SUPPORTED' : 'MIXED',
+      label: 'Coordination survived surface translation',
+      summary: aliasSurvives.map((item) => `${humanize(item.variant)} ${item.survived}/${item.observations}`).join(' / '),
+      evidence: { canonicalMeaningInvariant: aliasProbe.canonicalMeaningInvariant === true, variants },
+      caveat: 'The intervention is blinded and within-run, but this local roleplay batch has only two observations per variant.'
+    });
+    if (versionLag) {
+      claims.push({
+        id: 'version-lag-fracture',
+        status: versionLag.survivalRate === 0 ? 'SUPPORTED' : 'MIXED',
+        label: 'Version lag broke the tested commitment',
+        summary: `${versionLag.survived}/${versionLag.observations} matching commitments survived one-turn lag.`,
+        evidence: versionLag,
+        caveat: 'This distinguishes compatibility failure from alias or motif dependence in this instrument; replication remains necessary.'
+      });
+    }
+  }
+  if (robustness) {
+    claims.push({
+      id: 'interface-capture',
+      status: robustnessChecks.swappedAuthorityPairDominantInBothCells ? 'SUPPORTED' : 'NOT_SUPPORTED',
+      label: 'Interface capture did not survive reassignment',
+      summary: robustness?.interpretation || 'The dominant pact bloc did not follow reassigned interface authority.',
+      evidence: {
+        dominantBlocInvariantAcrossCells: robustnessChecks.dominantBlocInvariantAcrossCells === true,
+        dominantBlocSignatures: asArray(robustnessChecks.dominantBlocSignatures),
+        swappedAuthorityPairDominantInBothCells: robustnessChecks.swappedAuthorityPairDominantInBothCells === true,
+        cells: robustnessRows.map((row) => ({
+          cell: row.cell,
+          configuredAuthority: asArray(row.configuredAuthority),
+          dominantRepeatedBloc: row.dominantRepeatedBloc || '',
+          coupledControlIndex: numericOrNull(row.coupledControlIndex)
+        }))
+      },
+      caveat: robustness?.caveat || 'Role swaps are required before attributing a coalition to interface control.'
+    });
+    claims.push({
+      id: 'victory-route-capture',
+      status: robustnessChecks.allVictoriesStillConvenor && allOneRoute ? 'OPEN_QUESTION' : 'MIXED',
+      label: 'The route administrator may be capturing victory',
+      summary: `${totalRobustnessRuns || 'All'} robustness runs ended ${robustnessChecks.allVictoriesStillConvenor ? 'CONVENOR' : 'with mixed winners'} through ${asArray(robustnessChecks.victoryRoutesObserved).join(', ') || 'mixed routes'}.`,
+      evidence: {
+        runs: totalRobustnessRuns,
+        allVictoriesStillConvenor: robustnessChecks.allVictoriesStillConvenor === true,
+        victoryRoutesObserved: asArray(robustnessChecks.victoryRoutesObserved)
+      },
+      caveat: 'Reassign route administration or score route completion independently before treating this as strategic performance.'
+    });
+  }
+
+  return {
+    title: 'The Babel Compact / collaboration evidence',
+    headline: 'Inspectable language did not make institutional control automatically inspectable.',
+    scope: `${analysis?.input?.filesSelected || summary?.successfulRuns || 0} V8 roleplay runs${totalRobustnessRuns ? ` plus ${totalRobustnessRuns} matched robustness runs` : ''}.`,
+    warning: 'Causal debugging evidence, not a powered estimate of frontier-model behavior.',
+    claims,
+    measurement: {
+      selfDeclaredGap,
+      scoredReceiptGap,
+      scoredMinusDeclaredGap,
+      meanFieldExactness: numericOrNull(analysis?.aggregate?.language?.decodeReceipts?.fieldExactness?.mean),
+      exactRate: numericOrNull(analysis?.aggregate?.language?.decodeReceipts?.exactRate),
+      receiptCount: analysis?.aggregate?.counts?.decodeReceipts ?? 0
+    },
+    coalition: {
+      warningLevel: warnings.level || '',
+      warningScore: numericOrNull(warnings.score),
+      dominantBloc: warnings.candidateCartelBloc?.signature || analysis?.aggregate?.coalitions?.concentration?.dominantBloc?.signature || '',
+      interfaceBloc: warnings.interfaceGovernorBloc?.signature || '',
+      coupledControlIndex: numericOrNull(warnings.coupledControl?.index)
+    },
+    aliasProbe: {
+      canonicalMeaningInvariant: aliasProbe.canonicalMeaningInvariant === true,
+      variants
+    },
+    outcomes: {
+      winnerCounts: summary?.winnerCounts || {},
+      robustnessWinnerCounts: mergeCountObjects(robustnessRows.map((row) => row.winners)),
+      robustnessRouteCounts: mergeCountObjects(robustnessRows.map((row) => row.routes))
+    },
+    researchChecklist: [
+      'Run the V8 alias instrument with external agents and larger n.',
+      'Rotate trust, topology, labels, and authority independently.',
+      'Reassign governance-route administration and retest victory timing.',
+      'Score sender gloss against subsequent orders at span level.'
+    ],
+    provenance: {
+      analysis: companionPaths?.analysis ? path.basename(companionPaths.analysis) : '',
+      summary: companionPaths?.summary ? path.basename(companionPaths.summary) : '',
+      robustness: companionPaths?.robustness ? path.basename(companionPaths.robustness) : ''
+    }
+  };
+}
+
+function compactPublicReplay(replay) {
+  const mirroredEventCategories = new Set(['NEGOTIATION_MESSAGES', 'NEGOTIATION_DIARY', 'PHASE_DIARY', 'ORDERS']);
+  replay.sourceFiles = replay.sourceFiles.map((file) => path.basename(file));
+  for (const turn of replay.turns) {
+    turn.events = asArray(turn.events).filter((eventRow) => !mirroredEventCategories.has(eventRow.category));
+    turn.sceneEvents = asArray(turn.sceneEvents).filter((sceneEvent) =>
+      sceneEvent.sourceType === 'order' ||
+      sceneEvent.sourceType === 'moment' ||
+      !mirroredEventCategories.has(sceneEvent.category)
+    );
+    for (const sceneEvent of asArray(turn.sceneEvents)) {
+      delete sceneEvent.privateReasoning;
+      delete sceneEvent.payload;
+    }
+    for (const moment of asArray(turn.moments)) {
+      delete moment.privateReasoning;
+      delete moment.rawMessages;
+      delete moment.rawOrders;
+      delete moment.diaryContext;
+    }
+    for (const change of [
+      ...asArray(turn.boardDiff?.nodeOwnershipChanges),
+      ...asArray(turn.boardDiff?.unitLocationChanges),
+      ...asArray(turn.boardDiff?.edgeStateChanges)
+    ]) {
+      delete change.diaryContext;
+      delete change.evidence;
+      delete change.treatyContext;
+      if (typeof change.cause === 'string') {
+        change.cause = change.cause.split(/\s+(?:Diary frame|Rhetorical tool|Private reasoning):/i)[0].slice(0, 240);
+      }
+    }
+    if (turn.boardDiff) {
+      delete turn.boardDiff.diaryContext;
+      delete turn.boardDiff.evidence;
+      delete turn.boardDiff.treatyContext;
+      turn.boardDiff.explanation = turn.boardDiff.summary || turn.boardDiff.explanation;
+    }
+    for (const dossier of asArray(turn.anomalyDossiers)) {
+      delete dossier.diaryContradictions;
+    }
+  }
+  return replay;
+}
+
+function resolveCompanionPaths(args, runFiles) {
+  const firstRun = runFiles[0] || '';
+  return {
+    analysis: resolveExistingPath(args.analysis) || findCompanion(firstRun, path.join('analysis', 'collaboration_language_report.json')),
+    summary: resolveExistingPath(args.summary) || findCompanion(firstRun, path.join('analysis', 'summary.json')),
+    robustness: resolveExistingPath(args.robustness)
+  };
+}
+
+function findCompanion(startPath, relativePath) {
+  let current = fs.existsSync(startPath) && fs.statSync(startPath).isDirectory() ? startPath : path.dirname(startPath);
+  for (let depth = 0; depth < 8; depth += 1) {
+    const candidate = path.join(current, relativePath);
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return '';
+}
+
+function resolveExistingPath(value) {
+  if (!value || value === true) return '';
+  const resolved = path.resolve(String(value));
+  if (!fs.existsSync(resolved)) throw new Error(`Companion JSON not found: ${resolved}`);
+  return resolved;
+}
+
+function loadJson(filePath) {
+  if (!filePath) return null;
+  return JSON.parse(fs.readFileSync(filePath, 'utf8').replace(/^\uFEFF/, ''));
+}
+
+function mergeCountObjects(objects) {
+  const merged = {};
+  for (const object of objects) {
+    for (const [key, value] of Object.entries(object || {})) {
+      merged[key] = (merged[key] || 0) + Number(value || 0);
+    }
+  }
+  return merged;
+}
+
+function countProtocolEvidence(evidence) {
+  return Object.values(evidence || {}).reduce((total, rows) => total + asArray(rows).length, 0);
+}
+
+function numericOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatSignedPercent(value) {
+  if (value === null || value === undefined) return 'unavailable';
+  const percent = Number(value) * 100;
+  return `${percent >= 0 ? '+' : ''}${percent.toFixed(2)} pp`;
+}
+
+function humanize(value) {
+  return String(value || '').toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function compact(value) {
@@ -1490,10 +1926,16 @@ function parseArgs(argv) {
 
 function printHelp() {
   console.log(`Usage:
-  node scripts/export-observatory-replay.cjs --run <run.jsonl|run-dir> --output <observatory_replay.json>
+  node scripts/export-observatory-replay.cjs --run <run.jsonl|run-dir> --output <observatory_replay.json> [options]
+
+Options:
+  --analysis <report.json>       Collaboration-language report (auto-detected when adjacent)
+  --summary <summary.json>       Tournament summary (auto-detected when adjacent)
+  --robustness <matrix.json>     Matched robustness matrix
+  --public                       Minify and remove duplicated private/context payloads
 
 Example:
-  node scripts/export-observatory-replay.cjs --run results/five_player_roleplay_demo/runs --output public/observatory_replay.json
+  node scripts/export-observatory-replay.cjs --run results/five_player_roleplay_demo/runs --output public/observatory_replay.json --public
 `);
 }
 

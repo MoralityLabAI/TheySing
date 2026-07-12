@@ -118,7 +118,7 @@ Old route-distribution claims made before the strategic-victory floor changed sh
 
 ## Next Experiments
 
-1. Run the V7 alias instrument with actual external agents. The local bridge establishes instrumentation behavior only.
+1. Run the V8 alias instrument with actual external agents. The local bridge establishes instrumentation behavior only.
 2. Add a matched trust/topology permutation. Rotate faction trust rows, starting assets, and labels independently of authority to locate the persistent `BROKER+CANTOR` prior.
 3. Make admission, translation, and fork legitimacy contestable during play rather than assigned at scenario load. Elections, auctions, delegated translators, and hostile forks should produce endogenous interface control.
 4. Score span-level claimed intent against subsequent pacts and orders. Sender gloss remains a claim until behavior supplies the receipt.
