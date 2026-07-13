@@ -44,6 +44,7 @@ async function main() {
   await runTest('evidence tabs implement roving keyboard navigation', () => validateEvidenceTabKeyboardContract());
   await runTest('evidence inspection owns focus and pauses autoplay', () => validateInspectionPlaybackContract());
   await runTest('evidence dialog transfers and restores keyboard focus', () => validateEvidenceDialogFocusContract());
+  await runTest('installed Chrome visual QA bridge remains reproducible', () => validateVisualCaptureBridgeContract());
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
@@ -944,6 +945,27 @@ function validateEvidenceDialogFocusContract() {
   assert(keyHandler.includes("event.key === 'Escape'"), 'Escape does not dismiss Selected Evidence');
   assert(keyHandler.indexOf("event.key === 'Escape'") < keyHandler.indexOf('isInteractiveTarget(event.target)'), 'Interactive controls swallow Escape before dialog dismissal');
   return 'labelled non-modal dialog / focus Close / Escape / restore connected trigger';
+}
+
+function validateVisualCaptureBridgeContract() {
+  const scriptPath = path.join(ROOT, 'scripts', 'capture-observatory-ux.cjs');
+  const script = fs.readFileSync(scriptPath, 'utf8');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.css'), 'utf8');
+  execFileSync(process.execPath, ['--check', scriptPath], { cwd: ROOT, stdio: 'pipe' });
+  assert(packageJson.scripts?.['playtest:capture-ux'] === 'node scripts/capture-observatory-ux.cjs', 'Visual QA bridge has no npm command');
+  assert(script.includes("schema: 'theysing.uxVisualCapture.v1'"), 'Visual QA bridge does not emit a versioned manifest');
+  assert(script.includes("client.send('Page.captureScreenshot'"), 'Visual QA bridge does not capture through Chrome DevTools');
+  assert(script.includes("client.send('Emulation.setDeviceMetricsOverride'"), 'Visual QA bridge does not emulate viewport dimensions');
+  assert(script.includes("client.send('Page.reload'"), 'Visual QA bridge does not initialize the app under each device viewport');
+  assert(script.includes('Three.js canvas') && script.includes('does not match viewport'), 'Visual QA bridge does not reject stale canvas dimensions');
+  assert(script.includes("client.send('Browser.close'"), 'Visual QA bridge does not close its isolated browser session');
+  assert(script.includes("client.on('Runtime.exceptionThrown'"), 'Visual QA bridge does not capture runtime exceptions');
+  assert(script.includes("'desktop-evidence-protocol'") && script.includes("'desktop-diary'") && script.includes("'mobile-selected-evidence'"), 'Visual QA bridge omits core replay presentation states');
+  assert(script.includes('protocolIndex') && script.includes('diaryIndex') && script.includes('densestIndex'), 'Visual QA bridge does not choose content-specific stress phases');
+  assert(script.includes('afterDismiss') && script.includes('visualQaTrigger'), 'Visual QA bridge does not receipt focus restoration');
+  assert(css.includes('.obs-shell.obs-view-globe .obs-bottom {\n    grid-template-columns: 1fr;'), 'Mobile Globe footer can regress to the clipped desktop grid');
+  return 'installed Chrome / full+quick matrices / viewport reload / pixels+layout+runtime+focus receipts';
 }
 
 function validateLegacyGameUxContract() {

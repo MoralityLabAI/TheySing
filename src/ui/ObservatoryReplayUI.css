@@ -486,6 +486,7 @@
 }
 
 .obs-shell .obs-panel {
+  bottom: 184px;
   border-color: rgba(152, 226, 228, 0.2);
   background:
     linear-gradient(150deg, rgba(11, 27, 32, 0.84), rgba(3, 8, 12, 0.72)),
@@ -692,7 +693,7 @@
 
 .obs-evaluation {
   position: absolute;
-  top: 104px;
+  top: 120px;
   left: calc(min(360px, 29vw) + 48px);
   right: calc(min(360px, 29vw) + 48px);
   display: grid;
@@ -783,10 +784,10 @@
 
 .obs-shell .obs-bottom {
   display: grid;
-  grid-template-columns: auto minmax(260px, 1fr) minmax(190px, 23vw);
+  grid-template-columns: auto minmax(260px, 1fr);
   grid-template-areas:
-    "timeline timeline timeline"
-    "controls moves status";
+    "timeline timeline"
+    "controls moves";
   gap: 7px 12px;
 }
 
@@ -818,9 +819,18 @@
 .obs-shell .obs-controls { grid-area: controls; }
 .obs-shell .obs-moves { grid-area: moves; }
 .obs-shell .obs-status { grid-area: status; }
+.obs-shell .obs-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .obs-mobile-panel { display: none; }
 
 .obs-shell .obs-detail {
+  bottom: 184px;
   border-color: rgba(240, 197, 116, 0.38);
   background: rgba(5, 14, 17, 0.82);
 }
@@ -965,8 +975,14 @@
   .obs-shell .obs-view-switch button {
     min-width: 0;
     flex: 1;
+    min-height: 32px;
     padding: 6px 5px;
     font-size: 8px;
+  }
+
+  .obs-shell .obs-drawer-heading button,
+  .obs-shell .obs-detail-heading button {
+    min-height: 30px;
   }
 
   .obs-shell .obs-view-switch [data-view-mode="all"] {
@@ -1048,7 +1064,7 @@
     top: auto;
     left: 9px;
     right: 9px;
-    bottom: 166px;
+    bottom: 174px;
     width: auto;
     height: 35vh;
     padding: 12px;
@@ -1080,7 +1096,7 @@
     top: auto;
     left: 9px;
     right: 9px;
-    bottom: 166px;
+    bottom: 174px;
     width: auto;
     height: 35vh;
     max-height: none;
@@ -1100,6 +1116,14 @@
     gap: 5px;
   }
 
+  .obs-shell.obs-view-globe .obs-bottom {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "timeline"
+      "moves"
+      "controls";
+  }
+
   .obs-timeline {
     grid-template-columns: 1fr;
     gap: 4px;
@@ -1107,6 +1131,7 @@
   }
 
   .obs-timeline span { font-size: 8px; }
+  .obs-timeline input { min-height: 24px; }
 
   .obs-shell .obs-moves {
     min-height: 54px;
@@ -1133,7 +1158,7 @@
   .obs-shell .obs-controls [data-role="reset-camera"] {
     display: block;
     flex: 1 0 auto;
-    height: 30px;
+    height: 36px;
     padding: 5px 8px;
     font-size: 9px;
   }

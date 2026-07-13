@@ -12,14 +12,14 @@
 | Severity | Finding | Resolution | Evidence |
 | --- | --- | --- | --- |
 | P1 | The loading screen disappeared on a timer before the 5.8 MB replay was fetched and parsed. | Readiness now follows `theysing:ready`; streamed fetch progress updates the loading state. | Production HTML contract, TypeScript build, live replay fetch. |
-| P1 | Tablet/mobile evidence cards wrote details into a panel hidden by responsive CSS. | Evidence opens a dismissible responsive detail sheet at both breakpoints. | CSS/DOM UX contract and build. Headed visual confirmation remains pending. |
+| P1 | Tablet/mobile evidence cards wrote details into a panel hidden by responsive CSS. | Evidence opens a dismissible responsive detail sheet at both breakpoints. | CSS/DOM UX contract, build, and Chrome mobile detail capture. |
 | P2 | Space or arrow keys on a focused button could trigger both the button and a global replay shortcut. | Global shortcuts now ignore buttons, links, labels, inputs, selects, text areas, content-editable elements, and button roles. | Static UX regression contract and TypeScript build. |
 | P2 | The mobile panel button described the current panel rather than the action. | Labels now read `Show diary` and `Show evidence`, with `aria-pressed` state. | Static UX regression contract. |
 | P2 | Stateful controls and custom visual buttons lacked consistent keyboard feedback. | Added `aria-pressed`, range value text, live status/evidence regions, and visible `:focus-visible` treatment. | Static UX regression contract and build. |
 | P1 | The legacy `?game` route placed six fixed-width panels around the map with no responsive breakpoint, causing unavoidable overlap below desktop width. | Added a mobile command deck with single-sheet `STATUS`, `SELECT`, `ORDERS`, and `LOG` views; phase and observer context remain visible. | Static legacy UX contract and TypeScript build. Headed visual confirmation remains pending. |
 | P2 | Legacy global shortcuts could advance the phase behind focused controls, the tutorial, or a decision modal. | Shortcuts now ignore interactive descendants and halt while a blocking overlay is open. | Static legacy UX contract and TypeScript build. |
 | P2 | Legacy dialogs, event narration, panel state, focus, and motion preferences were not exposed consistently. | Added modal/live-region semantics, focus transfer/restore, pressed panel state, visible focus, and reduced-motion handling. | Static legacy UX contract and TypeScript build. |
-| P1 | The observatory treated the 3D globe as background behind two permanent side panels, an aggregate claim rail, a detail placeholder, and a three-column footer. | The observatory now opens in `Globe` mode with a plain-language current beat; `Evidence`, `Diary`, and desktop `All` are explicit modes. | Static globe-first UX contract and TypeScript build. Headed visual confirmation remains pending. |
+| P1 | The observatory treated the 3D globe as background behind two permanent side panels, an aggregate claim rail, a detail placeholder, and a three-column footer. | The observatory now opens in `Globe` mode with a plain-language current beat; `Evidence`, `Diary`, and desktop `All` are explicit modes. | Static globe-first contract, TypeScript build, and desktop/mobile Chrome captures. |
 | P1 | Evidence mixed filters, protocol traces, research, events, board changes, and the anomaly archive into one continuous technical scroll. | The evidence drawer now uses `Now`, `Protocol`, `Research`, and `Archive` tabs with proper tab semantics. | Static progressive-disclosure contract and TypeScript build. |
 | P2 | Mobile offered one ambiguous evidence/diary toggle and had no way to reclaim the full globe. | Mobile uses the same explicit `Globe`, `Evidence`, and `Diary` modes; reset camera remains available beside replay controls. | Static responsive UX contract. |
 | P1 | The globe's colors, persistent beacons, effects, and logged locations were not explained or connected to the current-beat prose. | Current beats now show colored actors, signal progress, and location labels; selecting one focuses its logged node or edge. A compact key identifies all seven ASIs and four scene-signal forms: beacons, arcs, rings, and clusters. | Static globe-comprehension contract and TypeScript build. Headed visual confirmation remains pending. |
@@ -35,19 +35,23 @@
 | P2 | Evidence used ARIA tab roles without implementing the associated keyboard pattern or panel labels. | The four-tab set now has one roving tab stop, Left/Right/Home/End automatic activation, stable tab IDs, and matching `aria-labelledby` panels. | Dedicated keyboard/relationship regression and TypeScript build. |
 | P1 | Autoplay could replace focused controls, close details, and advance away while a user inspected evidence; exact node/edge shots were then overwritten by generic subgenre cameras. | Manual step/jump/scrub, evidence/diary views, tabs, filters, archive search, World/Board expansion, and detail opening now pause autoplay; scheduler steps bypass the pause, and location-aware evidence preserves its camera target. | Dedicated inspection/focus lifecycle regression and TypeScript build. |
 | P2 | Selected Evidence opened visually without receiving focus, interactive controls swallowed Escape, and closing the sheet did not return keyboard users to their origin. | The sheet is now a labelled non-modal dialog; opening focuses Close, Escape dismisses before the interactive-control guard, and dismissal restores a still-connected origin control. | Dedicated dialog focus-lifecycle regression and TypeScript build. Headed keyboard confirmation remains pending. |
+| P1 | The unavailable app browser left Three.js composition, responsive panels, and focus presentation uninspected. | Added an installed-Chrome CDP bridge with isolated profiles, full and quick screenshot matrices, content-specific replay stress phases, layout/runtime/focus receipts, and canvas-size enforcement. | `scripts/capture-observatory-ux.cjs`, dedicated regression contract, and visual manifests under `D:\they-sing-results\ux-visual-captures`. |
+| P1 | Desktop drawers and Selected Evidence extended 28px behind the footer, while a low-value status block displaced move cards and the evaluation rail clipped the brand deck. | Drawers/details now stop above the footer, status remains an accessible live region without occupying the visual grid, move evidence gains the released width, and evaluation starts below the header. | Before/after desktop Chrome captures and zero-overlap geometry receipts. |
+| P1 | Mobile Globe inherited the desktop footer grid because of selector specificity, exposing only Prev/Play beside move cards. | The mobile breakpoint now explicitly stacks timeline, moves, and controls; all five primary controls remain visible, with centered `390x844` Three.js canvas and drawer clearance. | Mobile Chrome capture, canvas/viewport receipt, and static regression contract. |
 
 ## Automated Gates
 
-- `npm run ci`: 28/28 checks pass.
+- `npm run ci`: 29/29 checks pass.
+- Installed-Chrome visual bridge: five-state quick and ten-state full matrices; PNG, layout, runtime, focus, and replay-selection receipts.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.
 - Replay live check: HTTP 200; correct cache policy; schema and evidence payload parse.
 - Current connection sample: root TTFB 0.46s; replay TTFB 0.37s; replay transfer 0.68s.
 
-## Headed Playtest Matrix
+## Browser Playtest Matrix
 
-These flows require an actual browser viewport and remain the completion gate.
+The Chrome bridge now covers the core desktop/mobile visual states. Pointer, hover, physical touch, real-GPU performance, and free-form interaction steps below remain manual completion gates.
 
 ### Desktop
 
@@ -90,8 +94,8 @@ These flows require an actual browser viewport and remain the completion gate.
 
 ## Remaining Risks
 
-- No browser surface was exposed during this QA pass, so canvas composition, text clipping, viewport overlap, and touch ergonomics are not visually proven.
-- There is no automated Three.js screenshot baseline or canvas interaction test.
+- The screenshot bridge uses software-rendered Chrome and emulated touch dimensions; physical touch, real-GPU performance, hover, rotation, and cold-cache behavior remain manual checks.
+- The bridge captures deterministic PNG evidence but does not yet perform pixel-diff baselining or direct pointer interaction against Three.js objects.
 - The corrected replay is 7.12 MB uncompressed and approximately 655 KB gzip. Current delivery reports progress, but parsing and scene setup on slower mobile devices still need a cold-cache playtest.
 - The canonical long replay now preserves rich protocol actions and matches turns 1-2, but diverges at turn 3 during turn-end processing. Do not claim full regenerated replay determinism yet.
 - Grouping removes within-phase visual repetition, but the 27.2% unique raw-summary rate still reflects repetitive strategy across campaign turns; that requires agent/gameplay variation rather than more paraphrasing.

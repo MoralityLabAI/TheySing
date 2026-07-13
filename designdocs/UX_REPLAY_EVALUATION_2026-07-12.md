@@ -7,6 +7,7 @@
 - Session configuration: sibling `session_config.json`
 - Replay audit hash: `737ae734dd4500573cd9e8e0a81ff792948094556234d5ad8073c2d8637bea21`
 - Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-board-index/ux_replay_evaluation.json`
+- Visual QA bridge: `scripts/capture-observatory-ux.cjs`
 
 ## Replay Result
 
@@ -32,8 +33,10 @@ The first deterministic replay attempt discarded rich SING/1 fields and reproduc
 | Pass | Evidence tabs now match their declared ARIA interaction model. | Exactly one tab is in sequential focus order; Left/Right/Home/End activate and focus a destination; every panel is labelled by its stable tab ID. | The four-tab keyboard and relationship contract is protected by a dedicated regression gate. |
 | Pass | Evidence inspection now owns time and camera focus. | Manual navigation and all evidence-reading surfaces pause autoplay, while scheduler-owned steps continue; current-beat, World-key, and Board-state controls retain exact node/edge shots when details open. | Pause reasons, automatic-step bypass, control reset, announcements, and camera preservation are protected by a dedicated regression gate. |
 | Pass | Selected Evidence now has a complete keyboard focus lifecycle. | The labelled non-modal dialog receives focus on Close, handles Escape from interactive descendants, and restores a still-connected origin control on dismissal. | Dialog semantics, event ordering, focus transfer, and safe restoration are protected by a dedicated regression gate; headed keyboard confirmation remains pending. |
+| Pass | Core desktop/mobile composition is now captured rather than inferred from CSS. | Installed Chrome records Globe, Evidence, Protocol, Diary, All, and Selected Evidence states with PNG, layout, runtime, focus, and canvas-size receipts; the corrected quick matrix has zero automated warnings. | The ten-state matrix is the release artifact; the five-state matrix supports iteration without replacing manual real-device checks. |
+| P1 | Desktop evidence surfaces collided with the footer/header, and mobile Globe lost most replay controls to a higher-specificity desktop grid. | Visual captures showed 28px drawer/footer overlap, an 11.5px evaluation/header overlap, and only Prev/Play on mobile Globe. | Fixed: desktop clearance and evaluation offset are explicit; mobile Globe stacks timeline, moves, and all five primary controls. |
 | Pass | Globe evidence is navigable. | 1,142/1,143 scene events can focus a graph location or faction beacon. | Protected by regression gate. |
-| Unverified | Visual composition and touch ergonomics. | No headed browser backend was available. | Run `designdocs/UX_QA_PLAYTEST.md` desktop/mobile matrix. |
+| Unverified | Physical touch, hover, real-GPU performance, rotation, and cold-cache ergonomics. | The bridge uses software-rendered installed Chrome with emulated viewport/touch state. | Run the remaining manual steps in `designdocs/UX_QA_PLAYTEST.md`. |
 
 ## Embedded Game Evaluation
 
