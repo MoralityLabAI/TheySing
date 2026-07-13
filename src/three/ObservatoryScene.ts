@@ -26,6 +26,10 @@ export type ObservatoryGraphNode = {
 export type ObservatoryLocation = {
   nodeId?: string;
   edgeId?: string;
+  name?: string;
+  type?: string;
+  layer?: string;
+  owner?: string;
   lat?: number;
   lon?: number;
   altitude?: number;

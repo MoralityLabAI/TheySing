@@ -29,7 +29,7 @@
 
 ## Automated Gates
 
-- `npm run ci`: 19/19 checks pass.
+- `npm run ci`: 20/20 checks pass.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.

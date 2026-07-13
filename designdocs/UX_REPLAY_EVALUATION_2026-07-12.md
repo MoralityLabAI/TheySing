@@ -22,7 +22,7 @@ The first deterministic replay attempt discarded rich SING/1 fields and reproduc
 | P1 | Dense order phases overwhelmed the globe. | Raw scene density is median 6, p90 17, maximum 18; 60 phases exceed eight effects. | Fixed: the globe renders at most eight diverse/high-intensity effects while every event remains in the phase index. |
 | P1 | The canonical run is not fully replay-deterministic. | After restoring rich protocol actions, 1/3 compared turns still diverges; first mismatch is turn 3. | Open: isolate turn-end hidden state/RNG continuity before claiming regenerated replay. |
 | P2 | Resolution has material changes but no authored scene events. | 41 phases use board-diff fallback; all 31 resolution phases change state. | Current signal navigation skips these; retain as concise before/after beats. |
-| P2 | Public order prose is repetitive and mechanical. | Unique public-summary rate is 27.2%; several build/audit lines repeat 23-31 times. | Open: aggregate repeated orders by actor, target, and outcome before spectator narration. |
+| P2 | Public order prose is repetitive and mechanical. | Unique raw-summary rate is 27.2%; the UI rewrites 1,090/1,143 events (95.4%), but narrated uniqueness remains 18.9% because source actions repeat. | Partially fixed: retain the readable actor/action/location prose, then aggregate repeated effects during export and diversify agent action selection separately. |
 | Pass | Globe evidence is navigable. | 1,142/1,143 scene events can focus a graph location or faction beacon. | Protected by regression gate. |
 | Unverified | Visual composition and touch ergonomics. | No headed browser backend was available. | Run `designdocs/UX_QA_PLAYTEST.md` desktop/mobile matrix. |
 

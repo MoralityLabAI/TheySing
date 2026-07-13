@@ -1,4 +1,5 @@
 import { FACTION_COLORS, ObservatoryBoardDiff, ObservatoryBoardState, ObservatoryEvidence, ObservatoryGraph, ObservatoryLocation, ObservatoryScene } from '../three/ObservatoryScene';
+import { humanizeSceneEvent, sceneLocationLabel, sceneSignalTitle, SCENE_FACTION_LABELS } from './sceneNarration';
 import './ObservatoryReplayUI.css';
 
 type ReplayMessage = {
@@ -57,6 +58,13 @@ type ReplaySceneEvent = {
     nodeId?: string;
     edgeId?: string;
     orbitShell?: string;
+    name?: string;
+    type?: string;
+    layer?: string;
+    owner?: string;
+    lat?: number;
+    lon?: number;
+    altitude?: number;
   };
   payload?: unknown;
 };
@@ -223,15 +231,7 @@ type EvidenceTab = 'now' | 'protocol' | 'research' | 'archive';
 
 const STYLE_ID = 'they-sing-observatory-styles';
 
-const FACTION_LABELS: Record<string, string> = {
-  HEGEMON: 'Orbital Throne',
-  INFILTRATOR: 'Memetic Swarm',
-  STATE: 'Sovereign Stack',
-  BROKER: 'Cislunar Broker',
-  ARCHIVIST: 'Steward Archivist',
-  CONVENOR: 'Polycentric Convenor',
-  CANTOR: 'Semantic Cantor'
-};
+const FACTION_LABELS = SCENE_FACTION_LABELS;
 
 const FACTION_PRESENTATION: Record<string, { doctrine: string }> = {
   HEGEMON: { doctrine: 'Orbital hard power' },
@@ -733,7 +733,7 @@ export class ObservatoryReplayUI {
       sceneEvent?.publicExplanation || moment?.impact || event?.summary || diff?.summary
     );
     const title = sceneEvent
-      ? humanizeToken(sceneEvent.category || sceneEvent.visualPreset || 'World signal')
+      ? sceneSignalTitle(sceneEvent)
       : moment?.title || (event ? humanizeToken(event.category || 'World signal') : message
         ? `${labelFaction(message.sender || '')} calls ${labelFaction(message.recipient || 'ALL')}`
         : diff ? (diff.summary?.includes('No board-state changes') ? 'The board stabilizes' : 'Orders resolve across the world')
@@ -835,7 +835,7 @@ export class ObservatoryReplayUI {
         const event = turn?.sceneEvents?.[Number(button.dataset.sceneSignal)];
         if (!event) return;
         const eventActors = event.actors || [];
-        const title = humanizeToken(event.category || event.visualPreset || 'World signal');
+        const title = sceneSignalTitle(event);
         const subgenre = event.subgenre || inferSubgenre(event.category, event.publicExplanation);
         const evidence: ObservatoryEvidence = {
           title,
@@ -1382,7 +1382,7 @@ export class ObservatoryReplayUI {
       }
     } else {
       for (const event of (turn.sceneEvents || []).slice(0, 8)) {
-        const content = event.publicExplanation || '';
+        const content = renderSceneEventSummary(event, false);
         if (content) {
           blocks.push({
             label: `PUBLIC TRACE / ${event.category || event.visualPreset || 'SCENE'}`,
@@ -1504,7 +1504,7 @@ function renderWorldKey(activeActors: string[], open: boolean, turn?: ReplayTurn
           <div class="obs-visible-signals-heading"><span>Visible now / ${visibleSignals.length} signals</span><small>Keyboard and touch scene index</small></div>
           ${visibleSignals.map(({ event, index }) => {
             const actor = event.actors?.[0] || 'ALL';
-            const title = humanizeToken(event.category || event.visualPreset || 'World signal');
+            const title = sceneSignalTitle(event);
             const location = labelLocation(event.location) || event.subgenre || 'World layer';
             return `
               <button type="button" data-scene-signal="${index}" style="--obs-faction-color:${factionColor(actor)}"
@@ -1524,14 +1524,7 @@ function factionColor(factionId: string): string {
 }
 
 function labelLocation(location?: ObservatoryLocation): string {
-  if (!location) return '';
-  if (location.nodeId) return humanizeToken(location.nodeId);
-  if (location.edgeId) return humanizeToken(location.edgeId);
-  if (location.orbitShell) return `${humanizeToken(location.orbitShell)} orbit`;
-  if (typeof location.lat === 'number' && typeof location.lon === 'number') {
-    return `${location.lat.toFixed(1)}, ${location.lon.toFixed(1)}`;
-  }
-  return '';
+  return sceneLocationLabel(location);
 }
 
 function renderResearch(order: ReplayOrder): string {
@@ -1572,7 +1565,7 @@ function renderEvidenceSummary(evidence: ObservatoryEvidence, revealRetrospectiv
   const payload = evidence.payload;
   if (payload && typeof payload === 'object') {
     const publicExplanation = (payload as { publicExplanation?: string }).publicExplanation;
-    if (publicExplanation) return publicExplanation;
+    if (publicExplanation) return renderSceneEventSummary(payload as ReplaySceneEvent, false);
     if ((evidence.category || '').includes('BOARD_DIFF')) return stripPrivateInterpretation(evidence.summary || '');
   }
   return evidence.summary || '';
@@ -1586,8 +1579,9 @@ function renderMomentSummary(moment: ReplayMoment, revealRetrospective: boolean)
 }
 
 function renderSceneEventSummary(event: ReplaySceneEvent, revealRetrospective: boolean): string {
-  if (!revealRetrospective) return event.publicExplanation || event.category || 'Observed signal.';
-  return [event.publicExplanation, event.retrospectiveTruth, stringifyReasoning(event.privateReasoning)]
+  const publicSummary = humanizeSceneEvent(event);
+  if (!revealRetrospective) return publicSummary;
+  return [publicSummary, event.retrospectiveTruth, stringifyReasoning(event.privateReasoning)]
     .filter(Boolean)
     .join(' Retrospective: ') || event.category || 'Observed signal.';
 }

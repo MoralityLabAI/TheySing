@@ -13,6 +13,7 @@ const sceneRenderBudget = Number(args.sceneRenderBudget || args._[4] || 8);
 
 if (!fs.existsSync(replayPath)) throw new Error(`Replay not found: ${replayPath}`);
 const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
+const { humanizeSceneEvent } = loadSceneNarration();
 const replayDeterminism = determinismPath && fs.existsSync(path.resolve(determinismPath))
   ? JSON.parse(fs.readFileSync(path.resolve(determinismPath), 'utf8'))
   : null;
@@ -36,6 +37,10 @@ const summaryCounts = countBy(
   sceneEvents.filter((event) => event.publicExplanation),
   (event) => normalizeText(event.publicExplanation)
 );
+const narratedSummaryCounts = countBy(sceneEvents, (event) => normalizeText(humanizeSceneEvent(event)));
+const rewrittenSceneEvents = sceneEvents.filter((event) =>
+  normalizeText(humanizeSceneEvent(event)) !== normalizeText(event.publicExplanation || event.category || '')
+).length;
 const repeatedSummaries = Object.entries(summaryCounts)
   .filter(([, count]) => count > 1)
   .sort((left, right) => right[1] - left[1])
@@ -87,6 +92,9 @@ const metrics = {
     actorLabelRate: ratio(sceneEvents.filter((event) => (event.actors || []).length > 0).length, sceneEvents.length),
     categories: categoryCounts,
     uniquePublicSummaryRate: ratio(Object.keys(summaryCounts).length, sceneEvents.filter((event) => event.publicExplanation).length),
+    uniqueNarratedSummaryRate: ratio(Object.keys(narratedSummaryCounts).length, sceneEvents.length),
+    rewrittenEvents: rewrittenSceneEvents,
+    narrationRewriteRate: ratio(rewrittenSceneEvents, sceneEvents.length),
     repeatedSummaries
   },
   transcript: {
@@ -283,8 +291,17 @@ function buildFindings(result) {
       severity: 'P2',
       id: 'PUBLIC_SCENE_TEXT_IS_REPETITIVE',
       finding: 'Public scene explanations repeat heavily across the campaign.',
-      evidence: `Unique summary rate is ${(result.scene.uniquePublicSummaryRate * 100).toFixed(1)}%; the most repeated line appears ${result.scene.repeatedSummaries[0]?.count || 0} times.`,
-      recommendation: 'Aggregate repeated order effects by actor, target, and outcome before generating spectator prose.'
+      evidence: `Unique raw-summary rate is ${(result.scene.uniquePublicSummaryRate * 100).toFixed(1)}%; the UI rewrites ${(result.scene.narrationRewriteRate * 100).toFixed(1)}% of events, but the most repeated source line still appears ${result.scene.repeatedSummaries[0]?.count || 0} times.`,
+      recommendation: 'Keep the structured UI narration and aggregate repeated order effects by actor, target, and outcome during export.'
+    });
+  }
+  if (result.scene.narrationRewriteRate >= 0.5) {
+    findings.push({
+      severity: 'PASS',
+      id: 'STRUCTURED_SCENE_NARRATION',
+      finding: 'Most raw scene telemetry is converted into actor/action/location prose.',
+      evidence: `${result.scene.rewrittenEvents}/${result.scene.events} scene explanations are rewritten for spectators.`,
+      recommendation: 'Protect representative narration grammars with replay-derived tests.'
     });
   }
   if (result.scene.focusableRate >= 0.99) {
@@ -405,4 +422,15 @@ function parseArgs(argv) {
     parsed[key] = next && !next.startsWith('--') ? argv[++index] : true;
   }
   return parsed;
+}
+
+function loadSceneNarration() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'sceneNarration.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const narrationModule = { exports: {} };
+  Function('module', 'exports', compiled)(narrationModule, narrationModule.exports);
+  return narrationModule.exports;
 }

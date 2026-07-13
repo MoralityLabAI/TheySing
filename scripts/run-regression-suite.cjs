@@ -42,6 +42,7 @@ async function main() {
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
+  await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
   await runTest('default observatory scene signals remain focusable', () => validateSceneAccessibilityCoverage(path.join(ROOT, 'public', 'observatory_replay.json')));
@@ -588,7 +589,47 @@ function runUxReplayEvaluationSmoke(outputDir) {
   assert(evaluation.transcript?.public?.p90Seconds < 3.6, 'Public diary reveal exceeds autoplay dwell');
   assert(evaluation.scene?.renderBudget === 8, 'UX evaluator scene budget diverges from the globe');
   assert(evaluation.scene?.maxRenderedEffectsPerPhase <= 8, 'UX evaluator permits excess simultaneous globe effects');
+  assert(evaluation.scene?.narrationRewriteRate >= 0.5, 'Structured spectator narration covers too little raw telemetry');
   return `phases=${evaluation.replay.phases}, transcriptP90=${evaluation.transcript.public.p90Seconds}s, renderBudget=${evaluation.scene.renderBudget}`;
+}
+
+function runSceneNarrationRegression() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'sceneNarration.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const narrationModule = { exports: {} };
+  Function('module', 'exports', compiled)(narrationModule, narrationModule.exports);
+  const { humanizeSceneEvent, sceneSignalTitle } = narrationModule.exports;
+  const location = { nodeId: 'HUB_LAGOS', name: 'Lagos Hub' };
+  const cases = [
+    [
+      { category: 'AUDIT', actors: ['HEGEMON'], location, publicExplanation: 'ACCEPTED AUDIT H_AUDITOR_1 -> HUB_LAGOS' },
+      "Orbital Throne's audit mesh opened an inspection at Lagos Hub."
+    ],
+    [
+      { category: 'BUILD', actors: ['INFILTRATOR'], location, publicExplanation: 'ACCEPTED BUILD INFILTRATOR build CULT -> HUB_LAGOS' },
+      'Memetic Swarm seeded a movement cell at Lagos Hub.'
+    ],
+    [
+      { category: 'RESEARCH', actors: ['STATE'], publicExplanation: 'ACCEPTED RESEARCH STATE research KINETIC' },
+      'Sovereign Stack advanced its kinetic research program.'
+    ],
+    [
+      { category: 'TREATY_FORMATION', publicExplanation: '3 formal pacts activated.' },
+      '3 formal pacts entered force.'
+    ],
+    [
+      { category: 'SEMANTIC_GOVERNANCE', publicExplanation: 'babel-compact AMEND proposed at 1.1. | babel-compact AMEND accepted at 1.1.' },
+      'Babel Compact amendment: 1 proposal, accepted at v1.1.'
+    ]
+  ];
+  for (const [event, expected] of cases) {
+    assert(humanizeSceneEvent(event) === expected, `Unexpected narration: ${humanizeSceneEvent(event)}`);
+  }
+  assert(sceneSignalTitle(cases[0][0]) === 'Orbital Throne / Audit', 'Scene index title omitted actor context');
+  return `${cases.length} replay-derived narration cases passed`;
 }
 
 function runExporterSmoke(outputDir) {
