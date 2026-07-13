@@ -43,6 +43,7 @@ async function main() {
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
+  await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
   await runTest('default observatory replay preserves chronology and unit identity', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.json'), { strictTurnArrays: true }));
@@ -593,6 +594,8 @@ function runUxReplayEvaluationSmoke(outputDir) {
   assert(evaluation.scene?.narrationRewriteRate >= 0.5, 'Structured spectator narration covers too little raw telemetry');
   assert(evaluation.scene?.groupedSignalReduction > 0, 'UX evaluator found no repeated scene signals to group');
   assert(evaluation.scene?.signalGroups + evaluation.scene?.groupedSignalReduction === evaluation.scene?.events, 'Grouped scene-signal accounting does not preserve raw events');
+  assert(evaluation.board?.phasesOverUnitClusterTarget === 0, 'Board unit clustering exceeds the published scene target');
+  assert(evaluation.board?.maxUnitClustersPerPhase < evaluation.board?.maxUnitsPerPhase, 'Board unit clustering does not reduce peak scene complexity');
   return `phases=${evaluation.replay.phases}, transcriptP90=${evaluation.transcript.public.p90Seconds}s, renderBudget=${evaluation.scene.renderBudget}`;
 }
 
@@ -651,6 +654,42 @@ function runSceneNarrationRegression() {
   ]);
   assert(distinctIncidents.length === 2, 'Distinct goblin incidents were merged without reliable actor identity');
   return `${cases.length} narration cases plus conservative signal grouping passed`;
+}
+
+function runBoardUnitClusteringRegression() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'three', 'boardUnitClustering.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const clusteringModule = { exports: {} };
+  Function('module', 'exports', compiled)(clusteringModule, clusteringModule.exports);
+  const { clusterBoardUnits } = clusteringModule.exports;
+  const replay = readJson(path.join(ROOT, 'public', 'observatory_replay.json'));
+  let maxUnits = 0;
+  let maxClusters = 0;
+  let maxClusterSize = 0;
+  for (const turn of replay.turns || []) {
+    const units = turn.boardState?.unitLocations || [];
+    const locatedUnits = units.filter((unit) => unit.location);
+    const clusters = clusterBoardUnits(units);
+    assert(clusters.reduce((total, cluster) => total + cluster.count, 0) === locatedUnits.length, `Turn ${turn.turn}:${turn.phase} clustering lost unit evidence`);
+    maxUnits = Math.max(maxUnits, locatedUnits.length);
+    maxClusters = Math.max(maxClusters, clusters.length);
+    maxClusterSize = Math.max(maxClusterSize, ...clusters.map((cluster) => cluster.count));
+  }
+  assert(maxClusters <= 64, `Published replay needs ${maxClusters} unit clusters, above the 64-marker target`);
+  assert(maxClusters < maxUnits, 'Unit clustering does not reduce peak marker count');
+  const distinct = clusterBoardUnits([
+    { unitId: 'a', owner: 'HEGEMON', type: 'DRONE', location: 'DC_EU', inferred: true },
+    { unitId: 'b', owner: 'HEGEMON', type: 'DRONE', location: 'DC_EU', inferred: true },
+    { unitId: 'c', owner: 'STATE', type: 'DRONE', location: 'DC_EU', inferred: true },
+    { unitId: 'd', owner: 'HEGEMON', type: 'AUDITOR', location: 'DC_EU', inferred: true },
+    { unitId: 'e', owner: 'HEGEMON', type: 'DRONE', location: 'DC_EU', inferred: false },
+    { unitId: 'f', owner: 'HEGEMON', type: 'DRONE', location: 'DC_EU', inferred: true, isRevealed: true }
+  ]);
+  assert(distinct.length === 5 && distinct[0].count === 2, 'Unit clustering conflates owner, type, reveal, or evidence status');
+  return `peak ${maxUnits} units -> ${maxClusters} clusters; largest cluster=${maxClusterSize}`;
 }
 
 function runExporterSmoke(outputDir) {
@@ -721,6 +760,12 @@ function validateObservatoryUxContract() {
   assert(scene.includes('export const SCENE_EVENT_RENDER_BUDGET = 8'), 'Three.js scene has no bounded salience budget');
   assert(scene.includes('selectSceneEventsForRender(turn.sceneEvents || [])'), 'Scene render budget is not applied');
   assert(scene.includes('groupSceneSignals(sceneEvents)'), 'Three.js scene selector does not collapse duplicate action geometry');
+  assert(scene.includes('clusterBoardUnits(boardState.unitLocations || [])'), 'Board-state units are still rendered one mesh per record');
+  assert(scene.includes('spreadUnitMarker(base, locationOffset)'), 'Co-located unit clusters are not spatially distinguishable');
+  assert(scene.includes('disposeGroupChildren(this.effectGroup)'), 'Turn effects are detached without releasing GPU resources');
+  assert(scene.includes('disposeGroupChildren(this.boardStateGroup)'), 'Board-state meshes are detached without releasing GPU resources');
+  assert(scene.includes('disposeGroupChildren(this.graphGroup)'), 'Loaded replay graphs retain stale geometry or pickables');
+  assert(!scene.includes('this.effectGroup.clear()') && !scene.includes('this.boardStateGroup.clear()') && !scene.includes('this.graphGroup.clear()'), 'Transient Three.js groups still bypass resource disposal');
   assert(scene.includes("event.pointerType === 'touch'"), 'Globe hover handling does not distinguish touch input');
   assert(scene.includes("setAttribute('aria-hidden', 'true')"), 'Canvas is exposed without equivalent keyboard semantics');
   assert(css.includes('.obs-shell .obs-faction-key'), 'Faction key presentation is missing');

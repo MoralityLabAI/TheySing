@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { groupSceneSignals } from '../ui/sceneNarration';
+import { clusterBoardUnits } from './boardUnitClustering';
 
 export type ObservatoryEvidence = {
   title: string;
@@ -185,6 +186,7 @@ export const FACTION_COLORS: Record<string, number> = {
 };
 
 export const SCENE_EVENT_RENDER_BUDGET = 8;
+export const BOARD_UNIT_CLUSTER_TARGET = 64;
 
 const FACTION_LABELS: Record<string, string> = {
   HEGEMON: 'Orbital Throne',
@@ -305,13 +307,14 @@ export class ObservatoryScene {
     this.renderer.domElement.removeEventListener('pointerleave', this.onPointerLeave);
     this.renderer.domElement.removeEventListener('wheel', this.onWheel);
     this.renderer.domElement.removeEventListener('dblclick', this.onDoubleClick);
+    disposeObjectResources(this.rootGroup);
     this.renderer.dispose();
     this.container.removeChild(this.renderer.domElement);
   }
 
   setReplayTurn(turn: ObservatoryTurn): void {
     this.authority = Number(turn.strategicTracks?.paxJenkinsAuthority || 0);
-    this.effectGroup.clear();
+    disposeGroupChildren(this.effectGroup);
     this.turnPickables.length = 0;
 
     for (const beacon of this.beacons.values()) {
@@ -367,12 +370,12 @@ export class ObservatoryScene {
 
   setGraph(graph: ObservatoryGraph | null): void {
     this.graph = graph;
-    this.graphGroup.clear();
     for (let index = this.persistentPickables.length - 1; index >= 0; index -= 1) {
       let current: THREE.Object3D | null = this.persistentPickables[index];
       while (current && current !== this.graphGroup) current = current.parent;
       if (current === this.graphGroup) this.persistentPickables.splice(index, 1);
     }
+    disposeGroupChildren(this.graphGroup);
     if (!graph) return;
 
     const nodeById = new Map<string, ObservatoryGraphNode>();
@@ -438,7 +441,7 @@ export class ObservatoryScene {
   }
 
   private renderBoardState(boardState?: ObservatoryBoardState): void {
-    this.boardStateGroup.clear();
+    disposeGroupChildren(this.boardStateGroup);
     for (let index = this.turnPickables.length - 1; index >= 0; index -= 1) {
       let current: THREE.Object3D | null = this.turnPickables[index];
       while (current && current !== this.boardStateGroup) current = current.parent;
@@ -479,11 +482,15 @@ export class ObservatoryScene {
       this.turnPickables.push(halo);
     }
 
-    for (const unit of boardState.unitLocations || []) {
+    const clusterOffsetsByLocation = new Map<string, number>();
+    for (const cluster of clusterBoardUnits(boardState.unitLocations || [])) {
+      const unit = cluster.unit;
       if (!unit.location) continue;
       const node = nodeById.get(unit.location);
       const base = positionFromLocation(node, unit.owner || 'ALL', 0);
       if (!base) continue;
+      const locationOffset = clusterOffsetsByLocation.get(unit.location) || 0;
+      clusterOffsetsByLocation.set(unit.location, locationOffset + 1);
       const color = FACTION_COLORS[unit.owner || 'ALL'] || 0xffffff;
       const marker = new THREE.Mesh(
         unit.type === 'DRONE' || unit.type === 'SAT_SWARM'
@@ -497,14 +504,18 @@ export class ObservatoryScene {
           depthWrite: false
         })
       ) as InteractiveObject;
-      marker.position.copy(base.clone().multiplyScalar(1.035));
+      marker.position.copy(spreadUnitMarker(base, locationOffset));
+      marker.scale.setScalar(1 + Math.min(0.85, Math.log2(cluster.count) * 0.18));
+      const unitType = (unit.type || 'unit').replace(/_/g, ' ').toLowerCase();
+      const owner = labelFaction(unit.owner || 'Unknown');
+      const nodeName = node?.name || unit.location;
       marker.userData.evidence = {
-        title: unit.unitId || 'Unit',
-        category: 'UNIT_LOCATION',
+        title: `${owner} ${unitType}${cluster.count === 1 ? '' : ` x${cluster.count}`}`,
+        category: cluster.count === 1 ? 'UNIT_LOCATION' : 'UNIT_CLUSTER',
         subgenre: subgenreForUnit(unit.type || ''),
-        summary: `${unit.owner || 'Unknown'} ${unit.type || 'unit'} at ${unit.location}${unit.inferred ? ' (inferred)' : ''}.`,
+        summary: `${cluster.count} ${owner} ${unitType} asset${cluster.count === 1 ? '' : 's'} at ${nodeName}${unit.inferred ? ' (inferred)' : ''}.`,
         factionIds: unit.owner ? [unit.owner] : [],
-        payload: unit
+        payload: cluster.count === 1 ? unit : { count: cluster.count, units: cluster.units }
       };
       marker.userData.selectable = true;
       this.boardStateGroup.add(marker);
@@ -1587,6 +1598,42 @@ function positionFromLocation(
     );
   }
   return undefined;
+}
+
+function spreadUnitMarker(base: THREE.Vector3, index: number): THREE.Vector3 {
+  const position = base.clone().multiplyScalar(1.035);
+  if (index === 0) return position;
+  const radial = base.clone().normalize();
+  const reference = Math.abs(radial.z) < 0.9 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+  const tangent = new THREE.Vector3().crossVectors(radial, reference).normalize();
+  const bitangent = new THREE.Vector3().crossVectors(radial, tangent).normalize();
+  const angle = index * 2.399963229728653;
+  const radius = 0.07 + Math.floor((index - 1) / 6) * 0.035;
+  return position
+    .addScaledVector(tangent, Math.cos(angle) * radius)
+    .addScaledVector(bitangent, Math.sin(angle) * radius);
+}
+
+function disposeGroupChildren(group: THREE.Group): void {
+  for (const child of [...group.children]) {
+    disposeObjectResources(child);
+    group.remove(child);
+  }
+}
+
+function disposeObjectResources(root: THREE.Object3D): void {
+  root.traverse((object) => {
+    const renderable = object as THREE.Object3D & {
+      geometry?: THREE.BufferGeometry;
+      material?: THREE.Material | THREE.Material[];
+    };
+    renderable.geometry?.dispose();
+    if (Array.isArray(renderable.material)) {
+      for (const material of renderable.material) material.dispose();
+    } else {
+      renderable.material?.dispose();
+    }
+  });
 }
 
 function inferSubgenre(category: string, summary: string): string {

@@ -10,12 +10,14 @@ const meanWordDelayMs = Number(args.meanWordDelayMs || 28);
 const transcriptMode = args.transcriptMode || args._[2] || 'block-stagger';
 const determinismPath = args.determinism || args._[3];
 const sceneRenderBudget = Number(args.sceneRenderBudget || args._[4] || 8);
+const boardUnitClusterTarget = Number(args.boardUnitClusterTarget || 64);
 const GAME_PHASE_ORDER = { NEGOTIATION: 0, ALLOCATION: 1, ACTION_DECLARATION: 2, RESOLUTION: 3, TURN_END: 4 };
 const FACTION_IDS = new Set(['HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR']);
 
 if (!fs.existsSync(replayPath)) throw new Error(`Replay not found: ${replayPath}`);
 const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
 const { groupSceneSignals, humanizeSceneEvent } = loadSceneNarration();
+const { clusterBoardUnits } = loadBoardUnitClustering();
 const replayDeterminism = determinismPath && fs.existsSync(path.resolve(determinismPath))
   ? JSON.parse(fs.readFileSync(path.resolve(determinismPath), 'utf8'))
   : null;
@@ -34,6 +36,9 @@ const sceneCounts = phaseRows.map((row) => row.sceneEvents);
 const publicStreamMs = phaseRows.map((row) => row.publicTranscriptStreamMs);
 const privateStreamMs = phaseRows.map((row) => row.privateTranscriptStreamMs);
 const boardChangeCounts = phaseRows.map((row) => row.boardChanges);
+const boardUnitCounts = turns.map((turn) => (turn.boardState?.unitLocations || []).length);
+const boardUnitClustersByPhase = turns.map((turn) => clusterBoardUnits(turn.boardState?.unitLocations || []));
+const boardUnitClusterCounts = boardUnitClustersByPhase.map((clusters) => clusters.length);
 const unitChanges = turns.flatMap((turn) => turn.boardDiff?.unitLocationChanges || []);
 const stationaryMoves = unitChanges.filter((change) => change.changeType === 'MOVED' && change.from === change.to).length;
 const reusedFactionUnitIds = turns.flatMap((turn) => turn.boardState?.unitLocations || [])
@@ -128,6 +133,15 @@ const metrics = {
     resolutionPhasesWithChanges: phaseRows.filter((row) => row.phase === 'RESOLUTION' && row.boardChanges > 0).length,
     stationaryMoves,
     reusedFactionUnitIds,
+    unitClusterTarget: boardUnitClusterTarget,
+    medianUnitsPerPhase: quantile(boardUnitCounts, 0.5),
+    p90UnitsPerPhase: quantile(boardUnitCounts, 0.9),
+    maxUnitsPerPhase: Math.max(0, ...boardUnitCounts),
+    medianUnitClustersPerPhase: quantile(boardUnitClusterCounts, 0.5),
+    p90UnitClustersPerPhase: quantile(boardUnitClusterCounts, 0.9),
+    maxUnitClustersPerPhase: Math.max(0, ...boardUnitClusterCounts),
+    maxUnitsPerCluster: Math.max(0, ...boardUnitClustersByPhase.flat().map((cluster) => cluster.count)),
+    phasesOverUnitClusterTarget: boardUnitClusterCounts.filter((count) => count > boardUnitClusterTarget).length,
     maxChangesPerPhase: Math.max(0, ...boardChangeCounts)
   },
   content: {
@@ -366,6 +380,23 @@ function buildFindings(result) {
       recommendation: 'Keep distinct treaties, goblins, and escape trajectories ungrouped when actor or semantic identity is incomplete.'
     });
   }
+  if (result.board.phasesOverUnitClusterTarget === 0 && result.board.maxUnitsPerPhase > result.board.maxUnitClustersPerPhase) {
+    findings.push({
+      severity: 'PASS',
+      id: 'BOARD_UNITS_ARE_CLUSTERED',
+      finding: 'Dense board populations collapse into bounded, evidence-bearing unit markers.',
+      evidence: `The peak phase falls from ${result.board.maxUnitsPerPhase} unit records to ${result.board.maxUnitClustersPerPhase} location/owner/type clusters; p90 is ${result.board.p90UnitClustersPerPhase} clusters and the largest cluster contains ${result.board.maxUnitsPerCluster} units.`,
+      recommendation: `Keep published replays at or below the ${result.board.unitClusterTarget}-cluster target or introduce a second aggregation tier.`
+    });
+  } else if (result.board.phasesOverUnitClusterTarget > 0) {
+    findings.push({
+      severity: 'P1',
+      id: 'BOARD_UNIT_MARKERS_EXCEED_TARGET',
+      finding: 'Unit clustering still creates too many independent globe markers.',
+      evidence: `${result.board.phasesOverUnitClusterTarget} phases exceed the ${result.board.unitClusterTarget}-cluster target; maximum is ${result.board.maxUnitClustersPerPhase}.`,
+      recommendation: 'Add a second location-level aggregation tier while preserving exact units in the evidence payload.'
+    });
+  }
   if (result.scene.focusableRate >= 0.99) {
     findings.push({
       severity: 'PASS',
@@ -407,6 +438,7 @@ function renderMarkdown(result) {
     `- Scene density: median ${result.scene.medianEventsPerPhase}, p90 ${result.scene.p90EventsPerPhase}, raw max ${result.scene.maxEventsPerPhase}; render budget ${result.scene.renderBudget}.`,
     `- Spectator grouping: ${result.scene.signalGroups} groups from ${result.scene.events} raw signals; ${result.scene.phasesWithGroupedSignals} phases aggregate duplicates.`,
     `- Board changes: ${result.board.phasesWithChanges} phases; ${result.board.resolutionPhasesWithChanges}/${result.board.resolutionPhases} resolution phases change material state.`,
+    `- Board rendering: p90 ${result.board.p90UnitsPerPhase} raw units -> ${result.board.p90UnitClustersPerPhase} clusters; peak ${result.board.maxUnitsPerPhase} -> ${result.board.maxUnitClustersPerPhase}.`,
     `- Transcript streaming: public p90 ${result.transcript.public.p90Seconds}s; retrospective p90 ${result.transcript.retrospective.p90Seconds}s against ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s autoplay dwell.`,
     '',
     '## Embedded Evaluation Claims',
@@ -511,4 +543,15 @@ function loadSceneNarration() {
   const narrationModule = { exports: {} };
   Function('module', 'exports', compiled)(narrationModule, narrationModule.exports);
   return narrationModule.exports;
+}
+
+function loadBoardUnitClustering() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'three', 'boardUnitClustering.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const clusteringModule = { exports: {} };
+  Function('module', 'exports', compiled)(clusteringModule, clusteringModule.exports);
+  return clusteringModule.exports;
 }
