@@ -526,15 +526,18 @@ export class ObservatoryReplayUI {
     exportClip.addEventListener('click', () => this.exportSpectatorClip());
     this.scrubber.addEventListener('input', () => {
       if (!this.replay) return;
+      this.pausePlaybackForInspection('timeline scrubbing');
       this.turnIndex = Math.max(0, Math.min(this.replay.turns.length - 1, Number(this.scrubber.value)));
       this.closeEvidence();
       this.renderTurn();
     });
     this.archiveSearch.addEventListener('input', () => {
+      this.pausePlaybackForInspection('archive search');
       this.archiveQuery = this.archiveSearch.value;
       this.renderTurn();
     });
     this.archiveScopeButton.addEventListener('click', () => {
+      this.pausePlaybackForInspection('archive navigation');
       this.archiveCampaignMode = !this.archiveCampaignMode;
       this.archiveScopeButton.textContent = this.archiveCampaignMode ? 'Campaign' : 'Turn';
       this.archiveScopeButton.classList.toggle('obs-active', this.archiveCampaignMode);
@@ -574,6 +577,7 @@ export class ObservatoryReplayUI {
   }
 
   private setViewMode(mode: ObservatoryViewMode): void {
+    if (mode !== 'globe') this.pausePlaybackForInspection(`${mode} inspection`);
     this.viewMode = mode;
     this.container.classList.remove('obs-view-globe', 'obs-view-evidence', 'obs-view-diary', 'obs-view-all');
     this.container.classList.add(`obs-view-${mode}`);
@@ -587,6 +591,7 @@ export class ObservatoryReplayUI {
   }
 
   private setEvidenceTab(tab: EvidenceTab, focus = false): void {
+    this.pausePlaybackForInspection('evidence navigation');
     this.evidenceTab = tab;
     for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-evidence-tab]')) {
       const active = button.dataset.evidenceTab === tab;
@@ -844,7 +849,7 @@ export class ObservatoryReplayUI {
       const located = this.scene.focusLocation(location, actors[0]);
       if (!located) this.scene.focusSubgenre(subgenre);
       for (const actor of actors.slice(located ? 1 : 0)) this.scene.pulseFaction(actor);
-      this.renderEvidence(evidence);
+      this.renderEvidence(evidence, true);
     });
     this.bindWorldKeyControls(turn);
   }
@@ -880,9 +885,11 @@ export class ObservatoryReplayUI {
     const worldKey = this.beatPanel.querySelector<HTMLDetailsElement>('.obs-world-key');
     worldKey?.addEventListener('toggle', () => {
       this.worldKeyOpen = worldKey.open;
+      if (worldKey.open) this.pausePlaybackForInspection('world-key inspection');
     });
     for (const button of this.beatPanel.querySelectorAll<HTMLButtonElement>('[data-faction-focus]')) {
       button.addEventListener('click', () => {
+        this.pausePlaybackForInspection('globe inspection');
         const factionId = button.dataset.factionFocus || '';
         if (!this.scene.focusFaction(factionId)) return;
         this.status.textContent = `Located ${labelFaction(factionId)} on the globe.`;
@@ -916,7 +923,7 @@ export class ObservatoryReplayUI {
         if (!located) this.scene.focusSubgenre(subgenre);
         for (const actor of eventActors.slice(located ? 1 : 0)) this.scene.pulseFaction(actor);
         this.hideSceneTooltip();
-        this.renderEvidence(evidence);
+        this.renderEvidence(evidence, true);
       });
     }
   }
@@ -956,6 +963,7 @@ export class ObservatoryReplayUI {
     `;
     for (const button of filters.querySelectorAll('button')) {
       button.addEventListener('click', () => {
+        this.pausePlaybackForInspection('evidence filtering');
         const kind = button.getAttribute('data-filter-kind');
         const value = button.getAttribute('data-filter-value') || 'ALL';
         if (kind === 'subgenre') {
@@ -1170,7 +1178,8 @@ export class ObservatoryReplayUI {
     }
   }
 
-  private renderEvidence(evidence: ObservatoryEvidence): void {
+  private renderEvidence(evidence: ObservatoryEvidence, preserveCamera = false): void {
+    this.pausePlaybackForInspection('evidence inspection');
     const summary = renderEvidenceSummary(evidence, this.revealRetrospective);
     const payloadValue = this.revealRetrospective ? evidence.payload : redactPrivatePayload(evidence.payload);
     const payload = payloadValue ? compactJson(payloadValue) : '';
@@ -1195,7 +1204,7 @@ export class ObservatoryReplayUI {
     this.detailPanel.classList.add('obs-detail-open');
     this.detailPanel.querySelector<HTMLButtonElement>('[data-role="close-evidence"]')
       ?.addEventListener('click', () => this.closeEvidence());
-    if (evidence.subgenre) this.scene.focusSubgenre(evidence.subgenre);
+    if (!preserveCamera && evidence.subgenre) this.scene.focusSubgenre(evidence.subgenre);
   }
 
   private closeEvidence(): void {
@@ -1489,7 +1498,7 @@ export class ObservatoryReplayUI {
             turn: turn.turn,
             phase: turn.phase,
             payload: this.revealRetrospective ? rowData.payload : redactPrivatePayload(rowData.payload)
-          });
+          }, true);
           this.status.textContent = `Located ${rowData.title} on the board.`;
         });
         rowList.appendChild(row);
@@ -1497,7 +1506,10 @@ export class ObservatoryReplayUI {
     };
     details.addEventListener('toggle', () => {
       this.boardStateIndexOpen = details.open;
-      if (details.open) populateRows();
+      if (details.open) {
+        this.pausePlaybackForInspection('board-state inspection');
+        populateRows();
+      }
     });
     if (details.open) populateRows();
     this.boardStateList.appendChild(details);
@@ -1613,8 +1625,9 @@ export class ObservatoryReplayUI {
     }
   }
 
-  private step(delta: number): void {
+  private step(delta: number, automatic = false): void {
     if (!this.replay || this.replay.turns.length === 0) return;
+    if (!automatic) this.pausePlaybackForInspection('manual navigation');
     this.turnIndex = wrapIndex(this.turnIndex + delta, this.replay.turns.length);
     this.closeEvidence();
     this.renderTurn();
@@ -1622,6 +1635,7 @@ export class ObservatoryReplayUI {
 
   private jumpToSignal(direction: -1 | 1): void {
     if (!this.replay || this.replay.turns.length === 0) return;
+    this.pausePlaybackForInspection('signal navigation');
     for (let offset = 1; offset <= this.replay.turns.length; offset += 1) {
       const candidateIndex = wrapIndex(this.turnIndex + direction * offset, this.replay.turns.length);
       const candidate = this.replay.turns[candidateIndex];
@@ -1645,6 +1659,15 @@ export class ObservatoryReplayUI {
     }
   }
 
+  private pausePlaybackForInspection(reason: string): void {
+    if (!this.playing) return;
+    this.playing = false;
+    window.clearTimeout(this.playTimer);
+    this.playButton.textContent = 'Play';
+    this.playButton.setAttribute('aria-pressed', 'false');
+    this.status.textContent = `Playback paused for ${reason}.`;
+  }
+
   private cyclePlaybackRate(): void {
     const currentIndex = REPLAY_SPEEDS.findIndex((rate) => rate === this.playbackRate);
     this.playbackRate = REPLAY_SPEEDS[(currentIndex + 1) % REPLAY_SPEEDS.length];
@@ -1660,7 +1683,7 @@ export class ObservatoryReplayUI {
     if (!this.playing || !this.replay || document.hidden) return;
     const dwellMs = replayTurnDwellMs(this.replay.turns[this.turnIndex] || {}, this.playbackRate);
     this.playTimer = window.setTimeout(() => {
-      this.step(1);
+      this.step(1, true);
       this.scheduleNextTurn();
     }, dwellMs);
   }

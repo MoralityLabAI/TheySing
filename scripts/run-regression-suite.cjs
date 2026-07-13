@@ -42,6 +42,7 @@ async function main() {
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
   await runTest('evidence tabs implement roving keyboard navigation', () => validateEvidenceTabKeyboardContract());
+  await runTest('evidence inspection owns focus and pauses autoplay', () => validateInspectionPlaybackContract());
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
@@ -898,6 +899,34 @@ function validateEvidenceTabKeyboardContract() {
   assert(ui.includes('button.tabIndex = active ? 0 : -1'), 'Evidence tab activation does not maintain roving tabindex');
   assert(ui.includes('if (active && focus) button.focus()'), 'Evidence keyboard activation does not move focus');
   return '4 labelled panels / one tab stop / Left+Right+Home+End automatic activation';
+}
+
+function validateInspectionPlaybackContract() {
+  const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.ts'), 'utf8');
+  assert(ui.includes('private pausePlaybackForInspection(reason: string)'), 'Observatory has no centralized inspection pause');
+  assert(ui.includes("this.status.textContent = `Playback paused for ${reason}.`"), 'Inspection pause is not announced');
+  assert(ui.includes('private step(delta: number, automatic = false)'), 'Manual and automatic replay steps cannot be distinguished');
+  assert(ui.includes("if (!automatic) this.pausePlaybackForInspection('manual navigation')"), 'Manual turn navigation leaves autoplay active');
+  assert(ui.includes('this.step(1, true)'), 'Scheduler-owned replay steps trigger the manual inspection pause');
+  for (const reason of [
+    'timeline scrubbing',
+    'signal navigation',
+    'evidence navigation',
+    'evidence filtering',
+    'archive search',
+    'world-key inspection',
+    'board-state inspection',
+    'evidence inspection'
+  ]) {
+    assert(ui.includes(`pausePlaybackForInspection('${reason}')`), `Autoplay can replace focus during ${reason}`);
+  }
+  assert(ui.includes("if (mode !== 'globe') this.pausePlaybackForInspection(`${mode} inspection`)"), 'Evidence or diary view changes leave autoplay active');
+  assert(ui.includes('private renderEvidence(evidence: ObservatoryEvidence, preserveCamera = false)'), 'Evidence detail cannot preserve an exact location shot');
+  assert(ui.includes('if (!preserveCamera && evidence.subgenre) this.scene.focusSubgenre(evidence.subgenre)'), 'Generic evidence camera still overrides exact location focus');
+  assert((ui.match(/this\.renderEvidence\(evidence, true\)/g) || []).length === 2, 'Current beat or World-key evidence loses exact location focus');
+  const boardRenderer = ui.match(/private renderBoardStateIndex[\s\S]*?\n  private renderMoves/)?.[0] || '';
+  assert(boardRenderer.includes('}, true);'), 'Board-state evidence overrides its exact location shot');
+  return 'manual navigation and inspection pause autoplay; exact location shots survive detail opening';
 }
 
 function validateLegacyGameUxContract() {
