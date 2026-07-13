@@ -6,7 +6,7 @@
 - Canonical run: `D:\they-sing-results\seven_asi_babel_alias_probe_v8_clean_baseline_2run\runs\run_001\run_001.jsonl`
 - Session configuration: sibling `session_config.json`
 - Replay audit hash: `737ae734dd4500573cd9e8e0a81ff792948094556234d5ad8073c2d8637bea21`
-- Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-postfix/ux_replay_evaluation.json`
+- Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-chronology/ux_replay_evaluation.json`
 
 ## Replay Result
 
@@ -18,10 +18,11 @@ The first deterministic replay attempt discarded rich SING/1 fields and reproduc
 
 | Severity | Finding | Evidence | Disposition |
 | --- | --- | --- | --- |
+| P1 | Replay phases were exported alphabetically instead of in engine order. | The old sequence began `ACTION_DECLARATION`, `ALLOCATION`, `NEGOTIATION`; that compared board snapshots backward and made 31/31 resolution phases appear to change state. | Fixed: all 156 records now follow `NEGOTIATION`, `ALLOCATION`, `ACTION_DECLARATION`, `RESOLUTION`, `TURN_END`; the regression gate rejects chronology regressions. |
 | P1 | Sequential word streaming lost most diary content during autoplay. | 35/156 public phases and 93/156 retrospective phases exceeded the 3.6s dwell; retrospective p90 was 16.38s. | Fixed: complete blocks now arrive in a bounded stagger; public and retrospective p90 are 0.87s. |
 | P1 | Dense order phases overwhelmed the globe. | Raw scene density is median 6, p90 17, maximum 18; 60 phases exceed eight effects. | Fixed: the globe renders at most eight diverse/high-intensity effects while every event remains in the phase index. |
 | P1 | The canonical run is not fully replay-deterministic. | After restoring rich protocol actions, 1/3 compared turns still diverges; first mismatch is turn 3. | Open: isolate turn-end hidden state/RNG continuity before claiming regenerated replay. |
-| P2 | Resolution has material changes but no authored scene events. | 41 phases use board-diff fallback; all 31 resolution phases change state. | Current signal navigation skips these; retain as concise before/after beats. |
+| Pass | Quiet resolution phases do not claim nonexistent motion. | Correct chronology shows 0/31 resolution phases with a material board delta; all remain outside signal navigation. | Add authored resolution beats only when a future replay records a real before/after delta. |
 | P2 | Public order prose is repetitive and mechanical. | Unique raw-summary rate is 27.2%; the UI rewrites 1,090/1,143 events (95.4%), but narrated uniqueness remains 18.9% because source actions repeat. | Partially fixed: retain the readable actor/action/location prose, then aggregate repeated effects during export and diversify agent action selection separately. |
 | Pass | Globe evidence is navigable. | 1,142/1,143 scene events can focus a graph location or faction beacon. | Protected by regression gate. |
 | Unverified | Visual composition and touch ergonomics. | No headed browser backend was available. | Run `designdocs/UX_QA_PLAYTEST.md` desktop/mobile matrix. |

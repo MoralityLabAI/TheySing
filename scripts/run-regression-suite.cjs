@@ -45,6 +45,7 @@ async function main() {
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
+  await runTest('default observatory replay preserves chronology and unit identity', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.json'), { strictTurnArrays: true }));
   await runTest('default observatory scene signals remain focusable', () => validateSceneAccessibilityCoverage(path.join(ROOT, 'public', 'observatory_replay.json')));
 
   const summary = {
@@ -732,6 +733,8 @@ function validateLegacyGameUxContract() {
 
 function validateObservatoryReplayFile(filePath, options = {}) {
   const strictTurnArrays = options.strictTurnArrays !== false;
+  const phaseOrder = { NEGOTIATION: 0, ALLOCATION: 1, ACTION_DECLARATION: 2, RESOLUTION: 3, TURN_END: 4 };
+  const factionIds = new Set(['HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR']);
   assert(fs.existsSync(filePath), `Replay file missing: ${path.relative(ROOT, filePath)}`);
   const replay = readJson(filePath);
   assert(replay.schema === 'theysing.observatoryReplay.v1', `Unexpected replay schema: ${replay.schema}`);
@@ -740,6 +743,13 @@ function validateObservatoryReplayFile(filePath, options = {}) {
   assert(Array.isArray(replay.graph.edges), 'Replay graph missing edges');
   for (const [index, turn] of replay.turns.entries()) {
     assert(Number.isFinite(Number(turn.turn)), `Turn ${index} has invalid turn number`);
+    if (strictTurnArrays && index > 0) {
+      const previous = replay.turns[index - 1];
+      assert(Number(previous.turn) <= Number(turn.turn), `Replay turn order regressed at ${turn.turn}:${turn.phase}`);
+      if (Number(previous.turn) === Number(turn.turn)) {
+        assert((phaseOrder[previous.phase] ?? 99) <= (phaseOrder[turn.phase] ?? 99), `Replay phase order regressed from ${previous.phase} to ${turn.phase}`);
+      }
+    }
     for (const key of ['events', 'messages', 'diaries', 'orders', 'research', 'moments', 'sceneEvents', 'anomalyDossiers']) {
       if (strictTurnArrays) {
         assert(Array.isArray(turn[key]), `Turn ${turn.turn}:${turn.phase} missing array ${key}`);
@@ -759,9 +769,19 @@ function validateObservatoryReplayFile(filePath, options = {}) {
     }
     if (strictTurnArrays || turn.boardState !== undefined) {
       assert(turn.boardState && typeof turn.boardState === 'object', `Turn ${turn.turn}:${turn.phase} missing boardState`);
+      if (strictTurnArrays) {
+        for (const unit of turn.boardState?.unitLocations || []) {
+          assert(!(unit.inferred && factionIds.has(unit.unitId)), `Turn ${turn.turn}:${turn.phase} reused faction id ${unit.unitId} as an inferred unit id`);
+        }
+      }
     }
     if (strictTurnArrays || turn.boardDiff !== undefined) {
       assert(turn.boardDiff && typeof turn.boardDiff === 'object', `Turn ${turn.turn}:${turn.phase} missing boardDiff`);
+      if (strictTurnArrays) {
+        for (const change of turn.boardDiff?.unitLocationChanges || []) {
+          assert(change.changeType !== 'MOVED' || change.from !== change.to, `Turn ${turn.turn}:${turn.phase} labels a stationary unit change as MOVED`);
+        }
+      }
     }
   }
   return `validated ${path.relative(ROOT, filePath)}`;

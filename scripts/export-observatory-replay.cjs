@@ -4,6 +4,13 @@ const crypto = require('crypto');
 
 const MAX_TECH_LEVEL = 7;
 const RESEARCH_DOMAINS = ['KINETIC', 'INFO', 'LOGIC', 'MEMETIC'];
+const GAME_PHASE_ORDER = {
+  NEGOTIATION: 0,
+  ALLOCATION: 1,
+  ACTION_DECLARATION: 2,
+  RESOLUTION: 3,
+  TURN_END: 4
+};
 const FACTION_LABELS = {
   CONVENOR: 'Polycentric Convenor',
   CANTOR: 'Semantic Cantor'
@@ -94,7 +101,7 @@ function buildReplay(runFiles, companions = {}) {
   }
 
   const turns = Array.from(turnMap.values()).sort((left, right) =>
-    left.turn - right.turn || String(left.phase).localeCompare(String(right.phase))
+    left.turn - right.turn || phaseOrdinal(left.phase) - phaseOrdinal(right.phase) || String(left.phase).localeCompare(String(right.phase))
   );
 
   let previousBoardState = null;
@@ -816,7 +823,8 @@ function getBoardState(boardStatesByRun, runId) {
     boardStatesByRun.set(runId, {
       nodeOwnership,
       unitLocations: new Map(),
-      edges: {}
+      edges: {},
+      nextInferredUnitOrdinal: 1
     });
   }
   return boardStatesByRun.get(runId);
@@ -866,7 +874,9 @@ function captureBoardSnapshot(bucket, snapshot, boardState) {
 function applyOrderToBoardState(order, boardState) {
   if (!order.accepted) return;
   if (order.type === 'BUILD' && order.unitTypeToBuild && order.targetNodeId) {
-    const unitId = order.unitId || `built:${order.runId}:${order.sequence}:${order.unitTypeToBuild}`;
+    // BUILD orders frequently carry the faction id as a placeholder. A unique
+    // inferred identity prevents later builds from looking like unit retypes.
+    const unitId = `ib:${order.runId}:${boardState.nextInferredUnitOrdinal++}`;
     boardState.unitLocations.set(unitId, {
       unitId,
       type: order.unitTypeToBuild,
@@ -971,13 +981,18 @@ function diffBoardState(previous, current) {
         location: NODE_LOCATIONS[before.location] || {}
       });
     } else if (before && after && (before.location !== after.location || before.owner !== after.owner || before.type !== after.type)) {
+      const changeType = before.location !== after.location
+        ? 'MOVED'
+        : before.owner !== after.owner
+          ? 'TRANSFERRED'
+          : 'RETYPED';
       unitLocationChanges.push({
         unitId,
         type: after.type || before.type || '',
         owner: after.owner || before.owner || '',
         from: before.location || '',
         to: after.location || '',
-        changeType: 'MOVED',
+        changeType,
         fromLocation: NODE_LOCATIONS[before.location] || {},
         location: NODE_LOCATIONS[after.location] || {}
       });
@@ -1015,6 +1030,10 @@ function diffBoardState(previous, current) {
     edgeStateChanges,
     summary: summarizeBoardDiff(nodeOwnershipChanges, unitLocationChanges, edgeStateChanges)
   };
+}
+
+function phaseOrdinal(phase) {
+  return GAME_PHASE_ORDER[String(phase || '').toUpperCase()] ?? Number.MAX_SAFE_INTEGER;
 }
 
 function summarizeBoardDiff(nodeChanges, unitChanges, edgeChanges) {

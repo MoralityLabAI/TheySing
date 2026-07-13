@@ -26,10 +26,11 @@
 | P1 | Scene-event effects had no hover affordance, contextual label, or keyboard/touch equivalent. | Mouse hover now changes the cursor and presents a bounded evidence tooltip. The bounded World key lists every logged scene-event effect on the current turn as an ordinary locate-and-inspect button, while the canvas is hidden from accessibility APIs as a duplicate visual surface. | Static pointer/accessibility contract, production-replay coverage audit, and TypeScript build. Headed visual confirmation remains pending. |
 | P1 | Sequential word animation could not finish before 3.6-second autoplay advanced the phase. | The diary now renders complete blocks immediately with a bounded 55ms stagger; p90 completion is 0.87s for both public and retrospective views. | Automated UX replay evaluator and TypeScript build. |
 | P1 | Raw phases placed up to 18 equally salient effects on the globe. | Three.js now selects at most eight high-intensity/diverse effects while the World key retains the complete phase index. | Automated UX replay evaluator and static scene-budget contract. Headed composition confirmation remains pending. |
+| P1 | The spectator replay sorted phase names alphabetically, placing action and allocation before negotiation and manufacturing resolution-board churn. | Export now uses the engine's cognitive-clock order and unique inferred build identities; stationary type/owner changes cannot be labeled as movement. | Public replay audit, automated chronology/identity regression checks, and UX evaluator. |
 
 ## Automated Gates
 
-- `npm run ci`: 20/20 checks pass.
+- `npm run ci`: 21/21 checks pass.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.
@@ -83,6 +84,6 @@ These flows require an actual browser viewport and remain the completion gate.
 
 - No browser surface was exposed during this QA pass, so canvas composition, text clipping, viewport overlap, and touch ergonomics are not visually proven.
 - There is no automated Three.js screenshot baseline or canvas interaction test.
-- The replay is 5.79 MB uncompressed. Current delivery is fast and now reports progress, but slower mobile networks still need a cold-cache playtest.
+- The corrected replay is 7.12 MB uncompressed and approximately 655 KB gzip. Current delivery reports progress, but parsing and scene setup on slower mobile devices still need a cold-cache playtest.
 - The canonical long replay now preserves rich protocol actions and matches turns 1-2, but diverges at turn 3 during turn-end processing. Do not claim full regenerated replay determinism yet.
 - Vercel reports legacy transitive dependency audit warnings; they are not caused by these UX changes but remain a separate maintenance issue.

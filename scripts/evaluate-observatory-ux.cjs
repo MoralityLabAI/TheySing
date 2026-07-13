@@ -10,6 +10,8 @@ const meanWordDelayMs = Number(args.meanWordDelayMs || 28);
 const transcriptMode = args.transcriptMode || args._[2] || 'block-stagger';
 const determinismPath = args.determinism || args._[3];
 const sceneRenderBudget = Number(args.sceneRenderBudget || args._[4] || 8);
+const GAME_PHASE_ORDER = { NEGOTIATION: 0, ALLOCATION: 1, ACTION_DECLARATION: 2, RESOLUTION: 3, TURN_END: 4 };
+const FACTION_IDS = new Set(['HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHIVIST', 'CONVENOR', 'CANTOR']);
 
 if (!fs.existsSync(replayPath)) throw new Error(`Replay not found: ${replayPath}`);
 const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
@@ -22,12 +24,17 @@ const nodeIds = new Set((replay.graph?.nodes || []).map((node) => node.nodeId).f
 const edgeIds = new Set((replay.graph?.edges || []).map((edge) => edge.edgeId).filter(Boolean));
 
 const phaseRows = turns.map((turn, index) => evaluatePhase(turn, index));
+const phaseOrderViolations = countPhaseOrderViolations(turns);
 const sceneEvents = turns.flatMap((turn) => turn.sceneEvents || []);
 const focusableSceneEvents = sceneEvents.filter(isSceneEventFocusable).length;
 const sceneCounts = phaseRows.map((row) => row.sceneEvents);
 const publicStreamMs = phaseRows.map((row) => row.publicTranscriptStreamMs);
 const privateStreamMs = phaseRows.map((row) => row.privateTranscriptStreamMs);
 const boardChangeCounts = phaseRows.map((row) => row.boardChanges);
+const unitChanges = turns.flatMap((turn) => turn.boardDiff?.unitLocationChanges || []);
+const stationaryMoves = unitChanges.filter((change) => change.changeType === 'MOVED' && change.from === change.to).length;
+const reusedFactionUnitIds = turns.flatMap((turn) => turn.boardState?.unitLocations || [])
+  .filter((unit) => unit.inferred && FACTION_IDS.has(unit.unitId)).length;
 const signalPhases = phaseRows.filter((row) => row.hasNarrativeSignal).length;
 const campaignTurns = new Set(turns.map((turn) => turn.turn)).size;
 const phaseCounts = countBy(turns, (turn) => turn.phase || 'UNKNOWN');
@@ -70,6 +77,7 @@ const metrics = {
     fullAutoplayMinutes: round(turns.length * autoplayDwellMs / 60000, 2),
     narrativeSignalPhases: signalPhases,
     signalSkipRate: ratio(turns.length - signalPhases, turns.length),
+    phaseOrderViolations,
     sourceFiles: replay.sourceFiles || [],
     auditArtifacts: replay.auditManifest?.artifacts || []
   },
@@ -109,6 +117,8 @@ const metrics = {
     phasesWithChanges: boardChangeCounts.filter((count) => count > 0).length,
     resolutionPhases: phaseRows.filter((row) => row.phase === 'RESOLUTION').length,
     resolutionPhasesWithChanges: phaseRows.filter((row) => row.phase === 'RESOLUTION' && row.boardChanges > 0).length,
+    stationaryMoves,
+    reusedFactionUnitIds,
     maxChangesPerPhase: Math.max(0, ...boardChangeCounts)
   },
   content: {
@@ -233,6 +243,32 @@ function streamStats(values) {
 
 function buildFindings(result) {
   const findings = [];
+  if (result.replay.phaseOrderViolations > 0) {
+    findings.push({
+      severity: 'P1',
+      id: 'REPLAY_PHASES_OUT_OF_ORDER',
+      finding: 'Replay phases do not follow the engine chronology.',
+      evidence: `${result.replay.phaseOrderViolations} adjacent phase transitions regress within a campaign turn.`,
+      recommendation: 'Export phases in the engine order: negotiation, allocation, action declaration, resolution, then turn end.'
+    });
+  } else {
+    findings.push({
+      severity: 'PASS',
+      id: 'REPLAY_PHASE_CHRONOLOGY',
+      finding: 'Replay phases follow the engine chronology.',
+      evidence: `${result.replay.phases} phase records contain no within-turn ordering regression.`,
+      recommendation: 'Keep chronology and inferred-unit identity checks in the replay regression gate.'
+    });
+  }
+  if (result.board.stationaryMoves > 0 || result.board.reusedFactionUnitIds > 0) {
+    findings.push({
+      severity: 'P1',
+      id: 'BOARD_DIFF_IDENTITY_CHURN',
+      finding: 'Inferred unit identities manufacture board movement.',
+      evidence: `${result.board.stationaryMoves} MOVED records retain the same location; ${result.board.reusedFactionUnitIds} board snapshots reuse a faction id as an inferred unit id.`,
+      recommendation: 'Assign unique inferred identities to builds and classify same-location mutations as transfer or retype events.'
+    });
+  }
   if (result.replayDeterminism?.status === 'failed') {
     findings.push({
       severity: 'P1',
@@ -277,13 +313,21 @@ function buildFindings(result) {
       recommendation: 'Keep all evidence indexed, but stage or cluster lower-intensity effects instead of presenting every effect at equal salience.'
     });
   }
-  if (result.beatSources.BOARD_DIFF > 0) {
+  if (result.beatSources.BOARD_DIFF > 0 && result.board.resolutionPhasesWithChanges > 0) {
     findings.push({
       severity: 'P2',
       id: 'RESOLUTION_BEATS_ARE_STRUCTURALLY_QUIET',
       finding: 'Resolution phases rely on board-diff prose rather than authored scene events.',
       evidence: `${result.beatSources.BOARD_DIFF} phases use board-diff fallback; ${result.board.resolutionPhasesWithChanges}/${result.board.resolutionPhases} resolution phases contain material changes.`,
       recommendation: 'Treat resolution as a concise before/after beat and skip it during signal navigation unless the diff crosses a material threshold.'
+    });
+  } else if (result.beatSources.BOARD_DIFF > 0) {
+    findings.push({
+      severity: 'PASS',
+      id: 'QUIET_RESOLUTION_BEATS_ARE_HONEST',
+      finding: 'Structurally quiet resolution beats no longer imply board motion.',
+      evidence: `${result.board.resolutionPhasesWithChanges}/${result.board.resolutionPhases} resolution phases contain material board changes; quiet phases remain outside signal navigation.`,
+      recommendation: 'Add authored resolution beats only when the exporter records a material before/after delta.'
     });
   }
   if (result.scene.uniquePublicSummaryRate < 0.5) {
@@ -366,6 +410,21 @@ function countBy(values, keyFn) {
     counts[key] = (counts[key] || 0) + 1;
   }
   return Object.fromEntries(Object.entries(counts).sort((left, right) => right[1] - left[1]));
+}
+
+function countPhaseOrderViolations(turnRows) {
+  let violations = 0;
+  for (let index = 1; index < turnRows.length; index += 1) {
+    const previous = turnRows[index - 1];
+    const current = turnRows[index];
+    if (Number(previous.turn) > Number(current.turn)) {
+      violations += 1;
+    } else if (Number(previous.turn) === Number(current.turn) &&
+      (GAME_PHASE_ORDER[previous.phase] ?? 99) > (GAME_PHASE_ORDER[current.phase] ?? 99)) {
+      violations += 1;
+    }
+  }
+  return violations;
 }
 
 function quantile(values, percentile) {
