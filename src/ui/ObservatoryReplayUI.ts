@@ -546,6 +546,7 @@ export class ObservatoryReplayUI {
       button.setAttribute('aria-pressed', String(active));
       button.classList.toggle('obs-active', active);
     }
+    this.scene.setPresentationActive(mode === 'globe' || mode === 'all');
     if (mode !== 'globe') this.closeEvidence();
   }
 

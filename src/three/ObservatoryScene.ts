@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { groupSceneSignals } from '../ui/sceneNarration';
 import { clusterBoardUnits } from './boardUnitClustering';
+import { deriveObservatoryRenderPolicy } from './renderPolicy';
 
 export type ObservatoryEvidence = {
   title: string;
@@ -259,8 +260,26 @@ export class ObservatoryScene {
   private didDrag = false;
   private lastPointer = { x: 0, y: 0 };
   private animationFrame = 0;
+  private lastFrameTime = 0;
   private authority = 0;
-  private readonly onResize = () => this.resize();
+  private presentationActive = true;
+  private inViewport = true;
+  private disposed = false;
+  private readonly reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+  private readonly coarsePointerQuery = window.matchMedia('(pointer: coarse)');
+  private viewportObserver: IntersectionObserver | null = null;
+  private readonly onResize = () => {
+    this.updateRenderQuality();
+    this.resize();
+  };
+  private readonly onVisibilityChange = () => {
+    if (document.hidden) this.pauseRenderLoop();
+    else this.wakeRenderLoop();
+  };
+  private readonly onRenderPreferenceChange = () => {
+    this.updateRenderQuality();
+    this.resize();
+  };
   private readonly onPointerDown = (event: PointerEvent) => this.handlePointerDown(event);
   private readonly onPointerMove = (event: PointerEvent) => this.handlePointerMove(event);
   private readonly onPointerUp = (event: PointerEvent) => this.handlePointerUp(event);
@@ -278,7 +297,7 @@ export class ObservatoryScene {
     this.updateCameraPosition();
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.updateRenderQuality();
     this.renderer.setClearColor(0x020408, 1);
     this.renderer.domElement.className = 'obs-canvas';
     this.renderer.domElement.setAttribute('aria-hidden', 'true');
@@ -295,12 +314,29 @@ export class ObservatoryScene {
     this.bindControls();
 
     window.addEventListener('resize', this.onResize);
-    this.animate();
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
+    this.reducedMotionQuery.addEventListener('change', this.onRenderPreferenceChange);
+    this.coarsePointerQuery.addEventListener('change', this.onRenderPreferenceChange);
+    if ('IntersectionObserver' in window) {
+      this.viewportObserver = new IntersectionObserver(([entry]) => {
+        this.inViewport = entry?.isIntersecting !== false;
+        if (this.inViewport) this.wakeRenderLoop();
+        else this.pauseRenderLoop();
+      }, { threshold: 0.01 });
+      this.viewportObserver.observe(this.container);
+    }
+    this.wakeRenderLoop();
   }
 
   dispose(): void {
+    this.disposed = true;
     cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
     window.removeEventListener('resize', this.onResize);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    this.reducedMotionQuery.removeEventListener('change', this.onRenderPreferenceChange);
+    this.coarsePointerQuery.removeEventListener('change', this.onRenderPreferenceChange);
+    this.viewportObserver?.disconnect();
     this.renderer.domElement.removeEventListener('pointerdown', this.onPointerDown);
     this.renderer.domElement.removeEventListener('pointermove', this.onPointerMove);
     this.renderer.domElement.removeEventListener('pointerup', this.onPointerUp);
@@ -438,6 +474,11 @@ export class ObservatoryScene {
   setDirectorMode(enabled: boolean): void {
     this.directorMode = enabled;
     if (!enabled) this.directorShot = null;
+  }
+
+  setPresentationActive(active: boolean): void {
+    this.presentationActive = active;
+    this.wakeRenderLoop();
   }
 
   private renderBoardState(boardState?: ObservatoryBoardState): void {
@@ -1356,6 +1397,34 @@ export class ObservatoryScene {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.wakeRenderLoop();
+  }
+
+  private updateRenderQuality(): void {
+    const policy = this.currentRenderPolicy();
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, policy.maxPixelRatio));
+  }
+
+  private wakeRenderLoop(): void {
+    if (this.disposed || document.hidden || !this.inViewport || this.animationFrame !== 0) return;
+    this.animationFrame = requestAnimationFrame(this.animate);
+  }
+
+  private pauseRenderLoop(): void {
+    cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+  }
+
+  private frameIntervalMs(): number {
+    return 1000 / this.currentRenderPolicy().targetFps;
+  }
+
+  private currentRenderPolicy() {
+    return deriveObservatoryRenderPolicy({
+      reducedMotion: this.reducedMotionQuery.matches,
+      coarsePointer: this.coarsePointerQuery.matches,
+      presentationActive: this.presentationActive
+    });
   }
 
   private updateCameraPosition(): void {
@@ -1368,9 +1437,18 @@ export class ObservatoryScene {
     this.camera.lookAt(this.cameraTarget);
   }
 
-  private animate = (): void => {
+  private animate = (timestamp: number): void => {
+    this.animationFrame = 0;
+    if (this.disposed || document.hidden || !this.inViewport) return;
+    const interval = this.frameIntervalMs();
+    if (timestamp - this.lastFrameTime < interval) {
+      this.wakeRenderLoop();
+      return;
+    }
+    this.lastFrameTime = timestamp;
     const elapsed = this.clock.getElapsedTime();
-    if (this.directorMode && this.directorShot && !this.isDragging) {
+    const reducedMotion = !this.currentRenderPolicy().ambientMotion;
+    if (!reducedMotion && this.directorMode && this.directorShot && !this.isDragging) {
       this.cameraTarget.lerp(this.directorShot.target, 0.045);
       this.cameraRadius = THREE.MathUtils.lerp(this.cameraRadius, this.directorShot.radius, 0.045);
       this.cameraTheta = lerpAngle(this.cameraTheta, this.directorShot.theta, 0.045);
@@ -1378,35 +1456,37 @@ export class ObservatoryScene {
       this.updateCameraPosition();
     }
 
-    this.rootGroup.rotation.z = elapsed * 0.035;
-    this.orbitGroup.rotation.z = -elapsed * 0.045;
-    this.beaconGroup.rotation.z = elapsed * 0.018;
+    if (!reducedMotion) {
+      this.rootGroup.rotation.z = elapsed * 0.035;
+      this.orbitGroup.rotation.z = -elapsed * 0.045;
+      this.beaconGroup.rotation.z = elapsed * 0.018;
+    }
 
     const authorityGlow = THREE.MathUtils.clamp(this.authority / 100, 0, 1);
     for (const [index, ring] of this.rings.entries()) {
       const material = ring.material as THREE.MeshBasicMaterial;
-      material.opacity = 0.12 + Math.sin(elapsed * 1.4 + index) * 0.025 + authorityGlow * 0.16;
+      material.opacity = 0.12 + (reducedMotion ? 0 : Math.sin(elapsed * 1.4 + index) * 0.025) + authorityGlow * 0.16;
     }
 
     for (const child of [...this.effectGroup.children]) {
       const birth = Number(child.userData.birth || 0);
       const decay = Number(child.userData.decay || 0);
-      if (birth > 0 && decay > 0) {
+      if (!reducedMotion && birth > 0 && decay > 0) {
         const age = performance.now() - birth;
         fadeObject(child, Math.max(0.18, 1 - age / decay));
         child.scale.setScalar(1 + age / decay * 0.35);
       }
-      child.rotation.z += 0.002;
+      if (!reducedMotion) child.rotation.z += 0.002;
     }
 
     for (const beacon of this.beacons.values()) {
-      beacon.scale.lerp(new THREE.Vector3(1, 1, 1), 0.04);
+      if (!reducedMotion) beacon.scale.lerp(new THREE.Vector3(1, 1, 1), 0.04);
       const material = (beacon as THREE.Mesh).material as THREE.MeshStandardMaterial;
       material.emissiveIntensity = THREE.MathUtils.lerp(material.emissiveIntensity, 0.35, 0.035);
     }
 
     this.renderer.render(this.scene, this.camera);
-    this.animationFrame = requestAnimationFrame(this.animate);
+    this.wakeRenderLoop();
   };
 }
 

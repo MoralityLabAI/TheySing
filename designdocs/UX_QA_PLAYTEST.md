@@ -29,10 +29,11 @@
 | P1 | The spectator replay sorted phase names alphabetically, placing action and allocation before negotiation and manufacturing resolution-board churn. | Export now uses the engine's cognitive-clock order and unique inferred build identities; stationary type/owner changes cannot be labeled as movement. | Public replay audit, automated chronology/identity regression checks, and UX evaluator. |
 | P2 | Same-actor actions at the same location repeated as separate beat copy, World-key buttons, and globe effects. | Current beat, keyboard/touch index, and Three.js selector now share conservative signal grouping; 398/1,143 raw signals collapse into 745 groups while raw indexes and payloads remain available. | Replay-derived grouping tests, UX evaluator, static payload/index contract, and TypeScript build. |
 | P1 | Late turns rendered up to 311 overlapping unit meshes and detached transient geometry without disposing GPU resources. | Units now cluster exactly by location, owner, type, and evidence status, reducing the peak to 51 markers; markers spread locally, scale by count, retain every unit payload, and transient groups dispose resources before replacement. | 64-cluster publication gate, replay-derived accounting test, static lifecycle contract, evaluator, and TypeScript build. |
+| P1 | The globe rendered continuously at DPR 2 regardless of mobile input, reduced-motion preference, hidden tabs, offscreen state, or evidence-only views. | Rendering now pauses while hidden/offscreen, uses 60/30/15/12 FPS desktop/mobile/background/reduced policies, caps DPR at 2/1.5/1.25, and disables ambient motion under reduced motion. | Pure render-policy regression, visibility/observer lifecycle contract, view-mode integration, and TypeScript build. |
 
 ## Automated Gates
 
-- `npm run ci`: 22/22 checks pass.
+- `npm run ci`: 23/23 checks pass.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.

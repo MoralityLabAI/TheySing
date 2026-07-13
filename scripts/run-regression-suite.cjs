@@ -44,6 +44,7 @@ async function main() {
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
+  await runTest('observatory render policy adapts to device and motion preferences', () => runObservatoryRenderPolicyRegression());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
   await runTest('default observatory replay preserves chronology and unit identity', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.json'), { strictTurnArrays: true }));
@@ -692,6 +693,28 @@ function runBoardUnitClusteringRegression() {
   return `peak ${maxUnits} units -> ${maxClusters} clusters; largest cluster=${maxClusterSize}`;
 }
 
+function runObservatoryRenderPolicyRegression() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'three', 'renderPolicy.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const policyModule = { exports: {} };
+  Function('module', 'exports', compiled)(policyModule, policyModule.exports);
+  const { deriveObservatoryRenderPolicy } = policyModule.exports;
+  const cases = [
+    [{ reducedMotion: false, coarsePointer: false, presentationActive: true }, { maxPixelRatio: 2, targetFps: 60, ambientMotion: true }],
+    [{ reducedMotion: false, coarsePointer: true, presentationActive: true }, { maxPixelRatio: 1.5, targetFps: 30, ambientMotion: true }],
+    [{ reducedMotion: false, coarsePointer: false, presentationActive: false }, { maxPixelRatio: 2, targetFps: 15, ambientMotion: true }],
+    [{ reducedMotion: false, coarsePointer: true, presentationActive: false }, { maxPixelRatio: 1.5, targetFps: 15, ambientMotion: true }],
+    [{ reducedMotion: true, coarsePointer: true, presentationActive: true }, { maxPixelRatio: 1.25, targetFps: 12, ambientMotion: false }]
+  ];
+  for (const [input, expected] of cases) {
+    assert(JSON.stringify(deriveObservatoryRenderPolicy(input)) === JSON.stringify(expected), `Unexpected observatory render policy for ${JSON.stringify(input)}`);
+  }
+  return `${cases.length} device/view/motion policies passed`;
+}
+
 function runExporterSmoke(outputDir) {
   const logDir = path.join(outputDir, 'harness-logs');
   const replayPath = path.join(outputDir, 'observatory_replay.json');
@@ -765,6 +788,13 @@ function validateObservatoryUxContract() {
   assert(scene.includes('disposeGroupChildren(this.effectGroup)'), 'Turn effects are detached without releasing GPU resources');
   assert(scene.includes('disposeGroupChildren(this.boardStateGroup)'), 'Board-state meshes are detached without releasing GPU resources');
   assert(scene.includes('disposeGroupChildren(this.graphGroup)'), 'Loaded replay graphs retain stale geometry or pickables');
+  assert(scene.includes("new IntersectionObserver"), 'Offscreen globe rendering is not suspended');
+  assert(scene.includes("document.addEventListener('visibilitychange'"), 'Hidden-document globe rendering is not suspended');
+  assert(scene.includes("window.matchMedia('(pointer: coarse)')"), 'Mobile rendering does not use an adaptive policy');
+  assert(scene.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Three.js rendering ignores reduced-motion preference');
+  assert(scene.includes('deriveObservatoryRenderPolicy'), 'Three.js renderer bypasses the tested device/view/motion policy');
+  assert(scene.includes('this.viewportObserver?.disconnect()'), 'Scene disposal leaves its viewport observer active');
+  assert((scene.match(/this\.renderer\.render\(/g) || []).length === 1, 'Three.js rendering bypasses the adaptive animation loop');
   assert(!scene.includes('this.effectGroup.clear()') && !scene.includes('this.boardStateGroup.clear()') && !scene.includes('this.graphGroup.clear()'), 'Transient Three.js groups still bypass resource disposal');
   assert(scene.includes("event.pointerType === 'touch'"), 'Globe hover handling does not distinguish touch input');
   assert(scene.includes("setAttribute('aria-hidden', 'true')"), 'Canvas is exposed without equivalent keyboard semantics');
@@ -772,6 +802,7 @@ function validateObservatoryUxContract() {
   assert(css.includes('.obs-shell .obs-signal-key'), 'Signal legend presentation is missing');
   assert(css.includes('.obs-shell .obs-visible-signals'), 'Keyboard/touch scene index presentation is missing');
   assert(ui.includes('private jumpToSignal(direction: -1 | 1)'), 'Narrative signal navigation is missing');
+  assert(ui.includes("this.scene.setPresentationActive(mode === 'globe' || mode === 'all')"), 'Evidence/diary views do not reduce globe render cadence');
   assert(ui.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Default director mode ignores reduced-motion preference');
   assert(ui.includes("body.textContent = block.content"), 'Reduced-motion diary still uses staggered word timers');
   assert(!ui.includes('window.setTimeout(writeWord'), 'Negotiation diary still streams too slowly for autoplay');
