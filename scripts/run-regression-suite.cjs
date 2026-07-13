@@ -43,6 +43,7 @@ async function main() {
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
   await runTest('evidence tabs implement roving keyboard navigation', () => validateEvidenceTabKeyboardContract());
   await runTest('evidence inspection owns focus and pauses autoplay', () => validateInspectionPlaybackContract());
+  await runTest('evidence dialog transfers and restores keyboard focus', () => validateEvidenceDialogFocusContract());
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
@@ -927,6 +928,22 @@ function validateInspectionPlaybackContract() {
   const boardRenderer = ui.match(/private renderBoardStateIndex[\s\S]*?\n  private renderMoves/)?.[0] || '';
   assert(boardRenderer.includes('}, true);'), 'Board-state evidence overrides its exact location shot');
   return 'manual navigation and inspection pause autoplay; exact location shots survive detail opening';
+}
+
+function validateEvidenceDialogFocusContract() {
+  const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.ts'), 'utf8');
+  assert(ui.includes('role="dialog" aria-modal="false" aria-hidden="true" aria-labelledby="obs-detail-title"'), 'Selected Evidence is not exposed as a labelled non-modal dialog');
+  assert(ui.includes('private evidenceReturnFocus: HTMLElement | null = null'), 'Evidence dialog does not retain its trigger');
+  assert(ui.includes('!this.detailPanel.contains(activeElement)'), 'Evidence dialog can capture one of its own controls as the return target');
+  assert(ui.includes("this.detailPanel.setAttribute('aria-hidden', 'false')"), 'Opening evidence does not expose the dialog semantically');
+  assert(ui.includes("this.detailPanel.setAttribute('aria-hidden', 'true')"), 'Closing evidence does not hide the dialog semantically');
+  assert(ui.includes("closeButton?.addEventListener('click', () => this.closeEvidence(true))"), 'Close button does not request trigger restoration');
+  assert(ui.includes('closeButton?.focus({ preventScroll: true })'), 'Evidence dialog does not receive focus when opened');
+  assert(ui.includes('if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true })'), 'Evidence dialog does not safely restore a connected trigger');
+  const keyHandler = ui.match(/this\.keydownHandler = \(event\) => \{[\s\S]*?document\.addEventListener\('keydown'/)?.[0] || '';
+  assert(keyHandler.includes("event.key === 'Escape'"), 'Escape does not dismiss Selected Evidence');
+  assert(keyHandler.indexOf("event.key === 'Escape'") < keyHandler.indexOf('isInteractiveTarget(event.target)'), 'Interactive controls swallow Escape before dialog dismissal');
+  return 'labelled non-modal dialog / focus Close / Escape / restore connected trigger';
 }
 
 function validateLegacyGameUxContract() {

@@ -284,6 +284,7 @@ export class ObservatoryReplayUI {
   private readonly sceneTooltip: HTMLElement;
   private keydownHandler: ((event: KeyboardEvent) => void) | null = null;
   private visibilityHandler: (() => void) | null = null;
+  private evidenceReturnFocus: HTMLElement | null = null;
   private replay: ObservatoryReplay | null = null;
   private turnIndex = 0;
   private playing = false;
@@ -387,8 +388,8 @@ export class ObservatoryReplayUI {
         </div>
         <div data-role="transcript" class="obs-transcript"></div>
       </aside>
-      <aside class="obs-detail obs-detail-dismissed" data-role="detail" aria-live="polite">
-        <div class="obs-panel-title">Selected Evidence</div>
+      <aside class="obs-detail obs-detail-dismissed" data-role="detail" role="dialog" aria-modal="false" aria-hidden="true" aria-labelledby="obs-detail-title" aria-live="polite">
+        <div class="obs-panel-title" id="obs-detail-title">Selected Evidence</div>
         <div class="obs-empty">Click a beacon, beam, drone swarm, social bloom, audit mesh, or escape vector.</div>
       </aside>
       <footer class="obs-bottom">
@@ -549,6 +550,11 @@ export class ObservatoryReplayUI {
       if (selected) void this.loadFile(selected);
     });
     this.keydownHandler = (event) => {
+      if (event.key === 'Escape' && this.detailPanel.classList.contains('obs-detail-open')) {
+        event.preventDefault();
+        this.closeEvidence(true);
+        return;
+      }
       if (isInteractiveTarget(event.target)) return;
       if (event.key === 'ArrowLeft') this.step(-1);
       if (event.key === 'ArrowRight') this.step(1);
@@ -1180,12 +1186,16 @@ export class ObservatoryReplayUI {
 
   private renderEvidence(evidence: ObservatoryEvidence, preserveCamera = false): void {
     this.pausePlaybackForInspection('evidence inspection');
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && activeElement !== document.body && !this.detailPanel.contains(activeElement)) {
+      this.evidenceReturnFocus = activeElement;
+    }
     const summary = renderEvidenceSummary(evidence, this.revealRetrospective);
     const payloadValue = this.revealRetrospective ? evidence.payload : redactPrivatePayload(evidence.payload);
     const payload = payloadValue ? compactJson(payloadValue) : '';
     this.detailPanel.innerHTML = `
       <div class="obs-detail-heading">
-        <div class="obs-panel-title">Selected Evidence</div>
+        <div class="obs-panel-title" id="obs-detail-title">Selected Evidence</div>
         <button type="button" data-role="close-evidence" aria-label="Close selected evidence">Close</button>
       </div>
       <article class="obs-evidence-card">
@@ -1202,14 +1212,20 @@ export class ObservatoryReplayUI {
     `;
     this.detailPanel.classList.remove('obs-detail-dismissed');
     this.detailPanel.classList.add('obs-detail-open');
-    this.detailPanel.querySelector<HTMLButtonElement>('[data-role="close-evidence"]')
-      ?.addEventListener('click', () => this.closeEvidence());
+    this.detailPanel.setAttribute('aria-hidden', 'false');
+    const closeButton = this.detailPanel.querySelector<HTMLButtonElement>('[data-role="close-evidence"]');
+    closeButton?.addEventListener('click', () => this.closeEvidence(true));
+    closeButton?.focus({ preventScroll: true });
     if (!preserveCamera && evidence.subgenre) this.scene.focusSubgenre(evidence.subgenre);
   }
 
-  private closeEvidence(): void {
+  private closeEvidence(restoreFocus = false): void {
     this.detailPanel.classList.remove('obs-detail-open');
     this.detailPanel.classList.add('obs-detail-dismissed');
+    this.detailPanel.setAttribute('aria-hidden', 'true');
+    const returnFocus = this.evidenceReturnFocus;
+    this.evidenceReturnFocus = null;
+    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
   }
 
   private renderMoments(turn: ReplayTurn): void {

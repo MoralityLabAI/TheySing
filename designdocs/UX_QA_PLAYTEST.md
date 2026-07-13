@@ -34,10 +34,11 @@
 | P1 | Ownership halos, unit clusters, and route state were interactive only inside an `aria-hidden` canvas, leaving no keyboard/touch evidence equivalent. | Evidence/Now now includes a collapsed, lazy Board State index with every node, exact force cluster, and route as a locate-and-inspect button; the canonical peak is 72 controls with no slicing. | Dataset accounting, source contract, focus/payload checks, bounded presentation, evaluator, and TypeScript build. |
 | P2 | Evidence used ARIA tab roles without implementing the associated keyboard pattern or panel labels. | The four-tab set now has one roving tab stop, Left/Right/Home/End automatic activation, stable tab IDs, and matching `aria-labelledby` panels. | Dedicated keyboard/relationship regression and TypeScript build. |
 | P1 | Autoplay could replace focused controls, close details, and advance away while a user inspected evidence; exact node/edge shots were then overwritten by generic subgenre cameras. | Manual step/jump/scrub, evidence/diary views, tabs, filters, archive search, World/Board expansion, and detail opening now pause autoplay; scheduler steps bypass the pause, and location-aware evidence preserves its camera target. | Dedicated inspection/focus lifecycle regression and TypeScript build. |
+| P2 | Selected Evidence opened visually without receiving focus, interactive controls swallowed Escape, and closing the sheet did not return keyboard users to their origin. | The sheet is now a labelled non-modal dialog; opening focuses Close, Escape dismisses before the interactive-control guard, and dismissal restores a still-connected origin control. | Dedicated dialog focus-lifecycle regression and TypeScript build. Headed keyboard confirmation remains pending. |
 
 ## Automated Gates
 
-- `npm run ci`: 27/27 checks pass.
+- `npm run ci`: 28/28 checks pass.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.
