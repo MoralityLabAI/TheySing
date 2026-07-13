@@ -31,10 +31,11 @@
 | P1 | Late turns rendered up to 311 overlapping unit meshes and detached transient geometry without disposing GPU resources. | Units now cluster exactly by location, owner, type, and evidence status, reducing the peak to 51 markers; markers spread locally, scale by count, retain every unit payload, and transient groups dispose resources before replacement. | 64-cluster publication gate, replay-derived accounting test, static lifecycle contract, evaluator, and TypeScript build. |
 | P1 | The globe rendered continuously at DPR 2 regardless of mobile input, reduced-motion preference, hidden tabs, offscreen state, or evidence-only views. | Rendering now pauses while hidden/offscreen, uses 60/30/15/12 FPS desktop/mobile/background/reduced policies, caps DPR at 2/1.5/1.25, and disables ambient motion under reduced motion. | Pure render-policy regression, visibility/observer lifecycle contract, view-mode integration, and TypeScript build. |
 | P2 | Every phase consumed 3.6 seconds and autoplay continued in hidden tabs, making a 156-phase pass take 9.36 minutes and letting users return to an unexpected turn. | Signals retain 3.6 seconds, 41 quiet phases use 1.2 seconds, playback exposes 0.5x/1x/2x/4x, hidden tabs suspend, and loading a replay resets playback. | Pure pacing regression, canonical 7.72-minute duration gate, evaluator, visibility lifecycle contract, and TypeScript build. |
+| P1 | Ownership halos, unit clusters, and route state were interactive only inside an `aria-hidden` canvas, leaving no keyboard/touch evidence equivalent. | Evidence/Now now includes a collapsed, lazy Board State index with every node, exact force cluster, and route as a locate-and-inspect button; the canonical peak is 72 controls with no slicing. | Dataset accounting, source contract, focus/payload checks, bounded presentation, evaluator, and TypeScript build. |
 
 ## Automated Gates
 
-- `npm run ci`: 24/24 checks pass.
+- `npm run ci`: 25/25 checks pass.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.

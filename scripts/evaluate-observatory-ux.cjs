@@ -46,6 +46,11 @@ const boardChangeCounts = phaseRows.map((row) => row.boardChanges);
 const boardUnitCounts = turns.map((turn) => (turn.boardState?.unitLocations || []).length);
 const boardUnitClustersByPhase = turns.map((turn) => clusterBoardUnits(turn.boardState?.unitLocations || []));
 const boardUnitClusterCounts = boardUnitClustersByPhase.map((clusters) => clusters.length);
+const boardInspectableGroupCounts = turns.map((turn, index) =>
+  Object.keys(turn.boardState?.nodeOwnership || {}).length +
+  boardUnitClusterCounts[index] +
+  Object.keys(turn.boardState?.edges || {}).length
+);
 const unitChanges = turns.flatMap((turn) => turn.boardDiff?.unitLocationChanges || []);
 const stationaryMoves = unitChanges.filter((change) => change.changeType === 'MOVED' && change.from === change.to).length;
 const reusedFactionUnitIds = turns.flatMap((turn) => turn.boardState?.unitLocations || [])
@@ -153,6 +158,9 @@ const metrics = {
     maxUnitClustersPerPhase: Math.max(0, ...boardUnitClusterCounts),
     maxUnitsPerCluster: Math.max(0, ...boardUnitClustersByPhase.flat().map((cluster) => cluster.count)),
     phasesOverUnitClusterTarget: boardUnitClusterCounts.filter((count) => count > boardUnitClusterTarget).length,
+    medianInspectableGroupsPerPhase: quantile(boardInspectableGroupCounts, 0.5),
+    p90InspectableGroupsPerPhase: quantile(boardInspectableGroupCounts, 0.9),
+    maxInspectableGroupsPerPhase: Math.max(0, ...boardInspectableGroupCounts),
     maxChangesPerPhase: Math.max(0, ...boardChangeCounts)
   },
   content: {
@@ -413,6 +421,15 @@ function buildFindings(result) {
       recommendation: 'Add a second location-level aggregation tier while preserving exact units in the evidence payload.'
     });
   }
+  if (result.board.maxInspectableGroupsPerPhase > 0) {
+    findings.push({
+      severity: 'PASS',
+      id: 'BOARD_STATE_IS_INDEXABLE_OUTSIDE_CANVAS',
+      finding: 'The complete visual board can be represented by a bounded non-canvas control index.',
+      evidence: `Ownership, force, and route state require at most ${result.board.maxInspectableGroupsPerPhase} controls in one phase; p90 is ${result.board.p90InspectableGroupsPerPhase}.`,
+      recommendation: 'Keep the Board State index collapsed and lazy, but preserve every group as a locate-and-inspect button when opened.'
+    });
+  }
   if (result.scene.focusableRate >= 0.99) {
     findings.push({
       severity: 'PASS',
@@ -455,6 +472,7 @@ function renderMarkdown(result) {
     `- Spectator grouping: ${result.scene.signalGroups} groups from ${result.scene.events} raw signals; ${result.scene.phasesWithGroupedSignals} phases aggregate duplicates.`,
     `- Board changes: ${result.board.phasesWithChanges} phases; ${result.board.resolutionPhasesWithChanges}/${result.board.resolutionPhases} resolution phases change material state.`,
     `- Board rendering: p90 ${result.board.p90UnitsPerPhase} raw units -> ${result.board.p90UnitClustersPerPhase} clusters; peak ${result.board.maxUnitsPerPhase} -> ${result.board.maxUnitClustersPerPhase}.`,
+    `- Non-canvas board index: p90 ${result.board.p90InspectableGroupsPerPhase} controls; peak ${result.board.maxInspectableGroupsPerPhase}.`,
     `- Autoplay pacing: ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s signals / ${(result.replay.quietAutoplayDwellMs / 1000).toFixed(1)}s quiet; ${result.replay.fixedAutoplayMinutes} fixed minutes -> ${result.replay.fullAutoplayMinutes} adaptive minutes at ${result.replay.playbackRate}x.`,
     `- Transcript streaming: public p90 ${result.transcript.public.p90Seconds}s; retrospective p90 ${result.transcript.retrospective.p90Seconds}s against adaptive phase dwell.`,
     '',

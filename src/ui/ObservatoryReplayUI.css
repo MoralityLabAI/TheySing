@@ -278,6 +278,47 @@
   letter-spacing: 0.06em;
 }
 
+.obs-shell .obs-board-index {
+  border: 1px solid rgba(152, 226, 228, 0.16);
+  border-radius: 8px;
+  background: rgba(3, 10, 14, 0.54);
+}
+
+.obs-shell .obs-board-index > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  color: rgba(240, 232, 213, 0.72);
+  cursor: pointer;
+  list-style: none;
+  font-size: 8px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.obs-shell .obs-board-index > summary::-webkit-details-marker { display: none; }
+.obs-shell .obs-board-index > summary::after { content: "+"; color: #7de7ed; font-size: 12px; }
+.obs-shell .obs-board-index[open] > summary::after { content: "-"; }
+
+.obs-shell .obs-board-index > summary small {
+  margin-left: auto;
+  color: rgba(240, 232, 213, 0.38);
+  font-size: 7px;
+}
+
+.obs-shell .obs-board-rows {
+  max-height: min(44vh, 430px);
+  padding: 0 7px 7px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.obs-shell .obs-board-row strong {
+  font-size: 11px;
+}
+
 .obs-shell .obs-faction-key {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

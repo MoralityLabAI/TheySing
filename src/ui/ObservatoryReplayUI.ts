@@ -1,4 +1,5 @@
 import { FACTION_COLORS, ObservatoryBoardDiff, ObservatoryBoardState, ObservatoryEvidence, ObservatoryGraph, ObservatoryLocation, ObservatoryScene } from '../three/ObservatoryScene';
+import { clusterBoardUnits } from '../three/boardUnitClustering';
 import {
   groupSceneSignals,
   humanizeSceneEvent,
@@ -272,6 +273,7 @@ export class ObservatoryReplayUI {
   private readonly archiveSearch: HTMLInputElement;
   private readonly archiveScopeButton: HTMLButtonElement;
   private readonly diffList: HTMLElement;
+  private readonly boardStateList: HTMLElement;
   private readonly detailPanel: HTMLElement;
   private readonly status: HTMLElement;
   private readonly playButton: HTMLButtonElement;
@@ -295,6 +297,7 @@ export class ObservatoryReplayUI {
   private activeSignalMode = 'ALL';
   private archiveQuery = '';
   private archiveCampaignMode = false;
+  private boardStateIndexOpen = false;
   private revealRetrospective = false;
   private directorMode = false;
   private viewMode: ObservatoryViewMode = 'globe';
@@ -357,6 +360,8 @@ export class ObservatoryReplayUI {
           <div data-role="events" class="obs-stack obs-event-stack"></div>
           <div class="obs-panel-title">What Changed</div>
           <div data-role="diffs" class="obs-stack obs-diff-stack"></div>
+          <div class="obs-panel-title">Board State</div>
+          <div data-role="board-state" class="obs-board-state-index"></div>
         </section>
         <section class="obs-evidence-section" id="obs-evidence-protocol" data-evidence-section="protocol" role="tabpanel" hidden>
           <div class="obs-panel-title">Protocol Evidence</div>
@@ -430,6 +435,7 @@ export class ObservatoryReplayUI {
     this.archiveSearch = requireElement(this.container, '[data-role="archive-search"]') as HTMLInputElement;
     this.archiveScopeButton = requireElement(this.container, '[data-role="archive-scope"]') as HTMLButtonElement;
     this.diffList = requireElement(this.container, '[data-role="diffs"]');
+    this.boardStateList = requireElement(this.container, '[data-role="board-state"]');
     this.detailPanel = requireElement(this.container, '[data-role="detail"]');
     this.status = requireElement(this.container, '[data-role="status"]');
     this.playButton = requireElement(this.container, '[data-role="play"]') as HTMLButtonElement;
@@ -707,6 +713,7 @@ export class ObservatoryReplayUI {
     this.researchList.innerHTML = '<div class="obs-empty">No research views loaded.</div>';
     this.anomalyList.innerHTML = '<div class="obs-empty">No anomaly dossiers yet.</div>';
     this.diffList.innerHTML = '<div class="obs-empty">No board diff yet.</div>';
+    this.boardStateList.innerHTML = '<div class="obs-empty">No board state yet.</div>';
     this.detailPanel.innerHTML = '<div class="obs-panel-title">Selected Evidence</div><div class="obs-empty">Click a scene object.</div>';
     this.detailPanel.classList.remove('obs-detail-open');
     this.detailPanel.classList.add('obs-detail-dismissed');
@@ -749,6 +756,7 @@ export class ObservatoryReplayUI {
     this.renderEvents(filteredTurn);
     this.renderMoves(filteredTurn);
     this.renderBoardDiff(filteredTurn);
+    this.renderBoardStateIndex(filteredTurn);
     this.renderAnomalies(filteredTurn);
     this.animateTranscript(filteredTurn);
   }
@@ -1362,6 +1370,124 @@ export class ObservatoryReplayUI {
       }));
       this.diffList.appendChild(row);
     }
+  }
+
+  private renderBoardStateIndex(turn: ReplayTurn): void {
+    this.boardStateList.innerHTML = '';
+    const boardState = turn.boardState;
+    if (!boardState || !this.replay?.graph) {
+      this.boardStateList.innerHTML = '<div class="obs-empty">No board state exported.</div>';
+      return;
+    }
+    const nodeById = new Map((this.replay.graph.nodes || [])
+      .filter((node) => node.nodeId)
+      .map((node) => [node.nodeId as string, node]));
+    const rows: Array<{
+      kind: 'NODE' | 'FORCE' | 'ROUTE';
+      title: string;
+      summary: string;
+      subgenre: string;
+      actors: string[];
+      location: ObservatoryLocation;
+      payload: unknown;
+      sortWeight: number;
+    }> = [];
+
+    for (const [nodeId, owner] of Object.entries(boardState.nodeOwnership || {})) {
+      const node = nodeById.get(nodeId);
+      rows.push({
+        kind: 'NODE',
+        title: `${node?.name || humanizeToken(nodeId)} / ${labelFaction(owner)}`,
+        summary: `${node?.name || humanizeToken(nodeId)} is controlled by ${labelFaction(owner)}.`,
+        subgenre: node?.layer === 'ORBITAL' ? 'ORBITAL' : 'DIPLOMATIC',
+        actors: owner && owner !== 'NEUTRAL' ? [owner] : [],
+        location: node || { nodeId },
+        payload: { node, owner },
+        sortWeight: 1
+      });
+    }
+
+    for (const cluster of clusterBoardUnits(boardState.unitLocations || [])) {
+      const unit = cluster.unit;
+      const node = unit.location ? nodeById.get(unit.location) : undefined;
+      const unitType = humanizeToken(unit.type || 'unit');
+      const owner = labelFaction(unit.owner || 'Unknown');
+      rows.push({
+        kind: 'FORCE',
+        title: `${owner} / ${unitType}${cluster.count > 1 ? ` x${cluster.count}` : ''}`,
+        summary: `${cluster.count} ${owner} ${unitType.toLowerCase()} asset${cluster.count === 1 ? '' : 's'} at ${node?.name || humanizeToken(unit.location || 'unknown')}${unit.inferred ? ' (inferred)' : ''}.`,
+        subgenre: inferSubgenre(unit.type),
+        actors: unit.owner ? [unit.owner] : [],
+        location: node || { nodeId: unit.location },
+        payload: cluster.count === 1 ? unit : { count: cluster.count, units: cluster.units },
+        sortWeight: 1000 + cluster.count
+      });
+    }
+
+    for (const [edgeKey, edgeState] of Object.entries(boardState.edges || {})) {
+      const edgeId = edgeState.edgeId || edgeKey;
+      const severed = !!edgeState.isSevered;
+      const actor = edgeState.filteredBy || '';
+      rows.push({
+        kind: 'ROUTE',
+        title: `${humanizeToken(edgeId)} / ${severed ? 'Severed' : actor ? `Filtered by ${labelFaction(actor)}` : 'Open'}`,
+        summary: `${humanizeToken(edgeId)} is ${severed ? 'severed' : actor ? `filtered by ${labelFaction(actor)}` : 'open'}.`,
+        subgenre: 'CYBER',
+        actors: actor ? [actor] : [],
+        location: { edgeId },
+        payload: edgeState,
+        sortWeight: 2
+      });
+    }
+
+    const nodeCount = rows.filter((row) => row.kind === 'NODE').length;
+    const forceCount = rows.filter((row) => row.kind === 'FORCE').length;
+    const routeCount = rows.filter((row) => row.kind === 'ROUTE').length;
+    const details = document.createElement('details');
+    details.className = 'obs-board-index';
+    details.open = this.boardStateIndexOpen;
+    details.innerHTML = `
+      <summary><span>${rows.length} inspectable groups</span><small>${nodeCount} nodes / ${forceCount} forces / ${routeCount} routes</small></summary>
+      <div class="obs-stack obs-board-rows" data-role="board-state-rows"></div>
+    `;
+    const rowList = requireElement(details, '[data-role="board-state-rows"]');
+    const populateRows = () => {
+      if (rowList.childElementCount > 0) return;
+      for (const rowData of rows.sort((left, right) => left.kind.localeCompare(right.kind) || right.sortWeight - left.sortWeight || left.title.localeCompare(right.title))) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = 'obs-card obs-board-row';
+        row.dataset.boardStateGroup = rowData.kind;
+        row.setAttribute('aria-label', `Locate and inspect ${rowData.title}`);
+        row.innerHTML = `
+          <span>${escapeHtml(rowData.kind)} / ${escapeHtml(rowData.subgenre)}</span>
+          <strong>${escapeHtml(rowData.title)}</strong>
+          <small>${escapeHtml(rowData.summary)}</small>
+        `;
+        row.addEventListener('click', () => {
+          const located = this.scene.focusLocation(rowData.location, rowData.actors[0]);
+          if (!located) this.scene.focusSubgenre(rowData.subgenre);
+          this.renderEvidence({
+            title: rowData.title,
+            category: `BOARD_${rowData.kind}`,
+            subgenre: rowData.subgenre,
+            summary: rowData.summary,
+            factionIds: rowData.actors,
+            turn: turn.turn,
+            phase: turn.phase,
+            payload: this.revealRetrospective ? rowData.payload : redactPrivatePayload(rowData.payload)
+          });
+          this.status.textContent = `Located ${rowData.title} on the board.`;
+        });
+        rowList.appendChild(row);
+      }
+    };
+    details.addEventListener('toggle', () => {
+      this.boardStateIndexOpen = details.open;
+      if (details.open) populateRows();
+    });
+    if (details.open) populateRows();
+    this.boardStateList.appendChild(details);
   }
 
   private renderMoves(turn: ReplayTurn): void {

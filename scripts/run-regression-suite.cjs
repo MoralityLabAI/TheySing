@@ -44,6 +44,7 @@ async function main() {
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
+  await runTest('board-state index covers canvas-only evidence', () => validateBoardStateAccessibilityCoverage());
   await runTest('observatory render policy adapts to device and motion preferences', () => runObservatoryRenderPolicyRegression());
   await runTest('replay pacing preserves signals and compresses quiet phases', () => runReplayPacingRegression());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
@@ -598,6 +599,7 @@ function runUxReplayEvaluationSmoke(outputDir) {
   assert(evaluation.scene?.signalGroups + evaluation.scene?.groupedSignalReduction === evaluation.scene?.events, 'Grouped scene-signal accounting does not preserve raw events');
   assert(evaluation.board?.phasesOverUnitClusterTarget === 0, 'Board unit clustering exceeds the published scene target');
   assert(evaluation.board?.maxUnitClustersPerPhase < evaluation.board?.maxUnitsPerPhase, 'Board unit clustering does not reduce peak scene complexity');
+  assert(evaluation.board?.maxInspectableGroupsPerPhase === 72, 'UX evaluator diverges from the complete non-canvas board index');
   assert(evaluation.replay?.fixedAutoplayMinutes === 9.36 && evaluation.replay?.fullAutoplayMinutes === 7.72, 'UX evaluator diverges from adaptive replay pacing');
   assert(evaluation.replay?.autoplayMinutesSaved === 1.64, 'Adaptive replay pacing does not report saved campaign time');
   return `phases=${evaluation.replay.phases}, transcriptP90=${evaluation.transcript.public.p90Seconds}s, renderBudget=${evaluation.scene.renderBudget}`;
@@ -716,6 +718,38 @@ function runObservatoryRenderPolicyRegression() {
     assert(JSON.stringify(deriveObservatoryRenderPolicy(input)) === JSON.stringify(expected), `Unexpected observatory render policy for ${JSON.stringify(input)}`);
   }
   return `${cases.length} device/view/motion policies passed`;
+}
+
+function validateBoardStateAccessibilityCoverage() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'three', 'boardUnitClustering.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const clusteringModule = { exports: {} };
+  Function('module', 'exports', compiled)(clusteringModule, clusteringModule.exports);
+  const { clusterBoardUnits } = clusteringModule.exports;
+  const replay = readJson(path.join(ROOT, 'public', 'observatory_replay.json'));
+  let maxGroups = 0;
+  for (const turn of replay.turns || []) {
+    const nodes = Object.keys(turn.boardState?.nodeOwnership || {}).length;
+    const forces = clusterBoardUnits(turn.boardState?.unitLocations || []).length;
+    const routes = Object.keys(turn.boardState?.edges || {}).length;
+    maxGroups = Math.max(maxGroups, nodes + forces + routes);
+  }
+  assert(maxGroups === 72, `Canonical board-state index changed to ${maxGroups} peak controls`);
+  const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.ts'), 'utf8');
+  const css = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.css'), 'utf8');
+  const renderer = ui.match(/private renderBoardStateIndex[\s\S]*?\n  private renderMoves/)?.[0] || '';
+  assert(ui.includes('data-role="board-state"'), 'Evidence Now drawer has no board-state index');
+  assert(renderer.includes('clusterBoardUnits(boardState.unitLocations || [])'), 'Board-state index does not match Three.js force clustering');
+  assert(renderer.includes('row.dataset.boardStateGroup'), 'Board-state groups are not ordinary inspectable controls');
+  assert(renderer.includes('this.scene.focusLocation(rowData.location'), 'Board-state controls do not locate their canvas equivalent');
+  assert(renderer.includes('payload: this.revealRetrospective ? rowData.payload : redactPrivatePayload(rowData.payload)'), 'Board-state controls discard or leak evidence payloads');
+  assert(renderer.includes('if (details.open) populateRows()'), 'Collapsed board-state index eagerly creates every control');
+  assert(!renderer.includes('.slice('), 'Board-state accessibility index silently omits groups');
+  assert(css.includes('.obs-shell .obs-board-index'), 'Board-state index has no bounded presentation');
+  return `peak ${maxGroups} node/force/route controls remain keyboard and touch inspectable`;
 }
 
 function runReplayPacingRegression() {
