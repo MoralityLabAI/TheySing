@@ -41,6 +41,7 @@ async function main() {
   await runTest('rich protocol actions survive replay-plan reconstruction', () => runReplayPlanFidelityRegression());
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
+  await runTest('evidence tabs implement roving keyboard navigation', () => validateEvidenceTabKeyboardContract());
   await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
@@ -878,6 +879,25 @@ function validateObservatoryUxContract() {
   assert(css.includes('.obs-shell.obs-view-globe .obs-panel'), 'Globe-first panel suppression is missing');
   assert(css.includes('button:focus-visible'), 'Keyboard focus treatment is missing');
   return 'readiness, globe-first hierarchy, progressive evidence, guarded shortcuts, responsive detail, and focus styles present';
+}
+
+function validateEvidenceTabKeyboardContract() {
+  const ui = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'ObservatoryReplayUI.ts'), 'utf8');
+  const tabIds = ['now', 'protocol', 'research', 'archive'];
+  assert(ui.includes('role="tablist" aria-label="Evidence sections" aria-orientation="horizontal"'), 'Evidence tablist does not declare its orientation');
+  for (const tab of tabIds) {
+    assert(ui.includes(`id="obs-evidence-tab-${tab}"`), `Evidence ${tab} tab has no stable id`);
+    assert(ui.includes(`aria-labelledby="obs-evidence-tab-${tab}"`), `Evidence ${tab} panel is not labelled by its tab`);
+  }
+  assert((ui.match(/role="tab" tabindex="0"/g) || []).length === 1, 'Evidence tablist does not start with exactly one tab stop');
+  assert((ui.match(/role="tab" tabindex="-1"/g) || []).length === 3, 'Inactive evidence tabs remain in sequential tab order');
+  for (const key of ['ArrowRight', 'ArrowLeft', 'Home', 'End']) {
+    assert(ui.includes(`event.key === '${key}'`), `Evidence tablist does not handle ${key}`);
+  }
+  assert(ui.includes('this.setEvidenceTab(evidenceTabs[nextIndex].dataset.evidenceTab as EvidenceTab, true)'), 'Evidence arrow navigation does not activate and focus the destination tab');
+  assert(ui.includes('button.tabIndex = active ? 0 : -1'), 'Evidence tab activation does not maintain roving tabindex');
+  assert(ui.includes('if (active && focus) button.focus()'), 'Evidence keyboard activation does not move focus');
+  return '4 labelled panels / one tab stop / Left+Right+Home+End automatic activation';
 }
 
 function validateLegacyGameUxContract() {

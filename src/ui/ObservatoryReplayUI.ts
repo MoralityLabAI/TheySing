@@ -345,13 +345,13 @@ export class ObservatoryReplayUI {
           <div class="obs-panel-title">Evidence</div>
           <button type="button" data-role="close-drawer" aria-label="Return to globe">Globe</button>
         </div>
-        <nav class="obs-evidence-tabs" role="tablist" aria-label="Evidence sections">
-          <button type="button" role="tab" data-evidence-tab="now" aria-selected="true" aria-controls="obs-evidence-now">Now</button>
-          <button type="button" role="tab" data-evidence-tab="protocol" aria-selected="false" aria-controls="obs-evidence-protocol">Protocol</button>
-          <button type="button" role="tab" data-evidence-tab="research" aria-selected="false" aria-controls="obs-evidence-research">Research</button>
-          <button type="button" role="tab" data-evidence-tab="archive" aria-selected="false" aria-controls="obs-evidence-archive">Archive</button>
+        <nav class="obs-evidence-tabs" role="tablist" aria-label="Evidence sections" aria-orientation="horizontal">
+          <button id="obs-evidence-tab-now" type="button" role="tab" tabindex="0" data-evidence-tab="now" aria-selected="true" aria-controls="obs-evidence-now">Now</button>
+          <button id="obs-evidence-tab-protocol" type="button" role="tab" tabindex="-1" data-evidence-tab="protocol" aria-selected="false" aria-controls="obs-evidence-protocol">Protocol</button>
+          <button id="obs-evidence-tab-research" type="button" role="tab" tabindex="-1" data-evidence-tab="research" aria-selected="false" aria-controls="obs-evidence-research">Research</button>
+          <button id="obs-evidence-tab-archive" type="button" role="tab" tabindex="-1" data-evidence-tab="archive" aria-selected="false" aria-controls="obs-evidence-archive">Archive</button>
         </nav>
-        <section class="obs-evidence-section" id="obs-evidence-now" data-evidence-section="now" role="tabpanel">
+        <section class="obs-evidence-section" id="obs-evidence-now" data-evidence-section="now" role="tabpanel" aria-labelledby="obs-evidence-tab-now">
           <div class="obs-panel-title">Scene Filters</div>
           <div class="obs-filterbar" data-role="filters"></div>
           <div class="obs-panel-title">Moments</div>
@@ -363,15 +363,15 @@ export class ObservatoryReplayUI {
           <div class="obs-panel-title">Board State</div>
           <div data-role="board-state" class="obs-board-state-index"></div>
         </section>
-        <section class="obs-evidence-section" id="obs-evidence-protocol" data-evidence-section="protocol" role="tabpanel" hidden>
+        <section class="obs-evidence-section" id="obs-evidence-protocol" data-evidence-section="protocol" role="tabpanel" aria-labelledby="obs-evidence-tab-protocol" hidden>
           <div class="obs-panel-title">Protocol Evidence</div>
           <div data-role="protocol" class="obs-stack obs-protocol-stack"></div>
         </section>
-        <section class="obs-evidence-section" id="obs-evidence-research" data-evidence-section="research" role="tabpanel" hidden>
+        <section class="obs-evidence-section" id="obs-evidence-research" data-evidence-section="research" role="tabpanel" aria-labelledby="obs-evidence-tab-research" hidden>
           <div class="obs-panel-title">Research Lenses</div>
           <div data-role="research" class="obs-stack obs-research-stack"></div>
         </section>
-        <section class="obs-evidence-section" id="obs-evidence-archive" data-evidence-section="archive" role="tabpanel" hidden>
+        <section class="obs-evidence-section" id="obs-evidence-archive" data-evidence-section="archive" role="tabpanel" aria-labelledby="obs-evidence-tab-archive" hidden>
           <div class="obs-panel-title">Anomaly Archive</div>
           <div class="obs-archive-tools">
             <input data-role="archive-search" type="search" placeholder="Search archive">
@@ -483,8 +483,19 @@ export class ObservatoryReplayUI {
     for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-role="close-drawer"]')) {
       button.addEventListener('click', () => this.setViewMode('globe'));
     }
-    for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-evidence-tab]')) {
+    const evidenceTabs = Array.from(this.container.querySelectorAll<HTMLButtonElement>('[data-evidence-tab]'));
+    for (const [index, button] of evidenceTabs.entries()) {
       button.addEventListener('click', () => this.setEvidenceTab(button.dataset.evidenceTab as EvidenceTab));
+      button.addEventListener('keydown', (event) => {
+        let nextIndex = index;
+        if (event.key === 'ArrowRight') nextIndex = (index + 1) % evidenceTabs.length;
+        else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + evidenceTabs.length) % evidenceTabs.length;
+        else if (event.key === 'Home') nextIndex = 0;
+        else if (event.key === 'End') nextIndex = evidenceTabs.length - 1;
+        else return;
+        event.preventDefault();
+        this.setEvidenceTab(evidenceTabs[nextIndex].dataset.evidenceTab as EvidenceTab, true);
+      });
     }
 
     prev.addEventListener('click', () => this.step(-1));
@@ -575,12 +586,14 @@ export class ObservatoryReplayUI {
     if (mode !== 'globe') this.closeEvidence();
   }
 
-  private setEvidenceTab(tab: EvidenceTab): void {
+  private setEvidenceTab(tab: EvidenceTab, focus = false): void {
     this.evidenceTab = tab;
     for (const button of this.container.querySelectorAll<HTMLButtonElement>('[data-evidence-tab]')) {
       const active = button.dataset.evidenceTab === tab;
       button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
       button.classList.toggle('obs-active', active);
+      if (active && focus) button.focus();
     }
     for (const section of this.container.querySelectorAll<HTMLElement>('[data-evidence-section]')) {
       section.hidden = section.dataset.evidenceSection !== tab;
