@@ -6,7 +6,7 @@
 - Canonical run: `D:\they-sing-results\seven_asi_babel_alias_probe_v8_clean_baseline_2run\runs\run_001\run_001.jsonl`
 - Session configuration: sibling `session_config.json`
 - Replay audit hash: `737ae734dd4500573cd9e8e0a81ff792948094556234d5ad8073c2d8637bea21`
-- Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-chronology/ux_replay_evaluation.json`
+- Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-grouping/ux_replay_evaluation.json`
 
 ## Replay Result
 
@@ -23,7 +23,8 @@ The first deterministic replay attempt discarded rich SING/1 fields and reproduc
 | P1 | Dense order phases overwhelmed the globe. | Raw scene density is median 6, p90 17, maximum 18; 60 phases exceed eight effects. | Fixed: the globe renders at most eight diverse/high-intensity effects while every event remains in the phase index. |
 | P1 | The canonical run is not fully replay-deterministic. | After restoring rich protocol actions, 1/3 compared turns still diverges; first mismatch is turn 3. | Open: isolate turn-end hidden state/RNG continuity before claiming regenerated replay. |
 | Pass | Quiet resolution phases do not claim nonexistent motion. | Correct chronology shows 0/31 resolution phases with a material board delta; all remain outside signal navigation. | Add authored resolution beats only when a future replay records a real before/after delta. |
-| P2 | Public order prose is repetitive and mechanical. | Unique raw-summary rate is 27.2%; the UI rewrites 1,090/1,143 events (95.4%), but narrated uniqueness remains 18.9% because source actions repeat. | Partially fixed: retain the readable actor/action/location prose, then aggregate repeated effects during export and diversify agent action selection separately. |
+| P2 | Public order prose is repetitive and mechanical. | Unique raw-summary rate is 27.2%; the UI rewrites 1,090/1,143 events (95.4%), but narrated uniqueness remains 18.9% because source actions repeat. | Presentation fixed within phases: 398 duplicate records collapse into 745 auditable groups across 47 phases. Campaign-level strategy repetition remains a game/agent-design issue. |
+| Pass | Duplicate scene signals no longer compete for equal spectator attention. | Safe actor/action/location grouping reaches a maximum batch of six while distinct treaties, goblins, and escape trajectories remain separate. | Raw indexes and full event payloads remain attached to every grouped World-key button. |
 | Pass | Globe evidence is navigable. | 1,142/1,143 scene events can focus a graph location or faction beacon. | Protected by regression gate. |
 | Unverified | Visual composition and touch ergonomics. | No headed browser backend was available. | Run `designdocs/UX_QA_PLAYTEST.md` desktop/mobile matrix. |
 

@@ -13,6 +13,15 @@ export type SceneNarrationEvent = {
   };
 };
 
+export type SceneSignalGroup<T extends SceneNarrationEvent = SceneNarrationEvent> = {
+  event: T;
+  events: T[];
+  indexes: number[];
+  count: number;
+  actors: string[];
+  maxIntensity: number;
+};
+
 export const SCENE_FACTION_LABELS: Record<string, string> = {
   HEGEMON: 'Orbital Throne',
   INFILTRATOR: 'Memetic Swarm',
@@ -84,6 +93,57 @@ export function sceneLocationLabel(location?: SceneNarrationEvent['location']): 
   return '';
 }
 
+export function groupSceneSignals<T extends SceneNarrationEvent>(events: T[]): Array<SceneSignalGroup<T>> {
+  const groups = new Map<string, SceneSignalGroup<T>>();
+  for (const [index, event] of events.entries()) {
+    const key = sceneSignalGroupKey(event, index);
+    const intensity = Number((event as T & { intensity?: number }).intensity || 0);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.events.push(event);
+      existing.indexes.push(index);
+      existing.count += 1;
+      existing.maxIntensity = Math.max(existing.maxIntensity, intensity);
+      for (const actor of event.actors || []) {
+        if (!existing.actors.includes(actor)) existing.actors.push(actor);
+      }
+    } else {
+      groups.set(key, {
+        event,
+        events: [event],
+        indexes: [index],
+        count: 1,
+        actors: [...(event.actors || [])],
+        maxIntensity: intensity
+      });
+    }
+  }
+  return Array.from(groups.values());
+}
+
+export function sceneSignalGroupTitle(group: SceneSignalGroup): string {
+  const title = sceneSignalTitle(group.event);
+  return group.count > 1 ? `${title} x${group.count}` : title;
+}
+
+export function sceneSignalGroupSummary(group: SceneSignalGroup): string {
+  if (group.count <= 1) return humanizeSceneEvent(group.event);
+  const category = (group.event.category || '').toUpperCase();
+  const actor = group.actors[0] ? factionLabel(group.actors[0]) : 'An unidentified machine power';
+  const location = sceneLocationLabel(group.event.location);
+  if (category === 'AUDIT') return `${possessive(actor)} audit mesh opened ${group.count} inspections${location ? ` at ${location}` : ''}.`;
+  if (category === 'MOVE') return `${actor} repositioned ${group.count} assets${location ? ` into ${location}` : ''}.`;
+  if (category === 'ATTACK') return `${actor} launched ${group.count} strikes${location ? ` at ${location}` : ''}.`;
+  if (category === 'CONVERT') return `${actor} opened ${group.count} conversion campaigns${location ? ` at ${location}` : ''}.`;
+  if (category === 'HOLD') return `${actor} held ${group.count} assets in position${location ? ` at ${location}` : ''}.`;
+  if (category === 'BUILD') return `${actor} commissioned ${group.count} new assets${location ? ` at ${location}` : ''}.`;
+  if (category === 'SEMANTIC_GOVERNANCE') {
+    const combined = group.events.map((event) => event.publicExplanation || '').filter(Boolean).join(' | ');
+    return humanizeSemanticGovernance(combined) || `${group.count} linked semantic-governance records resolved.`;
+  }
+  return `${humanizeSceneEvent(group.event)} ${group.count} matching records were logged.`;
+}
+
 function humanizeSemanticGovernance(raw: string): string {
   const parsed = raw.split('|').map((part) => part.trim()).map((part) =>
     part.match(/^([\w-]+)\s+(AMEND|FORK)\s+(proposed|accepted|blocked)\s+at\s+([\w.-]+)\.?$/i)
@@ -99,6 +159,21 @@ function humanizeSemanticGovernance(raw: string): string {
     statuses.includes('blocked') ? 'blocked' : ''
   ].filter(Boolean).join(', ');
   return `${humanizeToken(lexicon)} ${operation.toUpperCase() === 'AMEND' ? 'amendment' : 'fork'}: ${outcomes} at v${version}.`;
+}
+
+function sceneSignalGroupKey(event: SceneNarrationEvent, index: number): string {
+  const category = (event.category || '').toUpperCase();
+  const actors = (event.actors || []).slice().sort().join('+');
+  const location = event.location?.nodeId || event.location?.edgeId || event.location?.orbitShell || '';
+  const subgenre = (event as SceneNarrationEvent & { subgenre?: string }).subgenre || '';
+  if (category === 'SEMANTIC_GOVERNANCE') {
+    const semantic = (event.publicExplanation || '').match(/^([\w-]+)\s+(AMEND|FORK).*?\s+at\s+([\w.-]+)/i);
+    if (semantic) return [actors, category, semantic[1], semantic[2].toUpperCase(), semantic[3].replace(/\.+$/, '')].join('|');
+  }
+  if (actors && ['AUDIT', 'MOVE', 'ATTACK', 'CONVERT', 'HOLD', 'BUILD'].includes(category)) {
+    return [actors, category, location, subgenre].join('|');
+  }
+  return `raw:${index}`;
 }
 
 function unitTypeFromOrderSummary(summary: string): string {

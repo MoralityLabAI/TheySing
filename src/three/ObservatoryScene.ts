@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { groupSceneSignals } from '../ui/sceneNarration';
 
 export type ObservatoryEvidence = {
   title: string;
@@ -1399,9 +1400,9 @@ export class ObservatoryScene {
 }
 
 function selectSceneEventsForRender(sceneEvents: ObservatorySceneEvent[]): Array<{ event: ObservatorySceneEvent; index: number }> {
-  const ranked = sceneEvents
-    .map((event, index) => ({ event, index }))
-    .sort((left, right) => Number(right.event.intensity || 0) - Number(left.event.intensity || 0) || left.index - right.index);
+  const ranked = groupSceneSignals(sceneEvents)
+    .map((group) => ({ event: group.event, index: group.indexes[0], intensity: group.maxIntensity }))
+    .sort((left, right) => right.intensity - left.intensity || left.index - right.index);
   if (ranked.length <= SCENE_EVENT_RENDER_BUDGET) return ranked;
 
   const selected: Array<{ event: ObservatorySceneEvent; index: number }> = [];

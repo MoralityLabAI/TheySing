@@ -27,6 +27,7 @@
 | P1 | Sequential word animation could not finish before 3.6-second autoplay advanced the phase. | The diary now renders complete blocks immediately with a bounded 55ms stagger; p90 completion is 0.87s for both public and retrospective views. | Automated UX replay evaluator and TypeScript build. |
 | P1 | Raw phases placed up to 18 equally salient effects on the globe. | Three.js now selects at most eight high-intensity/diverse effects while the World key retains the complete phase index. | Automated UX replay evaluator and static scene-budget contract. Headed composition confirmation remains pending. |
 | P1 | The spectator replay sorted phase names alphabetically, placing action and allocation before negotiation and manufacturing resolution-board churn. | Export now uses the engine's cognitive-clock order and unique inferred build identities; stationary type/owner changes cannot be labeled as movement. | Public replay audit, automated chronology/identity regression checks, and UX evaluator. |
+| P2 | Same-actor actions at the same location repeated as separate beat copy, World-key buttons, and globe effects. | Current beat, keyboard/touch index, and Three.js selector now share conservative signal grouping; 398/1,143 raw signals collapse into 745 groups while raw indexes and payloads remain available. | Replay-derived grouping tests, UX evaluator, static payload/index contract, and TypeScript build. |
 
 ## Automated Gates
 
@@ -86,4 +87,5 @@ These flows require an actual browser viewport and remain the completion gate.
 - There is no automated Three.js screenshot baseline or canvas interaction test.
 - The corrected replay is 7.12 MB uncompressed and approximately 655 KB gzip. Current delivery reports progress, but parsing and scene setup on slower mobile devices still need a cold-cache playtest.
 - The canonical long replay now preserves rich protocol actions and matches turns 1-2, but diverges at turn 3 during turn-end processing. Do not claim full regenerated replay determinism yet.
+- Grouping removes within-phase visual repetition, but the 27.2% unique raw-summary rate still reflects repetitive strategy across campaign turns; that requires agent/gameplay variation rather than more paraphrasing.
 - Vercel reports legacy transitive dependency audit warnings; they are not caused by these UX changes but remain a separate maintenance issue.

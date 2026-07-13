@@ -1,5 +1,13 @@
 import { FACTION_COLORS, ObservatoryBoardDiff, ObservatoryBoardState, ObservatoryEvidence, ObservatoryGraph, ObservatoryLocation, ObservatoryScene } from '../three/ObservatoryScene';
-import { humanizeSceneEvent, sceneLocationLabel, sceneSignalTitle, SCENE_FACTION_LABELS } from './sceneNarration';
+import {
+  groupSceneSignals,
+  humanizeSceneEvent,
+  sceneLocationLabel,
+  type SceneSignalGroup,
+  sceneSignalGroupSummary,
+  sceneSignalGroupTitle,
+  SCENE_FACTION_LABELS
+} from './sceneNarration';
 import './ObservatoryReplayUI.css';
 
 type ReplayMessage = {
@@ -722,24 +730,27 @@ export class ObservatoryReplayUI {
   }
 
   private renderCurrentBeat(turn: ReplayTurn): void {
-    const sceneEvent = (turn.sceneEvents || []).slice().sort((left, right) => Number(right.intensity || 0) - Number(left.intensity || 0))[0];
+    const sceneGroups = groupSceneSignals(turn.sceneEvents || [])
+      .sort((left, right) => right.maxIntensity - left.maxIntensity || left.indexes[0] - right.indexes[0]);
+    const sceneGroup = sceneGroups[0];
+    const sceneEvent = sceneGroup?.event;
     const moment = (turn.moments || []).slice().sort((left, right) => Number(right.interestScore || 0) - Number(left.interestScore || 0))[0];
     const event = (turn.events || []).slice(-1)[0];
     const message = (turn.messages || [])[0];
     const diff = turn.boardDiff;
-    const actors = sceneEvent?.actors || moment?.factionsInvolved || (message?.sender ? [message.sender] : []);
+    const actors = sceneGroup?.actors || moment?.factionsInvolved || (message?.sender ? [message.sender] : []);
     const subgenre = sceneEvent?.subgenre || inferSubgenre(
       sceneEvent?.category || moment?.category || event?.category,
       sceneEvent?.publicExplanation || moment?.impact || event?.summary || diff?.summary
     );
     const title = sceneEvent
-      ? sceneSignalTitle(sceneEvent)
+      ? sceneSignalGroupTitle(sceneGroup)
       : moment?.title || (event ? humanizeToken(event.category || 'World signal') : message
         ? `${labelFaction(message.sender || '')} calls ${labelFaction(message.recipient || 'ALL')}`
         : diff ? (diff.summary?.includes('No board-state changes') ? 'The board stabilizes' : 'Orders resolve across the world')
           : 'The board holds its breath');
     const summary = sceneEvent
-      ? renderSceneEventSummary(sceneEvent, this.revealRetrospective)
+      ? renderSceneSignalGroupSummary(sceneGroup, this.revealRetrospective)
       : moment ? renderMomentSummary(moment, this.revealRetrospective)
         : event?.summary || message?.content || (this.revealRetrospective ? diff?.explanation || diff?.summary : diff?.summary) ||
           'No major event was logged in this phase. Orbit the globe or advance the campaign.';
@@ -761,7 +772,9 @@ export class ObservatoryReplayUI {
       turn: turn.turn,
       phase: turn.phase,
       payload: sceneEvent
-        ? (this.revealRetrospective ? sceneEvent : redactPrivatePayload(sceneEvent))
+        ? this.revealRetrospective
+          ? sceneGroupPayload(sceneGroup)
+          : redactPrivatePayload(sceneGroupPayload(sceneGroup))
         : moment || event || message || diff || null
     };
 
@@ -773,7 +786,7 @@ export class ObservatoryReplayUI {
         <div class="obs-beat-meta">
           ${actors.map(renderActorTag).join('')}
           ${locationText ? `<span class="obs-location-tag">${escapeHtml(locationText)}</span>` : ''}
-          ${(turn.sceneEvents?.length || 0) > 1 ? `<span>${turn.sceneEvents?.length || 0} globe signals</span>` : ''}
+          ${(turn.sceneEvents?.length || 0) > 1 ? `<span>${sceneGroups.length} group${sceneGroups.length === 1 ? '' : 's'} / ${turn.sceneEvents?.length || 0} signals</span>` : ''}
           <span>${turn.messages?.length || 0} messages</span>
           <span>${turn.orders?.length || 0} moves</span>
           <span>${protocolCount} evidence</span>
@@ -832,20 +845,27 @@ export class ObservatoryReplayUI {
     }
     for (const button of this.beatPanel.querySelectorAll<HTMLButtonElement>('[data-scene-signal]')) {
       button.addEventListener('click', () => {
-        const event = turn?.sceneEvents?.[Number(button.dataset.sceneSignal)];
+        const indexes = (button.dataset.sceneSignals || button.dataset.sceneSignal || '')
+          .split(',')
+          .map((value) => Number(value))
+          .filter(Number.isFinite);
+        const events = indexes.map((index) => turn?.sceneEvents?.[index]).filter((event): event is ReplaySceneEvent => !!event);
+        const reconstructedGroup = groupSceneSignals(events)[0];
+        const group = reconstructedGroup ? { ...reconstructedGroup, indexes } : undefined;
+        const event = group?.event;
         if (!event) return;
-        const eventActors = event.actors || [];
-        const title = sceneSignalTitle(event);
+        const eventActors = group.actors;
+        const title = sceneSignalGroupTitle(group);
         const subgenre = event.subgenre || inferSubgenre(event.category, event.publicExplanation);
         const evidence: ObservatoryEvidence = {
           title,
           category: event.category || 'SCENE_EVENT',
           subgenre,
-          summary: renderSceneEventSummary(event, this.revealRetrospective),
+          summary: renderSceneSignalGroupSummary(group, this.revealRetrospective),
           factionIds: eventActors,
           turn: turn?.turn,
           phase: turn?.phase,
-          payload: this.revealRetrospective ? event : redactPrivatePayload(event)
+          payload: this.revealRetrospective ? sceneGroupPayload(group) : redactPrivatePayload(sceneGroupPayload(group))
         };
         const located = this.scene.focusLocation(event.location, eventActors[0]);
         if (!located) this.scene.focusSubgenre(subgenre);
@@ -1474,9 +1494,9 @@ function renderActorTag(factionId: string): string {
 }
 
 function renderWorldKey(activeActors: string[], open: boolean, turn?: ReplayTurn): string {
-  const visibleSignals = (turn?.sceneEvents || [])
-    .map((event, index) => ({ event, index }))
-    .sort((left, right) => Number(right.event.intensity || 0) - Number(left.event.intensity || 0));
+  const rawSignals = turn?.sceneEvents || [];
+  const visibleSignals = groupSceneSignals(rawSignals)
+    .sort((left, right) => right.maxIntensity - left.maxIntensity || left.indexes[0] - right.indexes[0]);
   return `
     <details class="obs-world-key" aria-live="off"${open ? ' open' : ''}>
       <summary><span>World key</span><small>7 ASIs / colors and signal forms</small></summary>
@@ -1501,13 +1521,14 @@ function renderWorldKey(activeActors: string[], open: boolean, turn?: ReplayTurn
       </div>
       ${visibleSignals.length > 0 ? `
         <div class="obs-visible-signals">
-          <div class="obs-visible-signals-heading"><span>Visible now / ${visibleSignals.length} signals</span><small>Keyboard and touch scene index</small></div>
-          ${visibleSignals.map(({ event, index }) => {
+          <div class="obs-visible-signals-heading"><span>Visible now / ${visibleSignals.length} group${visibleSignals.length === 1 ? '' : 's'}${visibleSignals.length !== rawSignals.length ? ` / ${rawSignals.length} signals` : ''}</span><small>Keyboard and touch scene index</small></div>
+          ${visibleSignals.map((group) => {
+            const event = group.event;
             const actor = event.actors?.[0] || 'ALL';
-            const title = sceneSignalTitle(event);
+            const title = sceneSignalGroupTitle(group);
             const location = labelLocation(event.location) || event.subgenre || 'World layer';
             return `
-              <button type="button" data-scene-signal="${index}" style="--obs-faction-color:${factionColor(actor)}"
+              <button type="button" data-scene-signal="${group.indexes[0]}" data-scene-signals="${group.indexes.join(',')}" style="--obs-faction-color:${factionColor(actor)}"
                 aria-label="Locate and inspect ${escapeHtml(title)} at ${escapeHtml(location)}">
                 <i aria-hidden="true"></i><span><b>${escapeHtml(title)}</b><small>${escapeHtml(location)}</small></span>
               </button>
@@ -1584,6 +1605,29 @@ function renderSceneEventSummary(event: ReplaySceneEvent, revealRetrospective: b
   return [publicSummary, event.retrospectiveTruth, stringifyReasoning(event.privateReasoning)]
     .filter(Boolean)
     .join(' Retrospective: ') || event.category || 'Observed signal.';
+}
+
+function renderSceneSignalGroupSummary(group: SceneSignalGroup<ReplaySceneEvent>, revealRetrospective: boolean): string {
+  const publicSummary = sceneSignalGroupSummary(group);
+  if (!revealRetrospective) return publicSummary;
+  const retrospective = Array.from(new Set(group.events.flatMap((event) => [
+    event.retrospectiveTruth || '',
+    stringifyReasoning(event.privateReasoning)
+  ]).filter(Boolean)));
+  if (retrospective.length === 0) return publicSummary;
+  const visible = retrospective.slice(0, 3).join(' ');
+  const omitted = retrospective.length - Math.min(retrospective.length, 3);
+  return `${publicSummary} Retrospective: ${visible}${omitted > 0 ? ` ${omitted} more records remain in the evidence payload.` : ''}`;
+}
+
+function sceneGroupPayload(group: SceneSignalGroup<ReplaySceneEvent>): ReplaySceneEvent | Record<string, unknown> {
+  if (group.count === 1) return group.event;
+  return {
+    kind: 'SCENE_SIGNAL_GROUP',
+    count: group.count,
+    indexes: group.indexes,
+    events: group.events
+  };
 }
 
 function renderAnomalySummary(dossier: ReplayAnomalyDossier, revealRetrospective: boolean): string {

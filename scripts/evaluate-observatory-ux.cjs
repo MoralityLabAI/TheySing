@@ -15,7 +15,7 @@ const FACTION_IDS = new Set(['HEGEMON', 'INFILTRATOR', 'STATE', 'BROKER', 'ARCHI
 
 if (!fs.existsSync(replayPath)) throw new Error(`Replay not found: ${replayPath}`);
 const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
-const { humanizeSceneEvent } = loadSceneNarration();
+const { groupSceneSignals, humanizeSceneEvent } = loadSceneNarration();
 const replayDeterminism = determinismPath && fs.existsSync(path.resolve(determinismPath))
   ? JSON.parse(fs.readFileSync(path.resolve(determinismPath), 'utf8'))
   : null;
@@ -26,6 +26,9 @@ const edgeIds = new Set((replay.graph?.edges || []).map((edge) => edge.edgeId).f
 const phaseRows = turns.map((turn, index) => evaluatePhase(turn, index));
 const phaseOrderViolations = countPhaseOrderViolations(turns);
 const sceneEvents = turns.flatMap((turn) => turn.sceneEvents || []);
+const sceneGroupsByPhase = turns.map((turn) => groupSceneSignals(turn.sceneEvents || []));
+const sceneSignalGroups = sceneGroupsByPhase.flat();
+const groupedSceneCounts = sceneGroupsByPhase.map((groups) => groups.length);
 const focusableSceneEvents = sceneEvents.filter(isSceneEventFocusable).length;
 const sceneCounts = phaseRows.map((row) => row.sceneEvents);
 const publicStreamMs = phaseRows.map((row) => row.publicTranscriptStreamMs);
@@ -95,6 +98,12 @@ const metrics = {
     renderBudget: sceneRenderBudget,
     maxRenderedEffectsPerPhase: Math.min(sceneRenderBudget, Math.max(0, ...sceneCounts)),
     phasesGroupedByRenderBudget: sceneCounts.filter((count) => count > sceneRenderBudget).length,
+    signalGroups: sceneSignalGroups.length,
+    groupedSignalReduction: sceneEvents.length - sceneSignalGroups.length,
+    groupedSignalReductionRate: ratio(sceneEvents.length - sceneSignalGroups.length, sceneEvents.length),
+    phasesWithGroupedSignals: sceneGroupsByPhase.filter((groups, index) => groups.length < sceneCounts[index]).length,
+    maxGroupsPerPhase: Math.max(0, ...groupedSceneCounts),
+    maxSignalsPerGroup: Math.max(0, ...sceneSignalGroups.map((group) => group.count)),
     focusableEvents: focusableSceneEvents,
     focusableRate: ratio(focusableSceneEvents, sceneEvents.length),
     actorLabelRate: ratio(sceneEvents.filter((event) => (event.actors || []).length > 0).length, sceneEvents.length),
@@ -336,7 +345,7 @@ function buildFindings(result) {
       id: 'PUBLIC_SCENE_TEXT_IS_REPETITIVE',
       finding: 'Public scene explanations repeat heavily across the campaign.',
       evidence: `Unique raw-summary rate is ${(result.scene.uniquePublicSummaryRate * 100).toFixed(1)}%; the UI rewrites ${(result.scene.narrationRewriteRate * 100).toFixed(1)}% of events, but the most repeated source line still appears ${result.scene.repeatedSummaries[0]?.count || 0} times.`,
-      recommendation: 'Keep the structured UI narration and aggregate repeated order effects by actor, target, and outcome during export.'
+      recommendation: 'Keep structured per-phase grouping for readability, then diversify agent action selection across the campaign rather than paraphrasing repeated strategy.'
     });
   }
   if (result.scene.narrationRewriteRate >= 0.5) {
@@ -346,6 +355,15 @@ function buildFindings(result) {
       finding: 'Most raw scene telemetry is converted into actor/action/location prose.',
       evidence: `${result.scene.rewrittenEvents}/${result.scene.events} scene explanations are rewritten for spectators.`,
       recommendation: 'Protect representative narration grammars with replay-derived tests.'
+    });
+  }
+  if (result.scene.groupedSignalReduction > 0) {
+    findings.push({
+      severity: 'PASS',
+      id: 'REPEATED_SIGNALS_ARE_GROUPED',
+      finding: 'Repeated same-actor actions are grouped without removing raw evidence.',
+      evidence: `${result.scene.groupedSignalReduction}/${result.scene.events} raw signals collapse into ${result.scene.signalGroups} spectator groups across ${result.scene.phasesWithGroupedSignals} phases; the largest group contains ${result.scene.maxSignalsPerGroup} records.`,
+      recommendation: 'Keep distinct treaties, goblins, and escape trajectories ungrouped when actor or semantic identity is incomplete.'
     });
   }
   if (result.scene.focusableRate >= 0.99) {
@@ -387,6 +405,7 @@ function renderMarkdown(result) {
     '',
     `- Beat sources: ${Object.entries(result.beatSources).map(([key, value]) => `${key} ${value}`).join(', ')}.`,
     `- Scene density: median ${result.scene.medianEventsPerPhase}, p90 ${result.scene.p90EventsPerPhase}, raw max ${result.scene.maxEventsPerPhase}; render budget ${result.scene.renderBudget}.`,
+    `- Spectator grouping: ${result.scene.signalGroups} groups from ${result.scene.events} raw signals; ${result.scene.phasesWithGroupedSignals} phases aggregate duplicates.`,
     `- Board changes: ${result.board.phasesWithChanges} phases; ${result.board.resolutionPhasesWithChanges}/${result.board.resolutionPhases} resolution phases change material state.`,
     `- Transcript streaming: public p90 ${result.transcript.public.p90Seconds}s; retrospective p90 ${result.transcript.retrospective.p90Seconds}s against ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s autoplay dwell.`,
     '',

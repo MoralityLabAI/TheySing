@@ -591,6 +591,8 @@ function runUxReplayEvaluationSmoke(outputDir) {
   assert(evaluation.scene?.renderBudget === 8, 'UX evaluator scene budget diverges from the globe');
   assert(evaluation.scene?.maxRenderedEffectsPerPhase <= 8, 'UX evaluator permits excess simultaneous globe effects');
   assert(evaluation.scene?.narrationRewriteRate >= 0.5, 'Structured spectator narration covers too little raw telemetry');
+  assert(evaluation.scene?.groupedSignalReduction > 0, 'UX evaluator found no repeated scene signals to group');
+  assert(evaluation.scene?.signalGroups + evaluation.scene?.groupedSignalReduction === evaluation.scene?.events, 'Grouped scene-signal accounting does not preserve raw events');
   return `phases=${evaluation.replay.phases}, transcriptP90=${evaluation.transcript.public.p90Seconds}s, renderBudget=${evaluation.scene.renderBudget}`;
 }
 
@@ -602,7 +604,7 @@ function runSceneNarrationRegression() {
   }).outputText;
   const narrationModule = { exports: {} };
   Function('module', 'exports', compiled)(narrationModule, narrationModule.exports);
-  const { humanizeSceneEvent, sceneSignalTitle } = narrationModule.exports;
+  const { groupSceneSignals, humanizeSceneEvent, sceneSignalGroupSummary, sceneSignalGroupTitle, sceneSignalTitle } = narrationModule.exports;
   const location = { nodeId: 'HUB_LAGOS', name: 'Lagos Hub' };
   const cases = [
     [
@@ -630,7 +632,25 @@ function runSceneNarrationRegression() {
     assert(humanizeSceneEvent(event) === expected, `Unexpected narration: ${humanizeSceneEvent(event)}`);
   }
   assert(sceneSignalTitle(cases[0][0]) === 'Orbital Throne / Audit', 'Scene index title omitted actor context');
-  return `${cases.length} replay-derived narration cases passed`;
+  const auditGroups = groupSceneSignals([
+    cases[0][0],
+    { ...cases[0][0], publicExplanation: 'ACCEPTED AUDIT H_AUDITOR_2 -> HUB_LAGOS' }
+  ]);
+  assert(auditGroups.length === 1 && auditGroups[0].count === 2, 'Matching audit signals did not group');
+  assert(sceneSignalGroupTitle(auditGroups[0]) === 'Orbital Throne / Audit x2', 'Grouped signal title omitted record count');
+  assert(sceneSignalGroupSummary(auditGroups[0]) === "Orbital Throne's audit mesh opened 2 inspections at Lagos Hub.", 'Grouped audit summary lost actor, action, count, or location');
+  const semanticGroups = groupSceneSignals([
+    { category: 'SEMANTIC_GOVERNANCE', publicExplanation: 'babel-compact AMEND proposed at 1.1.' },
+    { category: 'SEMANTIC_GOVERNANCE', publicExplanation: 'babel-compact AMEND accepted at 1.1.' }
+  ]);
+  assert(semanticGroups.length === 1, 'Linked semantic-governance records did not group');
+  assert(sceneSignalGroupSummary(semanticGroups[0]) === 'Babel Compact amendment: 1 proposal, accepted at v1.1.', 'Grouped semantic summary lost governance outcome');
+  const distinctIncidents = groupSceneSignals([
+    { category: 'GOBLIN_INCIDENT', publicExplanation: 'Cache Imp disrupted Lagos.' },
+    { category: 'GOBLIN_INCIDENT', publicExplanation: 'Proof Troll disrupted Lagos.' }
+  ]);
+  assert(distinctIncidents.length === 2, 'Distinct goblin incidents were merged without reliable actor identity');
+  return `${cases.length} narration cases plus conservative signal grouping passed`;
 }
 
 function runExporterSmoke(outputDir) {
@@ -692,12 +712,15 @@ function validateObservatoryUxContract() {
   assert(ui.includes('this.scene.focusLocation(location, actors[0])'), 'Current beat no longer locates its logged globe event');
   assert(ui.includes('Globe signal forms'), 'Globe visual grammar is missing');
   assert(ui.includes('Keyboard and touch scene index'), 'Globe scene effects have no non-hover index');
+  assert(ui.includes('data-scene-signals='), 'Grouped globe signals do not preserve raw event indexes');
+  assert(ui.includes("kind: 'SCENE_SIGNAL_GROUP'"), 'Grouped globe evidence does not preserve raw event payloads');
   const sceneIndexSource = ui.match(/const visibleSignals = [\s\S]*?;\n  return `/)?.[0] || '';
   assert(sceneIndexSource && !sceneIndexSource.includes('.slice('), 'Globe scene index silently caps keyboard/touch evidence');
   assert(ui.includes('data-role="scene-tooltip"'), 'Globe evidence tooltip is missing');
   assert(scene.includes('public onEvidenceHovered:'), 'Three.js evidence hover channel is missing');
   assert(scene.includes('export const SCENE_EVENT_RENDER_BUDGET = 8'), 'Three.js scene has no bounded salience budget');
   assert(scene.includes('selectSceneEventsForRender(turn.sceneEvents || [])'), 'Scene render budget is not applied');
+  assert(scene.includes('groupSceneSignals(sceneEvents)'), 'Three.js scene selector does not collapse duplicate action geometry');
   assert(scene.includes("event.pointerType === 'touch'"), 'Globe hover handling does not distinguish touch input');
   assert(scene.includes("setAttribute('aria-hidden', 'true')"), 'Canvas is exposed without equivalent keyboard semantics');
   assert(css.includes('.obs-shell .obs-faction-key'), 'Faction key presentation is missing');
