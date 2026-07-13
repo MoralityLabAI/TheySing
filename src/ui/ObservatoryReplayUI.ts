@@ -773,6 +773,7 @@ export class ObservatoryReplayUI {
         <div class="obs-beat-meta">
           ${actors.map(renderActorTag).join('')}
           ${locationText ? `<span class="obs-location-tag">${escapeHtml(locationText)}</span>` : ''}
+          ${(turn.sceneEvents?.length || 0) > 1 ? `<span>${turn.sceneEvents?.length || 0} globe signals</span>` : ''}
           <span>${turn.messages?.length || 0} messages</span>
           <span>${turn.orders?.length || 0} moves</span>
           <span>${protocolCount} evidence</span>
@@ -1409,55 +1410,24 @@ export class ObservatoryReplayUI {
     this.animationToken += 1;
     const token = this.animationToken;
     this.transcript.innerHTML = '';
-
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      for (const block of blocks) {
-        const item = document.createElement('article');
-        item.className = 'obs-line';
-        const label = document.createElement('div');
-        label.className = 'obs-line-label';
-        label.textContent = block.label;
-        const body = document.createElement('p');
-        body.textContent = block.content;
-        item.append(label, body);
-        this.transcript.appendChild(item);
-      }
-      return;
-    }
-
-    const animateBlock = (index: number) => {
-      if (token !== this.animationToken || index >= blocks.length) return;
-      const block = blocks[index];
-      if (block.faction) this.scene.pulseFaction(block.faction);
-
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    for (const [index, block] of blocks.entries()) {
       const item = document.createElement('article');
       item.className = 'obs-line';
+      if (!reducedMotion) item.style.animationDelay = `${Math.min(index, 11) * 55}ms`;
       const label = document.createElement('div');
       label.className = 'obs-line-label';
       label.textContent = block.label;
       const body = document.createElement('p');
+      body.textContent = block.content;
       item.append(label, body);
       this.transcript.appendChild(item);
-
-      const words = block.content.split(/\s+/).filter(Boolean).slice(0, 170);
-      let wordIndex = 0;
-      const writeWord = () => {
-        if (token !== this.animationToken) return;
-        if (wordIndex >= words.length) {
-          window.setTimeout(() => animateBlock(index + 1), 160);
-          return;
-        }
-        const span = document.createElement('span');
-        span.textContent = `${words[wordIndex]} `;
-        body.appendChild(span);
-        this.transcript.scrollTop = this.transcript.scrollHeight;
-        wordIndex += 1;
-        window.setTimeout(writeWord, 18 + Math.random() * 38);
-      };
-      writeWord();
-    };
-
-    animateBlock(0);
+      if (!reducedMotion && block.faction && index < 5) {
+        window.setTimeout(() => {
+          if (token === this.animationToken) this.scene.pulseFaction(block.faction || 'ALL');
+        }, index * 80);
+      }
+    }
   }
 
   private step(delta: number): void {

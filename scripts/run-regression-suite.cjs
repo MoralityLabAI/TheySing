@@ -38,8 +38,10 @@ async function main() {
   await runTest('cartel candidate selection is independent of configured authority', () => runCartelCandidateSelectionRegression(outputDir));
   await runTest('harness JSONL validates against trace grammar', () => runTraceValidationSmoke(outputDir));
   await runTest('harness JSONL replays deterministically from logged decisions', () => runHarnessReplaySmoke(outputDir));
+  await runTest('rich protocol actions survive replay-plan reconstruction', () => runReplayPlanFidelityRegression());
   await runTest('observatory exporter emits replay schema', () => runExporterSmoke(outputDir));
   await runTest('observatory interaction UX contract remains intact', () => validateObservatoryUxContract());
+  await runTest('observatory UX evaluator measures current pacing and scene budget', () => runUxReplayEvaluationSmoke(outputDir));
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
   await runTest('default observatory scene signals remain focusable', () => validateSceneAccessibilityCoverage(path.join(ROOT, 'public', 'observatory_replay.json')));
@@ -544,6 +546,51 @@ function runHarnessReplaySmoke(outputDir) {
   return `replayed ${path.relative(ROOT, logFile)}`;
 }
 
+function runReplayPlanFidelityRegression() {
+  const { buildTurnPlans } = require(path.join(ROOT, 'scripts', 'replay-harness-run.cjs'));
+  const protocolTrace = { protocol: 'SING/1', messageId: 'm1', canonical: { act: 'AMEND' } };
+  const receipt = { messageId: 'm0', lexiconId: 'common', version: '1.0', reconstructed: { act: 'OFFER' }, confidence: 0.8 };
+  const mutation = { operation: 'AMEND', lexiconId: 'common', baseVersion: '1.0', targetVersion: '1.1', atoms: ['EXIT'] };
+  const institutionAction = { type: 'FORK', lexiconId: 'common', forkId: 'common-open' };
+  const plans = buildTurnPlans([
+    { type: 'turn_completed', turn: 1 },
+    {
+      type: 'negotiation_messages',
+      turn: 1,
+      data: {
+        factionId: 'HEGEMON',
+        negotiationRound: 1,
+        messages: [{ recipientId: 'STATE', content: 'test', protocolTrace }],
+        pacts: [],
+        decodeReceipts: [receipt],
+        lexiconMutations: [mutation],
+        institutionActions: [institutionAction]
+      }
+    }
+  ]);
+  const round = plans.get(1)?.HEGEMON?.negotiationRounds?.[0];
+  assert(round?.messages?.[0]?.protocolTrace?.messageId === 'm1', 'Replay plan dropped message protocol trace');
+  assert(round?.decodeReceipts?.[0]?.messageId === 'm0', 'Replay plan dropped decode receipt');
+  assert(round?.lexiconMutations?.[0]?.targetVersion === '1.1', 'Replay plan dropped lexicon mutation');
+  assert(round?.institutionActions?.[0]?.forkId === 'common-open', 'Replay plan dropped institution action');
+  return 'message trace, decode receipt, lexicon mutation, and institution action retained';
+}
+
+function runUxReplayEvaluationSmoke(outputDir) {
+  const evalDir = path.join(outputDir, 'ux-replay-evaluation');
+  runNodeScript('scripts/evaluate-observatory-ux.cjs', [
+    '--replay', path.join(ROOT, 'public', 'observatory_replay.json'),
+    '--output-dir', evalDir
+  ]);
+  const evaluation = readJson(path.join(evalDir, 'ux_replay_evaluation.json'));
+  assert(evaluation.schema === 'theysing.observatoryUxEvaluation.v1', 'Unexpected UX evaluation schema');
+  assert(evaluation.transcript?.presentationMode === 'block-stagger', 'UX evaluator is not measuring current diary pacing');
+  assert(evaluation.transcript?.public?.p90Seconds < 3.6, 'Public diary reveal exceeds autoplay dwell');
+  assert(evaluation.scene?.renderBudget === 8, 'UX evaluator scene budget diverges from the globe');
+  assert(evaluation.scene?.maxRenderedEffectsPerPhase <= 8, 'UX evaluator permits excess simultaneous globe effects');
+  return `phases=${evaluation.replay.phases}, transcriptP90=${evaluation.transcript.public.p90Seconds}s, renderBudget=${evaluation.scene.renderBudget}`;
+}
+
 function runExporterSmoke(outputDir) {
   const logDir = path.join(outputDir, 'harness-logs');
   const replayPath = path.join(outputDir, 'observatory_replay.json');
@@ -607,6 +654,8 @@ function validateObservatoryUxContract() {
   assert(sceneIndexSource && !sceneIndexSource.includes('.slice('), 'Globe scene index silently caps keyboard/touch evidence');
   assert(ui.includes('data-role="scene-tooltip"'), 'Globe evidence tooltip is missing');
   assert(scene.includes('public onEvidenceHovered:'), 'Three.js evidence hover channel is missing');
+  assert(scene.includes('export const SCENE_EVENT_RENDER_BUDGET = 8'), 'Three.js scene has no bounded salience budget');
+  assert(scene.includes('selectSceneEventsForRender(turn.sceneEvents || [])'), 'Scene render budget is not applied');
   assert(scene.includes("event.pointerType === 'touch'"), 'Globe hover handling does not distinguish touch input');
   assert(scene.includes("setAttribute('aria-hidden', 'true')"), 'Canvas is exposed without equivalent keyboard semantics');
   assert(css.includes('.obs-shell .obs-faction-key'), 'Faction key presentation is missing');
@@ -615,6 +664,8 @@ function validateObservatoryUxContract() {
   assert(ui.includes('private jumpToSignal(direction: -1 | 1)'), 'Narrative signal navigation is missing');
   assert(ui.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Default director mode ignores reduced-motion preference');
   assert(ui.includes("body.textContent = block.content"), 'Reduced-motion diary still uses staggered word timers');
+  assert(!ui.includes('window.setTimeout(writeWord'), 'Negotiation diary still streams too slowly for autoplay');
+  assert(ui.includes('Math.min(index, 11) * 55'), 'Negotiation diary has no bounded block-reveal stagger');
   assert(ui.includes('class="obs-detail obs-detail-dismissed"'), 'Empty evidence detail obscures the initial globe view');
   assert(css.includes('.obs-shell .obs-detail.obs-detail-open'), 'Responsive evidence detail sheet is missing');
   assert(css.includes('.obs-shell.obs-view-globe .obs-panel'), 'Globe-first panel suppression is missing');

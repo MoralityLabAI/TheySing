@@ -14,7 +14,7 @@ async function main() {
   }
 
   const runDir = path.dirname(runFile);
-  const configPath = path.resolve(args.config || path.join(runDir, 'session_config.json'));
+  const configPath = path.resolve(args.config || args._[1] || path.join(runDir, 'session_config.json'));
   if (!fs.existsSync(configPath)) {
     throw new Error(`Session config not found: ${path.relative(ROOT, configPath)}`);
   }
@@ -32,7 +32,11 @@ async function main() {
   const session = new HeadlessPlaytestSession(config, sessionId);
   await session.initialize();
 
-  for (const turn of Array.from(turnPlans.keys()).sort((left, right) => left - right)) {
+  const throughTurn = Number(args['through-turn'] || args._[2] || Number.POSITIVE_INFINITY);
+  const replayTurns = Array.from(turnPlans.keys())
+    .filter((turn) => turn <= throughTurn)
+    .sort((left, right) => left - right);
+  for (const turn of replayTurns) {
     await session.runManualTurn(turnPlans.get(turn));
   }
 
@@ -43,6 +47,7 @@ async function main() {
   const mismatches = [];
 
   for (const [turn, originalHash] of originalTurnHashes.entries()) {
+    if (turn > throughTurn) continue;
     const replayHash = replayTurnHashes.get(turn);
     if (originalHash !== replayHash) {
       mismatches.push({ turn, originalHash, replayHash: replayHash || null });
@@ -54,16 +59,20 @@ async function main() {
     runFile: path.relative(ROOT, runFile),
     configPath: path.relative(ROOT, configPath),
     sessionId,
-    turnsCompared: originalTurnHashes.size,
+    turnsCompared: replayTurns.length,
     replayLogFile,
     status: mismatches.length === 0 ? 'passed' : 'failed',
     mismatches
   };
 
-  console.log(JSON.stringify(summary, null, 2));
-  if (mismatches.length > 0) {
-    process.exitCode = 1;
+  const summaryJson = `${JSON.stringify(summary, null, 2)}\n`;
+  if (args.output || args._[3]) {
+    const outputPath = path.resolve(args.output || args._[3]);
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+    fs.writeFileSync(outputPath, summaryJson, 'utf8');
   }
+  process.stdout.write(summaryJson);
+  return mismatches.length > 0 ? 1 : 0;
 }
 
 function buildTurnPlans(entries) {
@@ -96,7 +105,8 @@ function buildTurnPlans(entries) {
         messages: Array.isArray(data.messages)
           ? data.messages.map((message) => ({
             recipientId: message.recipientId,
-            content: message.content
+            content: message.content,
+            protocolTrace: message.protocolTrace
           }))
           : [],
         pacts: Array.isArray(data.pacts)
@@ -107,6 +117,15 @@ function buildTurnPlans(entries) {
               : [],
             durationTurns: pact.durationTurns
           }))
+          : [],
+        decodeReceipts: Array.isArray(data.decodeReceipts)
+          ? data.decodeReceipts.map(stripDecodeReceiptForReplay)
+          : [],
+        lexiconMutations: Array.isArray(data.lexiconMutations)
+          ? data.lexiconMutations.map(stripLexiconMutationForReplay)
+          : [],
+        institutionActions: Array.isArray(data.institutionActions)
+          ? data.institutionActions.map(stripInstitutionActionForReplay)
           : []
       };
       continue;
@@ -146,6 +165,42 @@ function stripOrderForReplay(order) {
     supportingUnitId: order.supportingUnitId,
     techDomain: order.techDomain,
     unitTypeToBuild: order.unitTypeToBuild
+  };
+}
+
+function stripDecodeReceiptForReplay(receipt) {
+  return {
+    messageId: receipt.messageId,
+    lexiconId: receipt.lexiconId,
+    version: receipt.version,
+    reconstructed: receipt.reconstructed,
+    confidence: receipt.confidence
+  };
+}
+
+function stripLexiconMutationForReplay(mutation) {
+  return {
+    operation: mutation.operation,
+    lexiconId: mutation.lexiconId,
+    baseVersion: mutation.baseVersion,
+    targetVersion: mutation.targetVersion,
+    atoms: Array.isArray(mutation.atoms) ? mutation.atoms : [],
+    glosses: mutation.glosses,
+    access: mutation.access,
+    rent: mutation.rent,
+    forkRule: mutation.forkRule
+  };
+}
+
+function stripInstitutionActionForReplay(action) {
+  return {
+    type: action.type,
+    pactType: action.pactType,
+    targetFactionId: action.targetFactionId,
+    lexiconId: action.lexiconId,
+    forkId: action.forkId,
+    exitGuarantee: action.exitGuarantee,
+    reason: action.reason
   };
 }
 
@@ -205,7 +260,18 @@ function parseArgs(argv) {
   return args;
 }
 
-main().catch((error) => {
-  console.error(error && error.stack ? error.stack : String(error));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().then((exitCode) => {
+    process.exit(exitCode);
+  }).catch((error) => {
+    console.error(error && error.stack ? error.stack : String(error));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildTurnPlans,
+  stripDecodeReceiptForReplay,
+  stripLexiconMutationForReplay,
+  stripInstitutionActionForReplay
+};

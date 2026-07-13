@@ -25,6 +25,7 @@
     "playtest:summarize-babel-robustness": "node scripts/summarize-babel-robustness.cjs",
     "playtest:validate-trace": "node scripts/validate-trace-log.cjs",
     "playtest:replay-run": "node scripts/replay-harness-run.cjs",
+    "playtest:evaluate-ux-replay": "node scripts/evaluate-observatory-ux.cjs",
     "playtest:feedback-loop": "node scripts/run-codex-feedback-loop.cjs"
   },
   "devDependencies": {

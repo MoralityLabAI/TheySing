@@ -24,10 +24,12 @@
 | P2 | Mobile offered one ambiguous evidence/diary toggle and had no way to reclaim the full globe. | Mobile uses the same explicit `Globe`, `Evidence`, and `Diary` modes; reset camera remains available beside replay controls. | Static responsive UX contract. |
 | P1 | The globe's colors, persistent beacons, effects, and logged locations were not explained or connected to the current-beat prose. | Current beats now show colored actors, signal progress, and location labels; selecting one focuses its logged node or edge. A compact key identifies all seven ASIs and four scene-signal forms: beacons, arcs, rings, and clusters. | Static globe-comprehension contract and TypeScript build. Headed visual confirmation remains pending. |
 | P1 | Scene-event effects had no hover affordance, contextual label, or keyboard/touch equivalent. | Mouse hover now changes the cursor and presents a bounded evidence tooltip. The bounded World key lists every logged scene-event effect on the current turn as an ordinary locate-and-inspect button, while the canvas is hidden from accessibility APIs as a duplicate visual surface. | Static pointer/accessibility contract, production-replay coverage audit, and TypeScript build. Headed visual confirmation remains pending. |
+| P1 | Sequential word animation could not finish before 3.6-second autoplay advanced the phase. | The diary now renders complete blocks immediately with a bounded 55ms stagger; p90 completion is 0.87s for both public and retrospective views. | Automated UX replay evaluator and TypeScript build. |
+| P1 | Raw phases placed up to 18 equally salient effects on the globe. | Three.js now selects at most eight high-intensity/diverse effects while the World key retains the complete phase index. | Automated UX replay evaluator and static scene-budget contract. Headed composition confirmation remains pending. |
 
 ## Automated Gates
 
-- `npm run ci`: 17/17 checks pass.
+- `npm run ci`: 19/19 checks pass.
 - Default replay scene-accessibility gate: 1,142/1,143 signals can focus a valid graph location or faction beacon; the index supports the observed maximum of 18 signals in one phase.
 - Production build: passes TypeScript and Vite compilation.
 - Root live check: HTTP 200; readiness and loading listeners present.
@@ -82,4 +84,5 @@ These flows require an actual browser viewport and remain the completion gate.
 - No browser surface was exposed during this QA pass, so canvas composition, text clipping, viewport overlap, and touch ergonomics are not visually proven.
 - There is no automated Three.js screenshot baseline or canvas interaction test.
 - The replay is 5.79 MB uncompressed. Current delivery is fast and now reports progress, but slower mobile networks still need a cold-cache playtest.
+- The canonical long replay now preserves rich protocol actions and matches turns 1-2, but diverges at turn 3 during turn-end processing. Do not claim full regenerated replay determinism yet.
 - Vercel reports legacy transitive dependency audit warnings; they are not caused by these UX changes but remain a separate maintenance issue.

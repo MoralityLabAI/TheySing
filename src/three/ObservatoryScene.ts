@@ -179,6 +179,8 @@ export const FACTION_COLORS: Record<string, number> = {
   ALL: 0xffffff
 };
 
+export const SCENE_EVENT_RENDER_BUDGET = 8;
+
 const FACTION_LABELS: Record<string, string> = {
   HEGEMON: 'Orbital Throne',
   INFILTRATOR: 'Memetic Swarm',
@@ -319,8 +321,8 @@ export class ObservatoryScene {
     }
 
     if ((turn.sceneEvents || []).length > 0) {
-      for (const [index, sceneEvent] of (turn.sceneEvents || []).entries()) {
-      this.addSceneEventGeometry(sceneEvent, index, turn);
+      for (const { event: sceneEvent, index } of selectSceneEventsForRender(turn.sceneEvents || [])) {
+        this.addSceneEventGeometry(sceneEvent, index, turn);
       }
     } else {
       for (const [index, order] of (turn.orders || []).entries()) {
@@ -1390,6 +1392,36 @@ export class ObservatoryScene {
     this.renderer.render(this.scene, this.camera);
     this.animationFrame = requestAnimationFrame(this.animate);
   };
+}
+
+function selectSceneEventsForRender(sceneEvents: ObservatorySceneEvent[]): Array<{ event: ObservatorySceneEvent; index: number }> {
+  const ranked = sceneEvents
+    .map((event, index) => ({ event, index }))
+    .sort((left, right) => Number(right.event.intensity || 0) - Number(left.event.intensity || 0) || left.index - right.index);
+  if (ranked.length <= SCENE_EVENT_RENDER_BUDGET) return ranked;
+
+  const selected: Array<{ event: ObservatorySceneEvent; index: number }> = [];
+  const selectedIndexes = new Set<number>();
+  const representedActors = new Set<string>();
+  const representedCategories = new Set<string>();
+
+  for (const candidate of ranked) {
+    const actor = candidate.event.actors?.[0] || 'ALL';
+    const category = candidate.event.category || candidate.event.visualPreset || 'UNKNOWN';
+    if (representedActors.has(actor) && representedCategories.has(category)) continue;
+    selected.push(candidate);
+    selectedIndexes.add(candidate.index);
+    representedActors.add(actor);
+    representedCategories.add(category);
+    if (selected.length >= SCENE_EVENT_RENDER_BUDGET) return selected;
+  }
+
+  for (const candidate of ranked) {
+    if (selectedIndexes.has(candidate.index)) continue;
+    selected.push(candidate);
+    if (selected.length >= SCENE_EVENT_RENDER_BUDGET) break;
+  }
+  return selected;
 }
 
 function presetForOrder(order: ObservatoryOrder): { visualPreset: string; subgenre: string } {
