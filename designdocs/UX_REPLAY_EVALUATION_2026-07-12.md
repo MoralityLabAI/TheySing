@@ -6,11 +6,11 @@
 - Canonical run: `D:\they-sing-results\seven_asi_babel_alias_probe_v8_clean_baseline_2run\runs\run_001\run_001.jsonl`
 - Session configuration: sibling `session_config.json`
 - Replay audit hash: `737ae734dd4500573cd9e8e0a81ff792948094556234d5ad8073c2d8637bea21`
-- Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-unit-clustering/ux_replay_evaluation.json`
+- Machine-readable evaluation: `results/ux-replay-evaluation/2026-07-12-adaptive-pacing/ux_replay_evaluation.json`
 
 ## Replay Result
 
-The shipped projection contains 32 campaign turns represented as 156 phases. A full autoplay pass lasts 9.36 minutes at the current 3.6-second dwell. It contains 1,143 scene events, 764 messages, 651 diaries, 1,277 orders, 115 moments, and 961 protocol-evidence records.
+The shipped projection contains 32 campaign turns represented as 156 phases. A full 1x autoplay pass now lasts 7.72 minutes: 115 narrative-signal phases retain a 3.6-second dwell while 41 quiet phases use 1.2 seconds; the old fixed dwell took 9.36 minutes. It contains 1,143 scene events, 764 messages, 651 diaries, 1,277 orders, 115 moments, and 961 protocol-evidence records.
 
 The first deterministic replay attempt discarded rich SING/1 fields and reproduced only turn 1. The replay adapter now preserves message `protocolTrace`, decode receipts, lexicon mutations, and institution actions. With that repair, turns 1 and 2 reproduce exactly. Turn 3 still diverges during turn-end processing, so the public replay must currently be described as a signed historical projection rather than a fully regenerated simulation.
 
@@ -27,6 +27,7 @@ The first deterministic replay attempt discarded rich SING/1 fields and reproduc
 | Pass | Duplicate scene signals no longer compete for equal spectator attention. | Safe actor/action/location grouping reaches a maximum batch of six while distinct treaties, goblins, and escape trajectories remain separate. | Raw indexes and full event payloads remain attached to every grouped World-key button. |
 | Pass | Late-campaign board population no longer creates one mesh per unit record. | p90 rendering falls from 284 units to 51 exact location/owner/type/evidence-status clusters; peak falls from 311 to 51, below the 64-marker target. | Cluster payloads preserve all units; transient effect, board, and imported-graph geometry is explicitly disposed before replacement. |
 | Pass | The globe no longer assumes a permanently visible desktop viewport. | The tested policy is 60 FPS/DPR 2 desktop, 30/1.5 coarse pointer, 15 FPS behind evidence/diary panels, and 12/1.25 with ambient motion disabled under reduced motion; hidden/offscreen scenes suspend. | Visibility, intersection, media-query, view-mode, and disposal listeners are protected by regression contracts. |
+| Pass | Autoplay no longer spends full narrative dwell on quiet phases or advances unseen. | Adaptive 1x pacing reduces 9.36 minutes to 7.72; 0.5x/1x/2x/4x controls are explicit, hidden tabs suspend, and replay loads reset playback. | Signal classification, phase dwell, canonical duration, speed choices, and visibility lifecycle are protected by regression gates. |
 | Pass | Globe evidence is navigable. | 1,142/1,143 scene events can focus a graph location or faction beacon. | Protected by regression gate. |
 | Unverified | Visual composition and touch ergonomics. | No headed browser backend was available. | Run `designdocs/UX_QA_PLAYTEST.md` desktop/mobile matrix. |
 

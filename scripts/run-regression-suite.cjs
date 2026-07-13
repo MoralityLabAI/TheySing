@@ -45,6 +45,7 @@ async function main() {
   await runTest('spectator narration humanizes structured replay events', () => runSceneNarrationRegression());
   await runTest('board unit clustering bounds replay scene complexity', () => runBoardUnitClusteringRegression());
   await runTest('observatory render policy adapts to device and motion preferences', () => runObservatoryRenderPolicyRegression());
+  await runTest('replay pacing preserves signals and compresses quiet phases', () => runReplayPacingRegression());
   await runTest('legacy game interaction UX contract remains intact', () => validateLegacyGameUxContract());
   await runTest('sample observatory replay remains loadable', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.sample.json'), { strictTurnArrays: false }));
   await runTest('default observatory replay preserves chronology and unit identity', () => validateObservatoryReplayFile(path.join(ROOT, 'public', 'observatory_replay.json'), { strictTurnArrays: true }));
@@ -597,6 +598,8 @@ function runUxReplayEvaluationSmoke(outputDir) {
   assert(evaluation.scene?.signalGroups + evaluation.scene?.groupedSignalReduction === evaluation.scene?.events, 'Grouped scene-signal accounting does not preserve raw events');
   assert(evaluation.board?.phasesOverUnitClusterTarget === 0, 'Board unit clustering exceeds the published scene target');
   assert(evaluation.board?.maxUnitClustersPerPhase < evaluation.board?.maxUnitsPerPhase, 'Board unit clustering does not reduce peak scene complexity');
+  assert(evaluation.replay?.fixedAutoplayMinutes === 9.36 && evaluation.replay?.fullAutoplayMinutes === 7.72, 'UX evaluator diverges from adaptive replay pacing');
+  assert(evaluation.replay?.autoplayMinutesSaved === 1.64, 'Adaptive replay pacing does not report saved campaign time');
   return `phases=${evaluation.replay.phases}, transcriptP90=${evaluation.transcript.public.p90Seconds}s, renderBudget=${evaluation.scene.renderBudget}`;
 }
 
@@ -715,6 +718,29 @@ function runObservatoryRenderPolicyRegression() {
   return `${cases.length} device/view/motion policies passed`;
 }
 
+function runReplayPacingRegression() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'replayPacing.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const pacingModule = { exports: {} };
+  Function('module', 'exports', compiled)(pacingModule, pacingModule.exports);
+  const { hasReplayNarrativeSignal, replayDurationMs, replayTurnDwellMs, REPLAY_SPEEDS } = pacingModule.exports;
+  const signal = { sceneEvents: [{}] };
+  const quiet = {};
+  assert(hasReplayNarrativeSignal(signal) && !hasReplayNarrativeSignal(quiet), 'Replay pacing misclassifies signal or quiet phases');
+  assert(replayTurnDwellMs(signal, 1) === 3600 && replayTurnDwellMs(quiet, 1) === 1200, 'Default replay dwell does not preserve signal reading time');
+  assert(replayTurnDwellMs(signal, 4) === 900 && replayTurnDwellMs(quiet, 4) === 300, 'Playback rate does not scale both phase classes');
+  assert(JSON.stringify(REPLAY_SPEEDS) === JSON.stringify([0.5, 1, 2, 4]), 'Playback speed choices changed unexpectedly');
+  const replay = readJson(path.join(ROOT, 'public', 'observatory_replay.json'));
+  const signalPhases = replay.turns.filter(hasReplayNarrativeSignal).length;
+  const durationMinutes = replayDurationMs(replay.turns, 1) / 60000;
+  assert(signalPhases === 115, `Canonical replay signal count changed to ${signalPhases}`);
+  assert(durationMinutes === 7.72, `Canonical adaptive replay duration changed to ${durationMinutes} minutes`);
+  return `${signalPhases} signals / ${replay.turns.length - signalPhases} quiet phases -> ${durationMinutes} minutes at 1x`;
+}
+
 function runExporterSmoke(outputDir) {
   const logDir = path.join(outputDir, 'harness-logs');
   const replayPath = path.join(outputDir, 'observatory_replay.json');
@@ -803,6 +829,12 @@ function validateObservatoryUxContract() {
   assert(css.includes('.obs-shell .obs-visible-signals'), 'Keyboard/touch scene index presentation is missing');
   assert(ui.includes('private jumpToSignal(direction: -1 | 1)'), 'Narrative signal navigation is missing');
   assert(ui.includes("this.scene.setPresentationActive(mode === 'globe' || mode === 'all')"), 'Evidence/diary views do not reduce globe render cadence');
+  assert(ui.includes('data-role="playback-rate"'), 'Replay controls have no playback-speed selector');
+  assert(ui.includes('replayTurnDwellMs(this.replay.turns[this.turnIndex]'), 'Autoplay still gives quiet and signal phases the same dwell');
+  assert(ui.includes("document.addEventListener('visibilitychange', this.visibilityHandler)"), 'Autoplay continues while the document is hidden');
+  assert(ui.includes("document.removeEventListener('visibilitychange', this.visibilityHandler)"), 'Replay disposal leaves its visibility listener active');
+  assert(ui.includes("this.playButton.setAttribute('aria-pressed', 'false')"), 'Loading a replay does not reset autoplay state');
+  assert(!ui.includes('}, 3600);'), 'Autoplay still hard-codes a universal 3.6-second dwell');
   assert(ui.includes("window.matchMedia('(prefers-reduced-motion: reduce)')"), 'Default director mode ignores reduced-motion preference');
   assert(ui.includes("body.textContent = block.content"), 'Reduced-motion diary still uses staggered word timers');
   assert(!ui.includes('window.setTimeout(writeWord'), 'Negotiation diary still streams too slowly for autoplay');

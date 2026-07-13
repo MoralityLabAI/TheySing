@@ -8,6 +8,7 @@ import {
   sceneSignalGroupTitle,
   SCENE_FACTION_LABELS
 } from './sceneNarration';
+import { hasReplayNarrativeSignal, replayTurnDwellMs, REPLAY_SPEEDS } from './replayPacing';
 import './ObservatoryReplayUI.css';
 
 type ReplayMessage = {
@@ -274,14 +275,17 @@ export class ObservatoryReplayUI {
   private readonly detailPanel: HTMLElement;
   private readonly status: HTMLElement;
   private readonly playButton: HTMLButtonElement;
+  private readonly playbackRateButton: HTMLButtonElement;
   private readonly scrubber: HTMLInputElement;
   private readonly timelineLabel: HTMLElement;
   private readonly beatPanel: HTMLElement;
   private readonly sceneTooltip: HTMLElement;
   private keydownHandler: ((event: KeyboardEvent) => void) | null = null;
+  private visibilityHandler: (() => void) | null = null;
   private replay: ObservatoryReplay | null = null;
   private turnIndex = 0;
   private playing = false;
+  private playbackRate = 1;
   private playTimer = 0;
   private animationToken = 0;
   private activeSubgenre = 'ALL';
@@ -390,6 +394,7 @@ export class ObservatoryReplayUI {
         <div class="obs-controls">
           <button data-role="prev" type="button">Prev</button>
           <button data-role="play" type="button" aria-pressed="false">Play</button>
+          <button data-role="playback-rate" type="button" aria-label="Playback speed 1 times">Speed: 1x</button>
           <button data-role="next" type="button">Next</button>
           <button data-role="prev-signal" type="button">Prev signal</button>
           <button data-role="next-signal" type="button">Next signal</button>
@@ -428,6 +433,7 @@ export class ObservatoryReplayUI {
     this.detailPanel = requireElement(this.container, '[data-role="detail"]');
     this.status = requireElement(this.container, '[data-role="status"]');
     this.playButton = requireElement(this.container, '[data-role="play"]') as HTMLButtonElement;
+    this.playbackRateButton = requireElement(this.container, '[data-role="playback-rate"]') as HTMLButtonElement;
     this.scrubber = requireElement(this.container, '[data-role="scrubber"]') as HTMLInputElement;
     this.timelineLabel = requireElement(this.container, '[data-role="timeline-label"]');
     this.beatPanel = requireElement(this.container, '[data-role="beat"]');
@@ -447,6 +453,7 @@ export class ObservatoryReplayUI {
   dispose(): void {
     window.clearTimeout(this.playTimer);
     if (this.keydownHandler) document.removeEventListener('keydown', this.keydownHandler);
+    if (this.visibilityHandler) document.removeEventListener('visibilitychange', this.visibilityHandler);
     this.scene.dispose();
   }
 
@@ -479,6 +486,7 @@ export class ObservatoryReplayUI {
     previousSignal.addEventListener('click', () => this.jumpToSignal(-1));
     nextSignal.addEventListener('click', () => this.jumpToSignal(1));
     this.playButton.addEventListener('click', () => this.togglePlay());
+    this.playbackRateButton.addEventListener('click', () => this.cyclePlaybackRate());
     resetCamera.addEventListener('click', () => this.scene.resetCamera());
     focusOrbit.addEventListener('click', () => this.scene.focusSubgenre('ORBITAL'));
     focusMemetic.addEventListener('click', () => this.scene.focusSubgenre('MEMETIC'));
@@ -535,6 +543,17 @@ export class ObservatoryReplayUI {
       }
     };
     document.addEventListener('keydown', this.keydownHandler);
+    this.visibilityHandler = () => {
+      if (!this.playing) return;
+      window.clearTimeout(this.playTimer);
+      if (document.hidden) {
+        this.status.textContent = 'Playback suspended while this tab is hidden.';
+      } else {
+        this.status.textContent = `Playback resumed at ${formatPlaybackRate(this.playbackRate)}.`;
+        this.scheduleNextTurn();
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
   }
 
   private setViewMode(mode: ObservatoryViewMode): void {
@@ -627,6 +646,10 @@ export class ObservatoryReplayUI {
   }
 
   private setReplay(replay: ObservatoryReplay, source: string): void {
+    window.clearTimeout(this.playTimer);
+    this.playing = false;
+    this.playButton.textContent = 'Play';
+    this.playButton.setAttribute('aria-pressed', 'false');
     const turns = Array.isArray(replay.turns) ? replay.turns : [];
     this.replay = { ...replay, turns };
     this.scene.setGraph(replay.graph || null);
@@ -759,7 +782,7 @@ export class ObservatoryReplayUI {
     const location = sceneEvent?.location;
     const locationText = labelLocation(location);
     const signalTurns = (this.replay?.turns || []).reduce<number[]>((indexes, candidate, index) => {
-      if (hasNarrativeSignal(candidate)) indexes.push(index);
+      if (hasReplayNarrativeSignal(candidate)) indexes.push(index);
       return indexes;
     }, []);
     const signalOrdinal = signalTurns.indexOf(this.turnIndex);
@@ -1463,7 +1486,7 @@ export class ObservatoryReplayUI {
     for (let offset = 1; offset <= this.replay.turns.length; offset += 1) {
       const candidateIndex = wrapIndex(this.turnIndex + direction * offset, this.replay.turns.length);
       const candidate = this.replay.turns[candidateIndex];
-      if (!hasNarrativeSignal(candidate)) continue;
+      if (!hasReplayNarrativeSignal(candidate)) continue;
       this.turnIndex = candidateIndex;
       this.closeEvidence();
       this.renderTurn();
@@ -1477,16 +1500,35 @@ export class ObservatoryReplayUI {
     this.playButton.textContent = this.playing ? 'Pause' : 'Play';
     this.playButton.setAttribute('aria-pressed', String(this.playing));
     window.clearTimeout(this.playTimer);
+    if (this.playing) {
+      if (document.hidden) this.status.textContent = 'Playback will resume when this tab is visible.';
+      this.scheduleNextTurn();
+    }
+  }
+
+  private cyclePlaybackRate(): void {
+    const currentIndex = REPLAY_SPEEDS.findIndex((rate) => rate === this.playbackRate);
+    this.playbackRate = REPLAY_SPEEDS[(currentIndex + 1) % REPLAY_SPEEDS.length];
+    const label = formatPlaybackRate(this.playbackRate);
+    this.playbackRateButton.textContent = `Speed: ${label}`;
+    this.playbackRateButton.setAttribute('aria-label', `Playback speed ${label}`);
+    this.status.textContent = `Playback speed set to ${label}.`;
+    window.clearTimeout(this.playTimer);
     if (this.playing) this.scheduleNextTurn();
   }
 
   private scheduleNextTurn(): void {
-    if (!this.playing) return;
+    if (!this.playing || !this.replay || document.hidden) return;
+    const dwellMs = replayTurnDwellMs(this.replay.turns[this.turnIndex] || {}, this.playbackRate);
     this.playTimer = window.setTimeout(() => {
       this.step(1);
       this.scheduleNextTurn();
-    }, 3600);
+    }, dwellMs);
   }
+}
+
+function formatPlaybackRate(rate: number): string {
+  return `${Number.isInteger(rate) ? rate.toFixed(0) : rate.toFixed(1)}x`;
 }
 
 function renderActorTag(factionId: string): string {
@@ -1564,15 +1606,6 @@ function renderResearch(order: ReplayOrder): string {
   }
   if (order.type === 'RESEARCH' || order.techDomain) return `research ${order.techDomain || 'unknown track'}`;
   return '';
-}
-
-function hasNarrativeSignal(turn: ReplayTurn): boolean {
-  const protocol = turn.protocolEvidence || {};
-  return (turn.sceneEvents?.length || 0) > 0 ||
-    (turn.moments?.length || 0) > 0 ||
-    (protocol.aliasProbes?.length || 0) > 0 ||
-    (protocol.institutionEvents?.length || 0) > 0 ||
-    (protocol.lexiconEvents?.length || 0) > 0;
 }
 
 function humanizeToken(value: string): string {

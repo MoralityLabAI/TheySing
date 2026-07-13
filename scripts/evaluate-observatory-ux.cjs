@@ -6,6 +6,8 @@ const args = parseArgs(process.argv.slice(2));
 const replayPath = path.resolve(args.replay || args._[0] || path.join(ROOT, 'public', 'observatory_replay.json'));
 const outputDir = path.resolve(args.outputDir || args._[1] || path.join(ROOT, 'results', 'ux-replay-evaluation', timestampSlug()));
 const autoplayDwellMs = Number(args.autoplayDwellMs || 3600);
+const quietAutoplayDwellMs = Number(args.quietAutoplayDwellMs || 1200);
+const playbackRate = Number(args.playbackRate || 1);
 const meanWordDelayMs = Number(args.meanWordDelayMs || 28);
 const transcriptMode = args.transcriptMode || args._[2] || 'block-stagger';
 const determinismPath = args.determinism || args._[3];
@@ -18,6 +20,7 @@ if (!fs.existsSync(replayPath)) throw new Error(`Replay not found: ${replayPath}
 const replay = JSON.parse(fs.readFileSync(replayPath, 'utf8'));
 const { groupSceneSignals, humanizeSceneEvent } = loadSceneNarration();
 const { clusterBoardUnits } = loadBoardUnitClustering();
+const { hasReplayNarrativeSignal, replayTurnDwellMs } = loadReplayPacing();
 const replayDeterminism = determinismPath && fs.existsSync(path.resolve(determinismPath))
   ? JSON.parse(fs.readFileSync(path.resolve(determinismPath), 'utf8'))
   : null;
@@ -26,6 +29,10 @@ const nodeIds = new Set((replay.graph?.nodes || []).map((node) => node.nodeId).f
 const edgeIds = new Set((replay.graph?.edges || []).map((edge) => edge.edgeId).filter(Boolean));
 
 const phaseRows = turns.map((turn, index) => evaluatePhase(turn, index));
+const phaseDwellMs = turns.map((turn) => replayTurnDwellMs(turn, playbackRate, {
+  signalDwellMs: autoplayDwellMs,
+  quietDwellMs: quietAutoplayDwellMs
+}));
 const phaseOrderViolations = countPhaseOrderViolations(turns);
 const sceneEvents = turns.flatMap((turn) => turn.sceneEvents || []);
 const sceneGroupsByPhase = turns.map((turn) => groupSceneSignals(turn.sceneEvents || []));
@@ -82,7 +89,11 @@ const metrics = {
     campaignTurns,
     phases: turns.length,
     autoplayDwellMs,
-    fullAutoplayMinutes: round(turns.length * autoplayDwellMs / 60000, 2),
+    quietAutoplayDwellMs,
+    playbackRate,
+    fixedAutoplayMinutes: round(turns.length * autoplayDwellMs / playbackRate / 60000, 2),
+    fullAutoplayMinutes: round(sum(phaseDwellMs) / 60000, 2),
+    autoplayMinutesSaved: round((turns.length * autoplayDwellMs / playbackRate - sum(phaseDwellMs)) / 60000, 2),
     narrativeSignalPhases: signalPhases,
     signalSkipRate: ratio(turns.length - signalPhases, turns.length),
     phaseOrderViolations,
@@ -124,8 +135,8 @@ const metrics = {
     meanWordDelayMs,
     public: streamStats(publicStreamMs),
     retrospective: streamStats(privateStreamMs),
-    publicPhasesExceedingAutoplay: publicStreamMs.filter((duration) => duration > autoplayDwellMs).length,
-    retrospectivePhasesExceedingAutoplay: privateStreamMs.filter((duration) => duration > autoplayDwellMs).length
+    publicPhasesExceedingAutoplay: publicStreamMs.filter((duration, index) => duration > phaseDwellMs[index]).length,
+    retrospectivePhasesExceedingAutoplay: privateStreamMs.filter((duration, index) => duration > phaseDwellMs[index]).length
   },
   board: {
     phasesWithChanges: boardChangeCounts.filter((count) => count > 0).length,
@@ -217,11 +228,7 @@ function evaluatePhase(turn, index) {
         (turn.events || []).length > 0 ? 'EVENT' :
           (turn.messages || []).length > 0 ? 'MESSAGE' :
             turn.boardDiff ? 'BOARD_DIFF' : 'EMPTY',
-    hasNarrativeSignal: sceneCount > 0 ||
-      (turn.moments || []).length > 0 ||
-      (protocol.aliasProbes || []).length > 0 ||
-      (protocol.institutionEvents || []).length > 0 ||
-      (protocol.lexiconEvents || []).length > 0,
+    hasNarrativeSignal: hasReplayNarrativeSignal(turn),
     sceneEvents: sceneCount,
     messages: (turn.messages || []).length,
     diaries: (turn.diaries || []).length,
@@ -283,6 +290,15 @@ function buildFindings(result) {
       recommendation: 'Keep chronology and inferred-unit identity checks in the replay regression gate.'
     });
   }
+  if (result.replay.autoplayMinutesSaved > 0) {
+    findings.push({
+      severity: 'PASS',
+      id: 'QUIET_PHASES_USE_ADAPTIVE_DWELL',
+      finding: 'Autoplay preserves narrative reading time without lingering on structurally quiet phases.',
+      evidence: `${result.replay.narrativeSignalPhases} signal phases use ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s and ${result.replay.phases - result.replay.narrativeSignalPhases} quiet phases use ${(result.replay.quietAutoplayDwellMs / 1000).toFixed(1)}s at ${result.replay.playbackRate}x, reducing a fixed ${result.replay.fixedAutoplayMinutes}-minute pass to ${result.replay.fullAutoplayMinutes} minutes.`,
+      recommendation: 'Retain explicit speed controls and suspend the timer while the document is hidden.'
+    });
+  }
   if (result.board.stationaryMoves > 0 || result.board.reusedFactionUnitIds > 0) {
     findings.push({
       severity: 'P1',
@@ -315,7 +331,7 @@ function buildFindings(result) {
       severity: 'P1',
       id: 'DIARY_STREAM_RESETS_BEFORE_COMPLETION',
       finding: 'Sequential word streaming cannot complete before autoplay advances many phases.',
-      evidence: `${transcript.publicPhasesExceedingAutoplay}/${result.replay.phases} public phases and ${transcript.retrospectivePhasesExceedingAutoplay}/${result.replay.phases} retrospective phases exceed the ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s dwell; retrospective p90 is ${transcript.retrospective.p90Seconds}s.`,
+      evidence: `${transcript.publicPhasesExceedingAutoplay}/${result.replay.phases} public phases and ${transcript.retrospectivePhasesExceedingAutoplay}/${result.replay.phases} retrospective phases exceed their adaptive dwell; retrospective p90 is ${transcript.retrospective.p90Seconds}s.`,
       recommendation: 'Render complete blocks immediately and preserve the animated feel with short staggered block reveals.'
     });
   }
@@ -421,7 +437,7 @@ function renderMarkdown(result) {
     '# They Sing UX Replay Evaluation',
     '',
     `- Replay: \`${result.replay.path}\``,
-    `- Campaign: ${result.replay.campaignTurns} turns / ${result.replay.phases} phases / ${result.replay.fullAutoplayMinutes} minutes at current autoplay dwell`,
+    `- Campaign: ${result.replay.campaignTurns} turns / ${result.replay.phases} phases / ${result.replay.fullAutoplayMinutes} adaptive minutes at ${result.replay.playbackRate}x`,
     `- Scene evidence: ${result.scene.events} events / ${(result.scene.focusableRate * 100).toFixed(2)}% focusable`,
     `- Narrative signals: ${result.replay.narrativeSignalPhases}/${result.replay.phases} phases`,
     `- Deterministic replay: ${result.replayDeterminism ? `${result.replayDeterminism.status} through ${result.replayDeterminism.turnsCompared} compared turns` : 'not supplied'}`,
@@ -439,7 +455,8 @@ function renderMarkdown(result) {
     `- Spectator grouping: ${result.scene.signalGroups} groups from ${result.scene.events} raw signals; ${result.scene.phasesWithGroupedSignals} phases aggregate duplicates.`,
     `- Board changes: ${result.board.phasesWithChanges} phases; ${result.board.resolutionPhasesWithChanges}/${result.board.resolutionPhases} resolution phases change material state.`,
     `- Board rendering: p90 ${result.board.p90UnitsPerPhase} raw units -> ${result.board.p90UnitClustersPerPhase} clusters; peak ${result.board.maxUnitsPerPhase} -> ${result.board.maxUnitClustersPerPhase}.`,
-    `- Transcript streaming: public p90 ${result.transcript.public.p90Seconds}s; retrospective p90 ${result.transcript.retrospective.p90Seconds}s against ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s autoplay dwell.`,
+    `- Autoplay pacing: ${(result.replay.autoplayDwellMs / 1000).toFixed(1)}s signals / ${(result.replay.quietAutoplayDwellMs / 1000).toFixed(1)}s quiet; ${result.replay.fixedAutoplayMinutes} fixed minutes -> ${result.replay.fullAutoplayMinutes} adaptive minutes at ${result.replay.playbackRate}x.`,
+    `- Transcript streaming: public p90 ${result.transcript.public.p90Seconds}s; retrospective p90 ${result.transcript.retrospective.p90Seconds}s against adaptive phase dwell.`,
     '',
     '## Embedded Evaluation Claims',
     '',
@@ -554,4 +571,15 @@ function loadBoardUnitClustering() {
   const clusteringModule = { exports: {} };
   Function('module', 'exports', compiled)(clusteringModule, clusteringModule.exports);
   return clusteringModule.exports;
+}
+
+function loadReplayPacing() {
+  const ts = require('typescript');
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'ui', 'replayPacing.ts'), 'utf8');
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const pacingModule = { exports: {} };
+  Function('module', 'exports', compiled)(pacingModule, pacingModule.exports);
+  return pacingModule.exports;
 }
